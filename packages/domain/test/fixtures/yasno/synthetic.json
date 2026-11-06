@@ -1,0 +1,218 @@
+{
+  "description": "Hand-made Yasno group blocks for edge cases that are rare or absent in history. Same shape as one group entry of the planned-outages API response.",
+  "cases": [
+    {
+      "id": "midnight-crossing",
+      "description": "Outage 21:00-24:00 today continues 00:00-03:00 tomorrow",
+      "block": {
+        "today": { "date": "2026-11-10T00:00:00+02:00", "status": "ScheduleApplies", "slots": [
+          { "start": 0, "end": 1260, "type": "NotPlanned" },
+          { "start": 1260, "end": 1440, "type": "Definite" }
+        ] },
+        "tomorrow": { "date": "2026-11-11T00:00:00+02:00", "status": "ScheduleApplies", "slots": [
+          { "start": 0, "end": 180, "type": "Definite" },
+          { "start": 180, "end": 1440, "type": "NotPlanned" }
+        ] },
+        "updatedOn": "2026-11-10T08:15:00+00:00"
+      }
+    },
+    {
+      "id": "adjacent-definite-possible",
+      "description": "Definite 06:00-10:00 directly followed by Possible 10:00-13:00",
+      "block": {
+        "today": { "date": "2026-11-10T00:00:00+02:00", "status": "ScheduleApplies", "slots": [
+          { "start": 0, "end": 360, "type": "NotPlanned" },
+          { "start": 360, "end": 600, "type": "Definite" },
+          { "start": 600, "end": 780, "type": "Possible" },
+          { "start": 780, "end": 1440, "type": "NotPlanned" }
+        ] },
+        "tomorrow": { "date": "2026-11-11T00:00:00+02:00", "status": "NoOutages", "slots": [
+          { "start": 0, "end": 1440, "type": "NotPlanned" }
+        ] },
+        "updatedOn": "2026-11-09T19:40:00+00:00"
+      }
+    },
+    {
+      "id": "possible-only",
+      "description": "Only a Possible slot 10:00-12:00, tomorrow not published",
+      "block": {
+        "today": { "date": "2026-11-10T00:00:00+02:00", "status": "ScheduleApplies", "slots": [
+          { "start": 0, "end": 600, "type": "NotPlanned" },
+          { "start": 600, "end": 720, "type": "Possible" },
+          { "start": 720, "end": 1440, "type": "NotPlanned" }
+        ] },
+        "tomorrow": { "date": "2026-11-11T00:00:00+02:00", "status": "WaitingForSchedule", "slots": [] },
+        "updatedOn": "2026-11-10T05:00:00+00:00"
+      }
+    },
+    {
+      "id": "applies-empty-slots",
+      "description": "ScheduleApplies with no slots at all, tomorrow waiting",
+      "block": {
+        "today": { "date": "2026-11-10T00:00:00+02:00", "status": "ScheduleApplies", "slots": [] },
+        "tomorrow": { "date": "2026-11-11T00:00:00+02:00", "status": "WaitingForSchedule", "slots": [] },
+        "updatedOn": "2026-11-10T05:00:00+00:00"
+      }
+    },
+    {
+      "id": "no-outages-today-early-tomorrow",
+      "description": "Today NoOutages, tomorrow outage starts right after midnight 00:00-04:00",
+      "block": {
+        "today": { "date": "2026-11-10T00:00:00+02:00", "status": "NoOutages", "slots": [
+          { "start": 0, "end": 1440, "type": "NotPlanned" }
+        ] },
+        "tomorrow": { "date": "2026-11-11T00:00:00+02:00", "status": "ScheduleApplies", "slots": [
+          { "start": 0, "end": 240, "type": "Definite" },
+          { "start": 240, "end": 1440, "type": "NotPlanned" }
+        ] },
+        "updatedOn": "2026-11-10T17:30:00+00:00"
+      }
+    },
+    {
+      "id": "emergency-today-applies-tomorrow",
+      "description": "Emergency today, regular schedule tomorrow 08:00-12:00",
+      "block": {
+        "today": { "date": "2026-11-10T00:00:00+02:00", "status": "EmergencyShutdowns", "slots": [] },
+        "tomorrow": { "date": "2026-11-11T00:00:00+02:00", "status": "ScheduleApplies", "slots": [
+          { "start": 0, "end": 480, "type": "NotPlanned" },
+          { "start": 480, "end": 720, "type": "Definite" },
+          { "start": 720, "end": 1440, "type": "NotPlanned" }
+        ] },
+        "updatedOn": "2026-11-10T16:00:00+00:00"
+      }
+    },
+    {
+      "id": "waiting-both",
+      "description": "Nothing published for either day",
+      "block": {
+        "today": { "date": "2026-11-10T00:00:00+02:00", "status": "WaitingForSchedule", "slots": [] },
+        "tomorrow": { "date": "2026-11-11T00:00:00+02:00", "status": "WaitingForSchedule", "slots": [] },
+        "updatedOn": "2026-11-09T21:00:00+00:00"
+      }
+    },
+    {
+      "id": "waiting-today-applies-tomorrow",
+      "description": "Today not published, tomorrow 10:00-14:00",
+      "block": {
+        "today": { "date": "2026-11-10T00:00:00+02:00", "status": "WaitingForSchedule", "slots": [] },
+        "tomorrow": { "date": "2026-11-11T00:00:00+02:00", "status": "ScheduleApplies", "slots": [
+          { "start": 0, "end": 600, "type": "NotPlanned" },
+          { "start": 600, "end": 840, "type": "Definite" },
+          { "start": 840, "end": 1440, "type": "NotPlanned" }
+        ] },
+        "updatedOn": "2026-11-10T18:00:00+00:00"
+      }
+    },
+    {
+      "id": "unknown-status",
+      "description": "Status not known to the code",
+      "block": {
+        "today": { "date": "2026-11-10T00:00:00+02:00", "status": "SomethingNew", "slots": [] },
+        "tomorrow": { "date": "2026-11-11T00:00:00+02:00", "status": "NoOutages", "slots": [
+          { "start": 0, "end": 1440, "type": "NotPlanned" }
+        ] },
+        "updatedOn": "2026-11-10T06:00:00+00:00"
+      }
+    },
+    {
+      "id": "whole-day-outage",
+      "description": "Outage all day today and until 12:00 tomorrow",
+      "block": {
+        "today": { "date": "2026-11-10T00:00:00+02:00", "status": "ScheduleApplies", "slots": [
+          { "start": 0, "end": 1440, "type": "Definite" }
+        ] },
+        "tomorrow": { "date": "2026-11-11T00:00:00+02:00", "status": "ScheduleApplies", "slots": [
+          { "start": 0, "end": 720, "type": "Definite" },
+          { "start": 720, "end": 1440, "type": "NotPlanned" }
+        ] },
+        "updatedOn": "2026-11-09T20:00:00+00:00"
+      }
+    },
+    {
+      "id": "alternating-short",
+      "description": "30-minute outages every hour 08:00-10:30",
+      "block": {
+        "today": { "date": "2026-11-10T00:00:00+02:00", "status": "ScheduleApplies", "slots": [
+          { "start": 0, "end": 480, "type": "NotPlanned" },
+          { "start": 480, "end": 510, "type": "Definite" },
+          { "start": 510, "end": 540, "type": "NotPlanned" },
+          { "start": 540, "end": 570, "type": "Definite" },
+          { "start": 570, "end": 600, "type": "NotPlanned" },
+          { "start": 600, "end": 630, "type": "Definite" },
+          { "start": 630, "end": 1440, "type": "NotPlanned" }
+        ] },
+        "tomorrow": { "date": "2026-11-11T00:00:00+02:00", "status": "NoOutages", "slots": [
+          { "start": 0, "end": 1440, "type": "NotPlanned" }
+        ] },
+        "updatedOn": "2026-11-09T20:00:00+00:00"
+      }
+    },
+    {
+      "id": "late-evening-tomorrow-waiting",
+      "description": "Outage 20:00-24:00 today, tomorrow not published",
+      "block": {
+        "today": { "date": "2026-11-10T00:00:00+02:00", "status": "ScheduleApplies", "slots": [
+          { "start": 0, "end": 1200, "type": "NotPlanned" },
+          { "start": 1200, "end": 1440, "type": "Definite" }
+        ] },
+        "tomorrow": { "date": "2026-11-11T00:00:00+02:00", "status": "WaitingForSchedule", "slots": [] },
+        "updatedOn": "2026-11-10T06:00:00+00:00"
+      }
+    },
+    {
+      "id": "no-outages-both",
+      "description": "Explicitly no outages today and tomorrow",
+      "block": {
+        "today": { "date": "2026-11-10T00:00:00+02:00", "status": "NoOutages", "slots": [
+          { "start": 0, "end": 1440, "type": "NotPlanned" }
+        ] },
+        "tomorrow": { "date": "2026-11-11T00:00:00+02:00", "status": "NoOutages", "slots": [
+          { "start": 0, "end": 1440, "type": "NotPlanned" }
+        ] },
+        "updatedOn": "2026-11-10T06:00:00+00:00"
+      }
+    },
+    {
+      "id": "tomorrow-missing",
+      "description": "API block without a tomorrow entry",
+      "block": {
+        "today": { "date": "2026-11-10T00:00:00+02:00", "status": "ScheduleApplies", "slots": [
+          { "start": 0, "end": 600, "type": "NotPlanned" },
+          { "start": 600, "end": 840, "type": "Definite" },
+          { "start": 840, "end": 1440, "type": "NotPlanned" }
+        ] },
+        "updatedOn": "2026-11-10T06:00:00+00:00"
+      }
+    },
+    {
+      "id": "dst-spring-forward",
+      "description": "2026-03-29: clocks jump 03:00 -> 04:00; outage 02:00-05:00 spans the gap",
+      "block": {
+        "today": { "date": "2026-03-29T00:00:00+02:00", "status": "ScheduleApplies", "slots": [
+          { "start": 0, "end": 120, "type": "NotPlanned" },
+          { "start": 120, "end": 300, "type": "Definite" },
+          { "start": 300, "end": 1440, "type": "NotPlanned" }
+        ] },
+        "tomorrow": { "date": "2026-03-30T00:00:00+03:00", "status": "NoOutages", "slots": [
+          { "start": 0, "end": 1440, "type": "NotPlanned" }
+        ] },
+        "updatedOn": "2026-03-28T18:00:00+00:00"
+      }
+    },
+    {
+      "id": "dst-fall-back",
+      "description": "2026-10-25: clocks go 04:00 -> 03:00; outage 03:00-05:00 spans the repeated hour",
+      "block": {
+        "today": { "date": "2026-10-25T00:00:00+03:00", "status": "ScheduleApplies", "slots": [
+          { "start": 0, "end": 180, "type": "NotPlanned" },
+          { "start": 180, "end": 300, "type": "Definite" },
+          { "start": 300, "end": 1440, "type": "NotPlanned" }
+        ] },
+        "tomorrow": { "date": "2026-10-26T00:00:00+02:00", "status": "NoOutages", "slots": [
+          { "start": 0, "end": 1440, "type": "NotPlanned" }
+        ] },
+        "updatedOn": "2026-10-24T18:00:00+00:00"
+      }
+    }
+  ]
+}

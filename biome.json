@@ -6,7 +6,8 @@
     "useIgnoreFile": true
   },
   "files": {
-    "ignoreUnknown": true
+    "ignoreUnknown": true,
+    "includes": ["**", "!packages/domain/test/golden", "!packages/domain/test/fixtures"]
   },
   "formatter": {
     "enabled": true,
