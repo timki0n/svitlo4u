@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseDay } from "@svitlo/domain";
 import type { Transformer } from "grammy";
 import type { UserFromGetMe } from "grammy/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -334,15 +335,32 @@ describe("Telegram commands (webhook)", () => {
     );
   });
 
-  it("/today and /tomorrow use the schedule already in memory", async () => {
+  it("/today and /tomorrow use the schedule in memory; emergency days list the last fixed one", async () => {
     const { core: c, tg } = await start(LIVE_CHATS);
     await vi.waitFor(() => expect(c.state.get("4u").schedule).not.toBeNull());
+    // The live fixture has emergency shutdowns on both days; 05.11 still had a fixed schedule.
+    const fixed = parseDay({
+      date: "2026-11-05T00:00:00+02:00",
+      status: "ScheduleApplies",
+      slots: [{ start: 480, end: 720, type: "Definite" }],
+    });
+    c.store.schedules.saveIfChanged(
+      "4u",
+      "2026-11-05",
+      { ...fixed, date: "2026-11-05" },
+      T0 - 86_400_000,
+    );
     await postUpdate(c, message(group, "/today"));
     await postUpdate(c, message(group, "/tomorrow"));
     await vi.waitFor(() => expect(tg.sentTo(-1001)).toHaveLength(2));
     const [today, tomorrow] = tg.sentTo(-1001).map((m) => String(m.payload.text));
     expect(today).toMatch(/^📅 Розклад на 06\.11\.2026/);
     expect(tomorrow).toMatch(/^📅 Розклад на 07\.11\.2026/);
+    for (const text of [today, tomorrow]) {
+      expect(text).toContain(
+        "Діють екстрені відключення.\n\nОстанній фіксований графік (на 05.11):\n1. 08:00 – 12:00 (4 год.)",
+      );
+    }
   });
 
   it("/sub toggles a personal subscription", async () => {

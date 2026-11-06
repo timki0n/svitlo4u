@@ -8,6 +8,8 @@ import {
   type DaySchedule,
   DEFAULT_BEHAVIOR,
   type GroupSchedule,
+  type LastFixedSchedule,
+  lastFixedOn,
   localDate,
   pollToday,
   pollTomorrow,
@@ -19,6 +21,16 @@ import type { Bus } from "../runtime/bus.ts";
 import type { Clock } from "../runtime/clock.ts";
 import type { SiteConfig } from "../sites-config.ts";
 import type { SiteStateStore } from "./state.ts";
+
+/** R15: the last fixed schedule placed on `date` (shown under emergency shutdowns). */
+export function lastFixedSchedule(
+  store: Store,
+  site: Pick<SiteConfig, "id" | "tz">,
+  date: string,
+): LastFixedSchedule | null {
+  const fixed = store.schedules.lastFixed(site.id, date);
+  return fixed ? lastFixedOn(fixed, date, site.tz) : null;
+}
 
 export type ScheduleServiceDeps = {
   sites: readonly SiteConfig[];
@@ -62,7 +74,11 @@ export class ScheduleService {
     const nowDate = localDate(clock.now(), site.tz);
     const todayDate = group.today.date ?? nowDate;
     const tomorrowDate = group.tomorrow.date ?? addDays(nowDate, 1);
-    const text = { tz: site.tz, linkUrl: site.linkUrl };
+    const text = {
+      tz: site.tz,
+      linkUrl: site.linkUrl,
+      lastFixed: (date: string) => lastFixedSchedule(store, site, date),
+    };
 
     // Baselines come from the DB before this update is stored.
     let tracker = this.trackers.get(site.id);

@@ -20,6 +20,7 @@ import type { FastifyInstance } from "fastify";
 import { Bot, type Context, GrammyError, HttpError, type Transformer } from "grammy";
 import type { Update, UserFromGetMe } from "grammy/types";
 import type { Clock } from "../runtime/clock.ts";
+import { lastFixedSchedule } from "../services/schedule.ts";
 import type { SiteStateStore } from "../services/state.ts";
 import {
   type ChatTarget,
@@ -403,9 +404,11 @@ export class TelegramChannel {
       const day = which === "today" ? schedule.today : schedule.tomorrow;
       const date = which === "today" ? today : addDays(today, 1);
       const info = dayInfo(day, date, site.tz, schedule.updatedOn);
+      const lastFixed =
+        info.status === "EmergencyShutdowns" ? lastFixedSchedule(store, site, info.date) : null;
       await reply(
         ctx,
-        withLastScheduleUpdate(text, formatDayMessage(text, info), schedule.updatedOn),
+        withLastScheduleUpdate(text, formatDayMessage(text, info, lastFixed), schedule.updatedOn),
       );
     };
     bot.command("today", dayCommand("today"));

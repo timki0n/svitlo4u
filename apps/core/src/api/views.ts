@@ -16,6 +16,7 @@ import {
   type ScheduleStatus,
 } from "@svitlo/domain";
 import type { Store } from "@svitlo/storage";
+import { lastFixedSchedule } from "../services/schedule.ts";
 import type { SiteStateStore } from "../services/state.ts";
 import type { ResponseOf } from "./contract.ts";
 
@@ -93,31 +94,27 @@ function liveDay(ctx: PlanContext, date: string, today: string): DaySchedule | n
   return null;
 }
 
+function rangeLabel(start: number, end: number, dayEnd: number, tz: string): string {
+  return `${formatHHMM(start, tz)}–${end >= dayEnd ? "24:00" : formatHHMM(end, tz)}`;
+}
+
 const UNKNOWN_LABEL: Partial<Record<ScheduleStatus, string>> = {
   WaitingForSchedule: "Графік ще не опубліковано",
   EmergencyShutdowns: "Діють екстрені відключення",
 };
 
-function daySegments(
+/** On/off segments of one day from its outage windows (clipped to the day). */
+function planSegments(
   dayStart: number,
   dayEnd: number,
-  status: ScheduleStatus,
   windows: readonly OutageWindow[],
   tz: string,
 ): Segment[] {
-  if (status !== "ScheduleApplies" && status !== "NoOutages") {
-    const label = UNKNOWN_LABEL[status] ?? "Графік недоступний";
-    return [{ start: dayStart, end: dayEnd, kind: "unknown", label }];
-  }
-  const range = (start: number, end: number) =>
-    `${formatHHMM(start, tz)}–${end >= dayEnd ? "24:00" : formatHHMM(end, tz)}`;
-  const offs =
-    status === "ScheduleApplies"
-      ? windows
-          .map((w) => ({ start: Math.max(w.start, dayStart), end: Math.min(w.end, dayEnd) }))
-          .filter((w) => w.start < w.end)
-          .sort((a, b) => a.start - b.start)
-      : [];
+  const range = (start: number, end: number) => rangeLabel(start, end, dayEnd, tz);
+  const offs = windows
+    .map((w) => ({ start: Math.max(w.start, dayStart), end: Math.min(w.end, dayEnd) }))
+    .filter((w) => w.start < w.end)
+    .sort((a, b) => a.start - b.start);
   const segments: Segment[] = [];
   let cursor = dayStart;
   for (const off of offs) {
@@ -155,17 +152,41 @@ export function widgetView(
     const day = ctx ? liveDay(ctx, date, today) : null;
     const status: ScheduleStatus = day?.status ?? "Unknown";
     const [, m, d] = date.split("-");
+    const dayStart = localMidnight(date, tz);
+    const dayEnd = localMidnight(addDays(date, 1), tz);
+    const base = { date, status, label: `${index === 0 ? "Сьогодні" : "Завтра"}, ${d}.${m}` };
+    if (status === "ScheduleApplies" || status === "NoOutages") {
+      const own = status === "ScheduleApplies" ? windows : [];
+      return {
+        ...base,
+        overlay: null,
+        basedOn: null,
+        note: null,
+        segments: planSegments(dayStart, dayEnd, own, tz),
+      };
+    }
+    // R15: emergency shutdowns over the last fixed schedule, not an empty day.
+    const fixed = status === "EmergencyShutdowns" ? lastFixedSchedule(store, site, date) : null;
+    if (fixed && fixed.outages.length > 0) {
+      const [, fm, fd] = fixed.date.split("-");
+      return {
+        ...base,
+        overlay: "emergency" as const,
+        basedOn: fixed.date === date ? null : fixed.date,
+        note:
+          fixed.date === date
+            ? "Діють екстрені відключення · останній графік"
+            : `Діють екстрені відключення · графік на ${fd}.${fm}`,
+        segments: planSegments(dayStart, dayEnd, mergeWindows(fixed.outages), tz),
+      };
+    }
+    const label = UNKNOWN_LABEL[status] ?? "Графік недоступний";
     return {
-      date,
-      status,
-      label: `${index === 0 ? "Сьогодні" : "Завтра"}, ${d}.${m}`,
-      segments: daySegments(
-        localMidnight(date, tz),
-        localMidnight(addDays(date, 1), tz),
-        status,
-        windows,
-        tz,
-      ),
+      ...base,
+      overlay: null,
+      basedOn: null,
+      note: null,
+      segments: [{ start: dayStart, end: dayEnd, kind: "unknown" as const, label }],
     };
   });
 
@@ -217,21 +238,33 @@ export function dayScheduleView(
   const stored = live ? null : (store.schedules.finalDays(siteId, date, date)[0]?.day ?? null);
   const day = live ?? stored;
   if (!day) {
-    return { siteId, date, source: "none", status: "Unknown", updatedOn: null, outages: [] };
+    return {
+      siteId,
+      date,
+      source: "none",
+      status: "Unknown",
+      updatedOn: null,
+      outages: [],
+      lastFixed: null,
+    };
   }
   const updatedOn = live ? (state.get(siteId).schedule?.updatedOn ?? null) : null;
   const dayEnd = localMidnight(addDays(date, 1), tz);
-  const outages = mergeWindows(dayInfo(day, date, tz, updatedOn).outages).map((w) => ({
-    start: w.start,
-    end: w.end,
-    label: `${formatHHMM(w.start, tz)}–${w.end >= dayEnd ? "24:00" : formatHHMM(w.end, tz)}`,
-  }));
+  const labelled = (windows: readonly OutageWindow[]) =>
+    mergeWindows(windows).map((w) => ({
+      start: w.start,
+      end: w.end,
+      label: rangeLabel(w.start, w.end, dayEnd, tz),
+    }));
+  const fixed =
+    day.status === "EmergencyShutdowns" ? lastFixedSchedule(store, state.site(siteId), date) : null;
   return {
     siteId,
     date,
     source: live ? "live" : "history",
     status: day.status,
     updatedOn,
-    outages,
+    outages: labelled(dayInfo(day, date, tz, updatedOn).outages),
+    lastFixed: fixed ? { date: fixed.date, outages: labelled(fixed.outages) } : null,
   };
 }

@@ -4,8 +4,13 @@
  */
 import type { TomorrowMonitorMode } from "./behavior.ts";
 import { isPublishedSchedule, type ScheduleStatus } from "./schedule-status.ts";
-import { formatDayMessage, scheduleLink, type TextContext } from "./texts.ts";
-import { type DaySchedule, dayInfo, isScheduleWithoutOutages } from "./yasno.ts";
+import {
+  formatDayMessage,
+  type LastFixedSchedule,
+  scheduleLink,
+  type TextContext,
+} from "./texts.ts";
+import { type DayInfo, type DaySchedule, dayInfo, isScheduleWithoutOutages } from "./yasno.ts";
 
 export type TrackedDay = {
   date: string;
@@ -64,9 +69,20 @@ function notification(
   };
 }
 
+/** R15: the last fixed schedule for a date (from history); absent → legacy texts. */
+export type MonitorTextContext = TextContext & {
+  lastFixed?: (date: string) => LastFixedSchedule | null;
+};
+
+function dayBody(ctx: MonitorTextContext, info: DayInfo): string {
+  const lastFixed =
+    info.status === "EmergencyShutdowns" ? (ctx.lastFixed?.(info.date) ?? null) : null;
+  return formatDayMessage(ctx, info, lastFixed);
+}
+
 /** One poll of today's schedule. Midnight rollover and the first poll only set the baseline. */
 export function pollToday(
-  ctx: TextContext,
+  ctx: MonitorTextContext,
   previous: TrackedDay | null,
   day: DaySchedule,
   fallbackDate: string,
@@ -87,21 +103,21 @@ export function pollToday(
       "today_updated",
       `🔔 ${scheduleLink(ctx, "Графік на сьогодні")} оновлено!`,
       "🔔 Графік на сьогодні оновлено!",
-      formatDayMessage(ctx, info),
+      dayBody(ctx, info),
     ),
   };
 }
 
 /** One poll of tomorrow's schedule. Mode "published-only" is legacy, "all-changes" is R8. */
 export function pollTomorrow(
-  ctx: TextContext & { mode: TomorrowMonitorMode },
+  ctx: MonitorTextContext & { mode: TomorrowMonitorMode },
   previous: TrackedDay | null,
   day: DaySchedule,
   fallbackDate: string,
 ): PollResult {
   const info = dayInfo(day, fallbackDate, ctx.tz);
   const next = track(day, info.date);
-  const body = () => formatDayMessage(ctx, info);
+  const body = () => dayBody(ctx, info);
   const published = () =>
     notification(
       "tomorrow_published",

@@ -35,8 +35,9 @@ const YASNO = JSON.stringify({
     updatedOn: "2026-11-09T18:00:00+00:00",
   },
 });
+let yasnoBody = YASNO;
 const fakeYasno = async () =>
-  new Response(YASNO, { status: 200, headers: { "content-type": "application/json" } });
+  new Response(yasnoBody, { status: 200, headers: { "content-type": "application/json" } });
 
 const SITES = `
 sites:
@@ -54,6 +55,7 @@ let clock: ManualClock;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "svitlo-api-"));
   clock = new ManualClock(NOW);
+  yasnoBody = YASNO;
 });
 afterEach(async () => {
   await core?.stop();
@@ -311,6 +313,49 @@ describe("API v1", () => {
     expect((await c.app.inject({ url: "/health" })).statusCode).toBe(200); // not limited
     clock.advanceBy(30_000);
     expect((await get(c, "/api/v1/sites", ip("198.51.100.1"))).status).toBe(200);
+  });
+
+  it("emergency shutdowns are shown over the last fixed schedule (R15)", async () => {
+    const emergency = (date: string) => ({
+      slots: [],
+      date: `${date}T00:00:00+02:00`,
+      status: "EmergencyShutdowns",
+    });
+    yasnoBody = JSON.stringify({
+      "12.1": {
+        today: emergency("2026-11-10"),
+        tomorrow: emergency("2026-11-11"),
+        updatedOn: "2026-11-10T05:00:00+00:00",
+      },
+    });
+    const c = await start();
+    seed(c); // 09.11 is the last day with a fixed schedule: 08–12 and 20–24
+
+    const widget = (await get(c, "/api/v1/sites/4u/widget")).body;
+    for (const day of widget.timeline.days) {
+      expect(day).toMatchObject({
+        status: "EmergencyShutdowns",
+        overlay: "emergency",
+        basedOn: "2026-11-09",
+        note: "Діють екстрені відключення · графік на 09.11",
+      });
+      expect(
+        day.segments.map((s: { kind: string; label: string }) => `${s.kind} ${s.label}`),
+      ).toEqual(["on 00:00–08:00", "off 08:00–12:00", "on 12:00–20:00", "off 20:00–24:00"]);
+    }
+    expect(widget.next).toBeNull(); // the old schedule does not apply: no promises from it
+    expect(widget.hint).toMatch(/Діють екстрені відключення/);
+
+    const schedule = (await get(c, "/api/v1/sites/4u/schedule")).body;
+    expect(schedule).toMatchObject({ status: "EmergencyShutdowns", outages: [] });
+    expect(schedule.lastFixed).toMatchObject({
+      date: "2026-11-09",
+      outages: [
+        { start: at("2026-11-10", "08:00"), label: "08:00–12:00" },
+        { label: "20:00–24:00" },
+      ],
+    });
+    expect((await get(c, "/api/v1/sites/4u/schedule?date=2026-11-09")).body.lastFixed).toBeNull();
   });
 
   it("serves the OpenAPI document, and docs/openapi.json matches the contract", async () => {

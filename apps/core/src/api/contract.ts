@@ -10,7 +10,7 @@ import { SCHEDULE_STATUSES } from "@svitlo/domain";
 import { z } from "zod";
 
 /** Contract version: bump the major for breaking changes (new paths under /api/v2). */
-export const API_VERSION = "1.0.0";
+export const API_VERSION = "1.1.0";
 
 const ms = z.number().describe("Unix time, ms");
 const duration = z.number().describe("Duration, ms");
@@ -95,6 +95,17 @@ export const TimelineDay = z.object({
   date: localDate,
   status: scheduleStatus,
   label: z.string().describe("«Сьогодні, 06.11» / «Завтра, 07.11»"),
+  overlay: z
+    .enum(["emergency"])
+    .nullable()
+    .describe(
+      "emergency: Yasno declared emergency shutdowns — the segments are the last fixed schedule " +
+        "(see basedOn), shown under the emergency state; it does not apply",
+    ),
+  basedOn: localDate
+    .nullable()
+    .describe("Day whose schedule the segments come from when it is not this day"),
+  note: z.string().nullable().describe("«Діють екстрені відключення · графік на 05.11»"),
   segments: z.array(Segment),
 });
 
@@ -119,13 +130,25 @@ export const Widget = z.object({
   refreshAt: ms.describe("When the widget should be re-rendered at the latest"),
 });
 
+const labelledOutages = z.array(interval.extend({ label: z.string() }));
+
 export const DaySchedule = z.object({
   siteId: z.string(),
   date: localDate,
   source: z.enum(["live", "history", "none"]),
   status: scheduleStatus,
   updatedOn: z.string().nullable(),
-  outages: z.array(interval.extend({ label: z.string() })),
+  outages: labelledOutages,
+  lastFixed: z
+    .object({
+      date: localDate.describe("Day the schedule was published for"),
+      outages: labelledOutages.describe("Its outages placed on the requested day"),
+    })
+    .nullable()
+    .describe(
+      "Only for EmergencyShutdowns: the last fixed schedule (this day's, or else the closest " +
+        "earlier day's), to show under the emergency state",
+    ),
 });
 
 export const Outages = z.object({

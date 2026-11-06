@@ -4,7 +4,7 @@
  */
 import type { ScheduleStatus } from "./schedule-status.ts";
 import { formatHHMM, pad2, toZoned } from "./time.ts";
-import type { DayInfo } from "./yasno.ts";
+import { type DayInfo, type DaySchedule, type TimedSlot, timedOutageSlots } from "./yasno.ts";
 
 export type TextContext = { tz: string; linkUrl: string };
 
@@ -55,12 +55,52 @@ export function windowInProgressText(ctx: TextContext, start: number, end: numbe
   );
 }
 
-/** /today, /tomorrow and schedule-change body (legacy build_today_message). */
-export function formatDayMessage(ctx: TextContext, info: DayInfo): string {
+/**
+ * R15: the last schedule with outages published for a day (or, failing that, for an earlier day),
+ * shown under "emergency shutdowns" instead of nothing. Outages are placed on the shown day.
+ */
+export type LastFixedSchedule = {
+  /** Day the schedule was published for. */
+  date: string;
+  outages: TimedSlot[];
+};
+
+export function lastFixedOn(
+  fixed: { date: string; day: DaySchedule },
+  date: string,
+  tz: string,
+): LastFixedSchedule {
+  return { date: fixed.date, outages: timedOutageSlots(fixed.day, date, tz) };
+}
+
+function outageLines(ctx: TextContext, outages: readonly TimedSlot[]): string[] {
+  return outages.map(
+    (outage, index) =>
+      `${index + 1}. ${formatHHMM(outage.start, ctx.tz)} – ${formatHHMM(outage.end, ctx.tz)} ` +
+      `(${formatDuration(outage.start, outage.end)})`,
+  );
+}
+
+/**
+ * /today, /tomorrow and schedule-change body (legacy build_today_message). With `lastFixed`
+ * (R15), an emergency day also lists the last fixed schedule underneath.
+ */
+export function formatDayMessage(
+  ctx: TextContext,
+  info: DayInfo,
+  lastFixed: LastFixedSchedule | null = null,
+): string {
   const [y, m, d] = info.date.split("-");
   const header = `📅 Розклад на ${d}.${m}.${y}`;
   if (info.status === "EmergencyShutdowns") {
-    return `${header}\n🚨 ${scheduleLink(ctx, "Графік")} не діє. Діють екстрені відключення.`;
+    const emergency = `${header}\n🚨 ${scheduleLink(ctx, "Графік")} не діє. Діють екстрені відключення.`;
+    if (!lastFixed || lastFixed.outages.length === 0) return emergency;
+    const [, fm, fd] = lastFixed.date.split("-");
+    const title =
+      lastFixed.date === info.date
+        ? "Останній фіксований графік:"
+        : `Останній фіксований графік (на ${fd}.${fm}):`;
+    return [emergency, "", title, ...outageLines(ctx, lastFixed.outages)].join("\n");
   }
   if (info.status === "WaitingForSchedule") {
     return `${header}\n⌛ Очікуємо оновлення`;
@@ -74,14 +114,7 @@ export function formatDayMessage(ctx: TextContext, info: DayInfo): string {
   if (info.status !== "ScheduleApplies") {
     return `${header}\n⚠️ ${scheduleLink(ctx, "Графік")} недоступний.`;
   }
-  const lines = [header, ""];
-  info.outages.forEach((outage, index) => {
-    lines.push(
-      `${index + 1}. ${formatHHMM(outage.start, ctx.tz)} – ${formatHHMM(outage.end, ctx.tz)} ` +
-        `(${formatDuration(outage.start, outage.end)})`,
-    );
-  });
-  return lines.join("\n");
+  return [header, "", ...outageLines(ctx, info.outages)].join("\n");
 }
 
 const UK_MONTHS_SHORT = [

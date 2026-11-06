@@ -260,6 +260,25 @@ export function createStore(db: Db) {
         for (const row of rows) latest.set(row.date, row);
         return [...latest.values()].map((row) => ({ date: row.date, day: rowToDay(row) }));
       },
+      /**
+       * R15: the latest version with planned outages (ScheduleApplies) published for `date`, or else
+       * for the closest earlier day — what is shown under "emergency shutdowns".
+       */
+      lastFixed(siteId: string, date: string): { date: string; day: DaySchedule } | null {
+        const row = db
+          .select()
+          .from(scheduleSnapshots)
+          .where(
+            and(
+              eq(scheduleSnapshots.siteId, siteId),
+              lte(scheduleSnapshots.date, date),
+              eq(scheduleSnapshots.status, "ScheduleApplies"),
+            ),
+          )
+          .orderBy(desc(scheduleSnapshots.date), desc(scheduleSnapshots.fetchedAt))
+          .get();
+        return row ? { date: row.date, day: rowToDay(row) } : null;
+      },
       /** Every stored version (for schedule-change analytics). */
       versions(siteId: string, fromDate: string, toDate: string): ScheduleSnapshot[] {
         return db

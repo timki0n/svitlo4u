@@ -76,6 +76,7 @@ export {
 } from "./reminders.ts";
 export {
   daySignature,
+  type MonitorTextContext,
   type PollResult,
   pollToday,
   pollTomorrow,
@@ -95,6 +96,8 @@ export {
   formatDurationLong,
   formatLastScheduleUpdate,
   formatLeadLabel,
+  type LastFixedSchedule,
+  lastFixedOn,
   scheduleLink,
   type TextContext,
   withLastScheduleUpdate,
@@ -129,4 +132,6 @@ export {
   type RawGroupBlock,
   type RawSlot,
   type Slot,
+  type TimedSlot,
+  timedOutageSlots,
 } from "./yasno.ts";
