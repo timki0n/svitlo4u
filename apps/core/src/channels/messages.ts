@@ -3,6 +3,7 @@
  * messages; new ones (false alarm, admin alerts, /health) follow the same style.
  */
 import { formatDurationLong, formatHHMM, type PowerState, scheduleLink } from "@svitlo/domain";
+import { DEFAULT_VOLTAGE_WATCH } from "../services/voltage.ts";
 import type { SiteConfig } from "../sites-config.ts";
 
 export function escapeHtml(text: string): string {
@@ -83,13 +84,24 @@ export function voltageStabilizedText(
 export const FALSE_ALARM_TEXT =
   "↩️ Хибна тривога: світло не зникало. Вибачте за попереднє повідомлення.";
 
-/** /status — legacy wording. */
+/** Voltage readings older than this are not shown in /status. */
+export const STATUS_VOLTAGE_MAX_AGE_MS = 5 * 60_000;
+
+/** "🔌 Напруга: 228 В", marked when outside the normal band. */
+export function voltageLine(voltage: number): string {
+  const { low, high } = DEFAULT_VOLTAGE_WATCH;
+  const mark = voltage < low ? " — низька" : voltage >= high ? " — висока" : "";
+  return `🔌 Напруга: ${Math.round(voltage)} В${mark}`;
+}
+
+/** /status — legacy wording, plus the plug's voltage while there is power. */
 export function statusText(options: {
   power: PowerState;
   since: number | null;
   now: number;
   plan: { restore: string; outage: string } | null;
   linkUrl: string;
+  voltage?: { value: number; at: number | null } | null;
 }): string {
   const duration =
     options.since !== null ? formatDurationLong(seconds(options.now - options.since)) : "";
@@ -100,7 +112,11 @@ export function statusText(options: {
   }
   if (options.power === "on") {
     const state = duration ? `✅ світло є вже ${duration}` : "✅ світло є";
-    return `${state}\n${options.plan?.outage ?? noSchedule}`;
+    const v = options.voltage;
+    const fresh =
+      v && v.at !== null && options.now - v.at <= STATUS_VOLTAGE_MAX_AGE_MS && v.value > 50;
+    const lines = [state, ...(fresh ? [voltageLine(v.value)] : [])];
+    return `${lines.join("\n")}\n${options.plan?.outage ?? noSchedule}`;
   }
   return `❔ Стан світла поки невідомий: датчик ще не відповів.\n${options.plan?.outage ?? noSchedule}`;
 }

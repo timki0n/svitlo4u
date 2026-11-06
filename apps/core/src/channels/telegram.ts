@@ -386,6 +386,10 @@ export class TelegramChannel {
           now,
           plan: state.planTexts(site.id, now),
           linkUrl: site.linkUrl,
+          voltage:
+            current.lastVoltage !== null
+              ? { value: current.lastVoltage, at: current.lastPlugAt }
+              : null,
         }),
       );
       if (config.logStatusRequests && !isAdminChat(ctx)) {

@@ -352,10 +352,17 @@ describe("Telegram commands (webhook)", () => {
 
   it("/status answers from memory and logs the request to the admin", async () => {
     const { core: c, tg } = await start(LIVE_CHATS);
-    c.state.update("4u", { power: "on", since: T0 - 2 * 3_600_000 });
+    c.state.update("4u", {
+      power: "on",
+      since: T0 - 2 * 3_600_000,
+      lastVoltage: 228,
+      lastPlugAt: T0 - 40_000,
+    });
     expect((await postUpdate(c, message(group, "/status@svitlo4u_test_bot"))).statusCode).toBe(200);
     await vi.waitFor(() => expect(tg.sentTo(-1001)).toHaveLength(1));
-    expect(String(tg.sentTo(-1001)[0]?.payload.text)).toMatch(/^✅ світло є вже 2 год\.\n/);
+    expect(String(tg.sentTo(-1001)[0]?.payload.text)).toMatch(
+      /^✅ світло є вже 2 год\.\n🔌 Напруга: 228 В\n/,
+    );
     await flush(c);
     expect(String(tg.sentTo(ADMIN).at(-1)?.payload.text)).toBe(
       "📮 /status від chat=-1001, login=@ann",
