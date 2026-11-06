@@ -184,6 +184,9 @@ importers:
       '@svitlo/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@svitlo/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
       fastify:
         specifier: 5.12.8
         version: 5.12.8

@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@svitlo/domain": "workspace:*",
+    "@svitlo/storage": "workspace:*",
     "fastify": "5.12.8",
     "mqtt": "5.16.1",
     "yaml": "2.9.1",

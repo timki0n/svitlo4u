@@ -23,6 +23,12 @@ describe("loadConfig", () => {
       port: 8080,
       version: "dev",
       logLevel: "info",
+      dbPath: "data/svitlo4u.db",
+      sitesPath: "config/sites.yaml",
+      udpPort: 5005,
+      mqttUrl: null,
+      mqttUser: "core",
+      mqttPassword: null,
     });
   });
 

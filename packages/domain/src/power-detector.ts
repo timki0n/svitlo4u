@@ -350,6 +350,10 @@ function onEsp(s: DetectorState, sample: EspSample, config: DetectorConfig): Det
     return { state: next, effects };
   }
 
+  // Uptime that continued proves power since the ESP booted — an earlier start than the plug may
+  // have reported first after a restart.
+  if (sample.up !== null && s.since !== null && bootAt < s.since) next = { ...next, since: bootAt };
+
   if (gapStart !== null && !gapIncludesDowntime && sample.t - gapStart >= config.suspectAfterMs) {
     effects.push({
       type: "network-gap",

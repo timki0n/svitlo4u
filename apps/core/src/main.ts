@@ -1,15 +1,15 @@
+import { startCore } from "./app.ts";
 import { loadConfig } from "./config.ts";
-import { buildServer } from "./server.ts";
 
-const config = loadConfig();
-const app = buildServer(config);
+const core = await startCore(loadConfig());
 
+let stopping = false;
 const shutdown = async (signal: string) => {
-  app.log.info({ signal }, "shutting down");
-  await app.close();
+  if (stopping) return;
+  stopping = true;
+  core.app.log.info({ signal }, "shutting down");
+  await core.stop();
   process.exit(0);
 };
 process.once("SIGTERM", () => void shutdown("SIGTERM"));
 process.once("SIGINT", () => void shutdown("SIGINT"));
-
-await app.listen({ host: config.host, port: config.port });
