@@ -578,6 +578,34 @@ export function createStore(db: Db) {
           .where(eq(telegramSubscribers.siteId, siteId))
           .all();
       },
+      /** /feed: subscribe the topic and make it read-only for everyone but its admins. */
+      feed(siteId: string, chatId: number, threadId = 0, now = Date.now()): void {
+        db.insert(telegramSubscribers)
+          .values({ siteId, chatId, threadId, readOnly: true, createdAt: now })
+          .onConflictDoUpdate({
+            target: [
+              telegramSubscribers.siteId,
+              telegramSubscribers.chatId,
+              telegramSubscribers.threadId,
+            ],
+            set: { readOnly: true },
+          })
+          .run();
+      },
+      isReadOnly(siteId: string, chatId: number, threadId = 0): boolean {
+        const row = db
+          .select({ readOnly: telegramSubscribers.readOnly })
+          .from(telegramSubscribers)
+          .where(
+            and(
+              eq(telegramSubscribers.siteId, siteId),
+              eq(telegramSubscribers.chatId, chatId),
+              eq(telegramSubscribers.threadId, threadId),
+            ),
+          )
+          .get();
+        return row?.readOnly === true;
+      },
       /** /sub: subscribe when not subscribed, otherwise unsubscribe. Returns the new state. */
       toggle(siteId: string, chatId: number, threadId = 0, now = Date.now()): boolean {
         return db.transaction(() => {
@@ -593,6 +621,7 @@ export function createStore(db: Db) {
             if (row.chatId !== fromChatId) continue;
             store.telegram.unsubscribe(siteId, row.chatId, row.threadId);
             store.telegram.subscribe(siteId, toChatId, row.threadId, now);
+            if (row.readOnly) store.telegram.feed(siteId, toChatId, row.threadId, now);
           }
         });
       },

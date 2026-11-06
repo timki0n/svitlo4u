@@ -60,6 +60,10 @@ const telegramSchema = z.object({
   shadow: z.boolean().default(true),
   /** Receive updates (commands, moderation). false = send only, e.g. a bot shared with a legacy app. */
   commands: z.boolean().default(true),
+  /** The web app as a Telegram Mini App: the menu button by the input field opens it. */
+  webApp: z
+    .object({ url: z.url(), text: z.string().min(1).max(64).default("Відкрити") })
+    .optional(),
 });
 
 const siteSchema = z.object({

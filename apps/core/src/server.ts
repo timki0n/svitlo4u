@@ -7,7 +7,10 @@ import type { CoreConfig } from "./config.ts";
 /** Hashed build output never changes under its name; everything else is revalidated. */
 const IMMUTABLE = "public, max-age=31536000, immutable";
 
-/** The web app talks only to this origin; the support link is a plain navigation. */
+/**
+ * The web app talks only to this origin; the support link is a plain navigation. Telegram Web
+ * shows it as a Mini App in a frame, so web.telegram.org may embed it.
+ */
 const CSP = [
   "default-src 'self'",
   "connect-src 'self'",
@@ -15,7 +18,7 @@ const CSP = [
   "style-src 'self' 'unsafe-inline'",
   "font-src 'self'",
   "script-src 'self'",
-  "frame-ancestors 'none'",
+  "frame-ancestors 'self' https://web.telegram.org",
   "base-uri 'none'",
   "form-action 'none'",
 ].join("; ");

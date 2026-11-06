@@ -284,6 +284,18 @@ describe("voltage, heartbeat, outbox, reminders, subscribers", () => {
     expect(store.telegram.subscribe(SITE, 123)).toBe(true);
     expect(store.telegram.subscribe(SITE, 123)).toBe(false);
     expect(store.telegram.unsubscribe(SITE, 123)).toBe(true);
+
+    // /feed: a read-only topic; /sub alone never makes one, and unsubscribing ends it.
+    store.telegram.subscribe(SITE, -100, 5);
+    expect(store.telegram.isReadOnly(SITE, -100, 5)).toBe(false);
+    store.telegram.feed(SITE, -100, 5);
+    store.telegram.feed(SITE, -100, 5);
+    expect(store.telegram.isReadOnly(SITE, -100, 5)).toBe(true);
+    expect(store.telegram.isReadOnly(SITE, -100, 0)).toBe(false);
+    store.telegram.move(SITE, -100, -200);
+    expect(store.telegram.isReadOnly(SITE, -200, 5)).toBe(true);
+    expect(store.telegram.toggle(SITE, -200, 5)).toBe(false);
+    expect(store.telegram.isReadOnly(SITE, -200, 5)).toBe(false);
   });
 });
 

@@ -49,7 +49,12 @@ export type CoreDeps = {
   /** Do not bind a TCP port (tests use app.inject). */
   listen?: boolean;
   /** Tests: answer Telegram Bot API calls without the network. */
-  telegram?: { transformer: Transformer; botInfo: UserFromGetMe; paceMs?: number };
+  telegram?: {
+    transformer: Transformer;
+    botInfo: UserFromGetMe;
+    paceMs?: number;
+    noticeMs?: number;
+  };
   /** Validate every API response against the contract (default: on under Vitest). */
   strictApi?: boolean;
   /** Replace the network of the backup uploads (tests). */
@@ -158,6 +163,7 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
           transformer: deps.telegram.transformer,
           botInfo: deps.telegram.botInfo,
           ...(deps.telegram.paceMs !== undefined ? { paceMs: deps.telegram.paceMs } : {}),
+          ...(deps.telegram.noticeMs !== undefined ? { noticeMs: deps.telegram.noticeMs } : {}),
         }
       : {}),
   });

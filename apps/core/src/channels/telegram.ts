@@ -32,6 +32,8 @@ import {
 } from "../sites-config.ts";
 import {
   escapeHtml,
+  FEED_USAGE_TEXT,
+  feedText,
   latencyFooter,
   SUB_ADMINS_ONLY_TEXT,
   shadowHeader,
@@ -90,6 +92,8 @@ export type TelegramDeps = {
   paceMs?: number;
   /** Schedule pictures (/testscreenshot); null: not configured. */
   images?: ScheduleImages | null;
+  /** How long the /feed notice stays in the topic. */
+  noticeMs?: number;
 };
 
 const COMMANDS = [
@@ -124,6 +128,9 @@ function renderedLength(html: string): number {
 }
 const INIT_RETRY_MS = 30_000;
 const ADMIN_CACHE_MS = 10 * 60_000;
+const NOTICE_MS = 10_000;
+/** On stop, pending notice deletions get this long before the process goes. */
+const CLEANUP_ON_STOP_MS = 2_000;
 
 export function webhookSecret(token: string): string {
   return createHash("sha256").update(`svitlo4u-telegram-webhook:${token}`).digest("hex");
@@ -131,6 +138,11 @@ export function webhookSecret(token: string): string {
 
 export function formatTarget(target: ChatTarget): string {
   return target.threadId === null ? String(target.chatId) : `${target.chatId}_${target.threadId}`;
+}
+
+/** The forum topic of a message, 0 outside topics (a reply thread is not a topic). */
+function topicOf(msg: { is_topic_message?: boolean; message_thread_id?: number }): number {
+  return msg.is_topic_message ? (msg.message_thread_id ?? 0) : 0;
 }
 
 /** Legacy rule: a target without a thread matches only messages outside threads. */
@@ -190,6 +202,8 @@ export class TelegramChannel {
   private readonly deps: TelegramDeps;
   private readonly bots = new Map<string, SiteBot>();
   private readonly retryTimers = new Set<NodeJS.Timeout>();
+  /** Delayed deletions of /feed notices; run at once on stop. */
+  private readonly cleanups = new Map<NodeJS.Timeout, () => Promise<unknown>>();
   /** Uploaded pictures: file → Telegram file_id, so other chats get it without a new upload. */
   private readonly photoIds = new Map<string, string>();
   private stopped = false;
@@ -413,18 +427,27 @@ export class TelegramChannel {
     const reply = (ctx: Context, text: string) => ctx.reply(text, SEND_OPTIONS);
     const isAdminChat = (ctx: Context) =>
       config.adminChatId !== undefined && ctx.chat?.id === config.adminChatId;
+    // The developer: the user behind a private admin chat (user ids are positive, groups are not).
+    const isOwner = (ctx: Context) =>
+      config.adminChatId !== undefined &&
+      config.adminChatId > 0 &&
+      ctx.from?.id === config.adminChatId;
 
     bot.on("message", async (ctx, next) => {
       const msg = ctx.message;
       const chatId = msg.chat.id;
-      if (chatId === config.adminChatId || msg.chat.type === "private") return next();
+      if (chatId === config.adminChatId || msg.chat.type === "private" || isOwner(ctx)) {
+        return next();
+      }
       const threadId = msg.message_thread_id ?? null;
       const isCommand = msg.entities?.some((e) => e.type === "bot_command" && e.offset === 0);
       if (isCommand && matches(config.blockedChats, chatId, threadId)) {
         await ctx.deleteMessage().catch(() => {});
         return;
       }
-      if (!isCommand && matches(config.silentChats, chatId, threadId)) {
+      // A /feed topic takes nothing from non-admins, commands included; a silent one keeps commands.
+      const readOnly = store.telegram.isReadOnly(site.id, chatId, topicOf(msg));
+      if (readOnly || (!isCommand && matches(config.silentChats, chatId, threadId))) {
         const fromAdmin =
           msg.sender_chat?.id === chatId ||
           msg.is_automatic_forward === true ||
@@ -499,12 +522,51 @@ export class TelegramChannel {
           return;
         }
       }
-      const threadId = msg?.is_topic_message ? (msg.message_thread_id ?? 0) : 0;
+      const threadId = msg ? topicOf(msg) : 0;
       const subscribed = store.telegram.toggle(site.id, chatId, threadId, clock.now());
       await reply(ctx, subscribeText(subscribed));
       this.alert(
         site.id,
         `🔔 /sub: ${describeSender(ctx)} ${subscribed ? "підписався" : "відписався"}`,
+        { silent: true },
+      );
+    });
+
+    // Developer only, not in the menu: make a topic the bot's feed and leave no trace of it.
+    bot.command("feed", async (ctx) => {
+      const msg = ctx.message;
+      if (!isOwner(ctx) || !msg) return;
+      if (ctx.chat.type === "private") {
+        await reply(ctx, FEED_USAGE_TEXT);
+        return;
+      }
+      const chatId = ctx.chat.id;
+      const threadId = topicOf(msg);
+      const on = !/^(off|вимк)/i.test(ctx.match.trim());
+      if (on) store.telegram.feed(site.id, chatId, threadId, clock.now());
+      else store.telegram.unsubscribe(site.id, chatId, threadId);
+      const deleted = await ctx.deleteMessage().then(
+        () => true,
+        () => false,
+      );
+      const notice = await reply(ctx, feedText(on));
+      this.later(
+        () => ctx.api.deleteMessage(chatId, notice.message_id).catch(() => {}),
+        this.deps.noticeMs ?? NOTICE_MS,
+      );
+      const where = `chat=${chatId}${threadId ? `, thread=${threadId}` : ""}`;
+      this.alert(
+        site.id,
+        [
+          on
+            ? `🔇 /feed: ${where} підписано, писати там можуть лише адміни.`
+            : `🔊 /feed off: ${where} відписано, писати знову можуть усі.`,
+          ...(deleted
+            ? []
+            : [
+                "⚠️ Бот не зміг видалити команду: дай йому в групі адмінку з правом видаляти повідомлення, інакше тиша не працюватиме.",
+              ]),
+        ].join("\n"),
         { silent: true },
       );
     });
@@ -584,6 +646,17 @@ export class TelegramChannel {
     this.stopped = true;
     for (const timer of this.retryTimers) clearTimeout(timer);
     this.retryTimers.clear();
+    const cleanups = [...this.cleanups].map(([timer, run]) => {
+      clearTimeout(timer);
+      return run();
+    });
+    this.cleanups.clear();
+    if (cleanups.length > 0) {
+      await Promise.race([
+        Promise.all(cleanups),
+        new Promise((resolve) => setTimeout(resolve, CLEANUP_ON_STOP_MS)),
+      ]);
+    }
     await Promise.all(
       [...this.bots.values()].filter((b) => b.polling).map((b) => b.bot.stop().catch(() => {})),
     );
@@ -601,6 +674,15 @@ export class TelegramChannel {
         return;
       }
       await bot.api.setMyCommands(COMMANDS);
+      if (config.webApp) {
+        await bot.api.setChatMenuButton({
+          menu_button: {
+            type: "web_app",
+            text: config.webApp.text,
+            web_app: { url: config.webApp.url },
+          },
+        });
+      }
       if (updates === "webhook" && publicUrl) {
         await bot.api.setWebhook(`${publicUrl.replace(/\/$/, "")}/telegram/${site.id}`, {
           secret_token: siteBot.secret,
@@ -622,6 +704,15 @@ export class TelegramChannel {
       log.warn({ site: site.id, err: String(err) }, "telegram bot not connected, retrying in 30 s");
       this.retry(siteBot);
     }
+  }
+
+  /** Run a cleanup later (or at once on stop). */
+  private later(run: () => Promise<unknown>, ms: number): void {
+    const timer = setTimeout(() => {
+      this.cleanups.delete(timer);
+      void run();
+    }, ms);
+    this.cleanups.set(timer, run);
   }
 
   private retry(siteBot: SiteBot): void {

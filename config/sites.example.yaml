@@ -23,7 +23,7 @@ sites:
       shadow: true # until switch-over: announcements only to the admin chat, with latency
       chats: ["-1001234567890", "-1001234567890_12"] # chat id, or chatId_topicId for a forum topic
       blockedChats: [] # commands here are deleted and ignored
-      silentChats: ["-1001234567890_12"] # non-admin messages here are deleted
+      silentChats: ["-1001234567890_12"] # non-admin messages here are deleted (or /feed in the topic)
       # logStatusRequests: true    # copy every /status request to the admin chat
 
   - id: g6

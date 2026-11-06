@@ -196,6 +196,8 @@ export const telegramSubscribers = sqliteTable(
       .references(() => sites.id),
     chatId: integer("chat_id").notNull(),
     threadId: integer("thread_id").notNull().default(0),
+    /** A feed topic (/feed): only its admins may write there, the bot deletes everything else. */
+    readOnly: integer("read_only", { mode: "boolean" }).notNull().default(false),
     createdAt: integer("created_at").notNull(),
   },
   (t) => [primaryKey({ columns: [t.siteId, t.chatId, t.threadId] })],

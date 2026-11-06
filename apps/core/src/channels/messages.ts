@@ -139,6 +139,16 @@ export function subscribeText(subscribed: boolean): string {
     : "🔕 Ви відписались від сповіщень.\nЩе раз /sub — щоб підписатись знову.";
 }
 
+/** /feed notice in the topic itself; the bot deletes it a few seconds later. */
+export function feedText(on: boolean): string {
+  return on
+    ? "🔔 Сюди приходитимуть сповіщення про світло.\n🔇 Писати тут можуть лише адміністратори, інші повідомлення бот видалятиме."
+    : "🔕 Сповіщення сюди більше не приходитимуть, писати тут знову можуть усі.";
+}
+
+export const FEED_USAGE_TEXT =
+  "/feed у треді чи групі — підписати його на сповіщення й дозволити писати там лише адмінам; /feed off — вимкнути. Команда й відповідь бота зникнуть за кілька секунд.";
+
 export const SUB_ADMINS_ONLY_TEXT =
   "🔒 Підписати групу чи топік на сповіщення може лише адміністратор групи.";
 

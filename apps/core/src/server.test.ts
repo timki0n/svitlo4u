@@ -36,6 +36,10 @@ describe("web app", () => {
     expect(response.body).toContain("svitlo4u");
     expect(response.headers["cache-control"]).toBe("no-cache");
     expect(response.headers["content-security-policy"]).toContain("default-src 'self'");
+    // Telegram Web opens the Mini App in a frame
+    expect(response.headers["content-security-policy"]).toContain(
+      "frame-ancestors 'self' https://web.telegram.org",
+    );
   });
 
   it("caches hashed assets forever; /health stays an API route", async () => {

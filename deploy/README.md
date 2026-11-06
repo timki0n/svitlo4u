@@ -80,17 +80,28 @@ The `cloudflared` image is pinned and Dependabot bumps it daily, so merging its 
 Each site with a `telegram` section in `config/sites.yaml` gets its own bot:
 
 1. @BotFather → `/newbot` → put the token into `deploy/.env` under the name from `botTokenEnv`.
-2. For silent topics (`silentChats`) the bot must see all messages and delete them:
+2. For silent topics (`silentChats` or `/feed`) the bot must see all messages and delete them:
    @BotFather → `/setprivacy` → Disable, and make the bot a group admin with "Delete messages".
 3. With `PUBLIC_URL` set, the core registers the webhook itself on start
    (`/telegram/<site id>`, checked with a secret token derived from the bot token) and the command menu.
 4. `shadow: true` (the default) sends every announcement only to `adminChatId`, marked and with the
    measured delay — run it next to the old bots, then set `shadow: false` to switch over.
 5. A bot that an old app still uses (its webhook) gets `commands: false`: the core only sends.
+6. `webApp: { url: https://svitlo4u.info, text: Відкрити }` puts the web app on the bot's menu button
+   (a Telegram Mini App); the core sets it on start. For an «Open» button in the bot's profile
+   too: @BotFather → `/mybots` → the bot → Bot Settings → Configure Mini App → the same URL.
 
 Commands: `/start`, `/status`, `/today`, `/tomorrow`, `/sub` (personal notifications); in the admin
 chat also `/health`, `/stats`, `/notify <HTML>` (announcement to all chats of the site) and
 `/testscreenshot [завтра]` (the schedule picture, to check how it looks).
+
+`/feed` is for the developer only (the user of a private `adminChatId`) and is not in the menu.
+Sent in a group topic (or a group without topics), it subscribes that topic and makes it read-only:
+the bot deletes every message there, commands included, except those of the group's admins and
+the developer. The command is deleted at once and the bot's notice after 10 s; the admin chat
+gets a note, with a warning if the bot may not delete messages there. `/feed off` undoes it, as
+does `/sub` from a group admin. Without `/setprivacy` → Disable or the admin right the bot sees
+nothing to delete.
 
 Schedule notices carry a picture of that day's schedule card. The `renderer` service (headless
 Chromium) opens the core's own `#/render/<site>/<today|tomorrow>` page and the core sends the

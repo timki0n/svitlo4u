@@ -132,7 +132,7 @@ async function start(
     env: { ESP_4U_SECRET: "s", TG_4U_TOKEN: TOKEN },
     fetch: fakeYasno,
     listen: options.listen ?? false,
-    telegram: { transformer: tg.transformer, botInfo: BOT_INFO, paceMs: 0 },
+    telegram: { transformer: tg.transformer, botInfo: BOT_INFO, paceMs: 0, noticeMs: 0 },
     ...(options.images !== undefined ? { images: options.images } : {}),
   });
   await core.outbox.idle();
@@ -202,7 +202,19 @@ describe("Telegram channel", () => {
       allowed_updates: ["message"],
     });
     expect(tg.calls.some((c) => c.method === "setMyCommands")).toBe(true);
+    expect(tg.calls.some((c) => c.method === "setChatMenuButton")).toBe(false);
     expect(tg.sentTo(ADMIN)[0]?.payload.text).toMatch(/Ядро svitlo4u .* запущено/);
+  });
+
+  it("puts the web app on the menu button when webApp is configured", async () => {
+    const { tg } = await start(`${LIVE_CHATS}
+      webApp: { url: "https://svitlo4u.test" }`);
+    await vi.waitFor(() =>
+      expect(tg.calls.some((c) => c.method === "setChatMenuButton")).toBe(true),
+    );
+    expect(tg.calls.find((c) => c.method === "setChatMenuButton")?.payload).toEqual({
+      menu_button: { type: "web_app", text: "Відкрити", web_app: { url: "https://svitlo4u.test" } },
+    });
   });
 
   it("announces power changes to every chat and topic with the legacy wording", async () => {
@@ -490,6 +502,91 @@ describe("Telegram commands (webhook)", () => {
     await vi.waitFor(() => expect(tg.calls.some((x) => x.method === "getChatMember")).toBe(true));
     await flush(c);
     expect(tg.calls.some((x) => x.method === "deleteMessage")).toBe(false);
+  });
+
+  it("/feed: the developer makes a topic the feed, leaving no trace in it", async () => {
+    const { core: c, tg } = await start(LIVE_CHATS);
+    const forum = { id: -1005, type: "supergroup" };
+    const inTopic = { message_thread_id: 12, is_topic_message: true };
+    const owner = { from: { id: ADMIN, is_bot: false, first_name: "Dev" } };
+    const deletedIds = () =>
+      tg.calls.filter((x) => x.method === "deleteMessage").map((x) => x.payload.message_id);
+
+    // Not the developer, not even a group admin: ignored.
+    tg.respondWith((call) =>
+      call.method === "getChatMember"
+        ? { ok: true, result: { status: "administrator", user: { id: 7 } } }
+        : undefined,
+    );
+    await postUpdate(c, message(forum, "/feed", inTopic));
+    await flush(c);
+    expect(c.store.telegram.list("4u")).toEqual([]);
+    expect(tg.sentTo(-1005)).toHaveLength(0);
+    tg.respondWith(() => undefined);
+
+    const command = message(forum, "/feed", { ...inTopic, ...owner });
+    await postUpdate(c, command);
+    await vi.waitFor(() => expect(deletedIds()).toHaveLength(2));
+    const notice = tg.sentTo(-1005)[0];
+    expect(notice?.payload).toMatchObject({ message_thread_id: 12 });
+    expect(String(notice?.payload.text)).toMatch(/^🔔 Сюди приходитимуть сповіщення/);
+    // The command and then the bot's own notice are gone.
+    const deletions = tg.calls.filter((x) => x.method === "deleteMessage").map((x) => x.payload);
+    expect(deletions[0]).toMatchObject({ chat_id: -1005, message_id: command.message.message_id });
+    expect(deletions[1]?.chat_id).toBe(-1005);
+    expect(deletions[1]?.message_id).not.toBe(command.message.message_id);
+    expect(c.store.telegram.list("4u")[0]).toMatchObject({
+      chatId: -1005,
+      threadId: 12,
+      readOnly: true,
+    });
+    await vi.waitFor(() =>
+      expect(tg.sentTo(ADMIN).some((m) => String(m.payload.text).startsWith("🔇 /feed"))).toBe(
+        true,
+      ),
+    );
+
+    // Members can no longer write there, commands included; the developer still can.
+    await postUpdate(c, message(forum, "hello", inTopic));
+    await postUpdate(c, message(forum, "/status", inTopic));
+    await vi.waitFor(() => expect(deletedIds()).toHaveLength(4));
+    await postUpdate(c, message(forum, "ok", { ...inTopic, ...owner }));
+    await postUpdate(
+      c,
+      message(forum, "elsewhere", { message_thread_id: 13, is_topic_message: true }),
+    );
+    await flush(c);
+    expect(deletedIds()).toHaveLength(4);
+    expect(tg.sentTo(-1005)).toHaveLength(1);
+
+    // Announcements reach the topic.
+    c.bus.emit("power.changed", powerEvent("off"));
+    await flush(c);
+    expect(tg.sentTo(-1005).at(-1)?.payload).toMatchObject({ message_thread_id: 12 });
+
+    // /feed off undoes both.
+    await postUpdate(c, message(forum, "/feed off", { ...inTopic, ...owner }));
+    await vi.waitFor(() => expect(c.store.telegram.list("4u")).toEqual([]));
+    await postUpdate(c, message(forum, "free again", inTopic));
+    await flush(c);
+    expect(deletedIds()).toHaveLength(6);
+  });
+
+  it("/feed tells the admin when the bot cannot delete messages", async () => {
+    const { core: c, tg } = await start(LIVE_CHATS);
+    const command = message({ id: -1006, type: "supergroup" }, "/feed", {
+      from: { id: ADMIN, is_bot: false, first_name: "Dev" },
+    });
+    tg.respondWith((call) =>
+      call.method === "deleteMessage" && call.payload.message_id === command.message.message_id
+        ? { ok: false, error_code: 400, description: "Bad Request: message can't be deleted" }
+        : undefined,
+    );
+    await postUpdate(c, command);
+    await vi.waitFor(() =>
+      expect(tg.sentTo(ADMIN).some((m) => String(m.payload.text).includes("⚠️"))).toBe(true),
+    );
+    expect(c.store.telegram.isReadOnly("4u", -1006, 0)).toBe(true);
   });
 
   it("admin commands work only in the admin chat", async () => {
