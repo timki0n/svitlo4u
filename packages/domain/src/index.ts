@@ -49,6 +49,7 @@ export {
   nearestRestoreMessage,
   type PlanContext,
   planWindows,
+  windowInProgress,
 } from "./plan-messages.ts";
 export {
   DEFAULT_DETECTOR_CONFIG,

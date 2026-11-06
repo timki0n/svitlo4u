@@ -33,6 +33,7 @@ import { PowerService } from "./services/power.ts";
 import { ReminderService } from "./services/reminders.ts";
 import { ScheduleService } from "./services/schedule.ts";
 import { SiteStateStore } from "./services/state.ts";
+import { VoltageMonitor } from "./services/voltage.ts";
 import { loadSitesConfig, type SiteConfig } from "./sites-config.ts";
 
 export type CoreDeps = {
@@ -212,6 +213,17 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
   const schedules = new ScheduleService({ sites, store, bus, clock, state });
   schedules.hydrate();
   const reminders = sites.map((site) => new ReminderService({ site, store, bus, clock, state }));
+  const voltage = sites
+    .filter((site) => site.plug)
+    .map(
+      (site) =>
+        new VoltageMonitor({
+          siteId: site.id,
+          bus,
+          clock,
+          read: () => plugAdapter?.probe(site.id),
+        }),
+    );
 
   // ESP heartbeats
   const onHeartbeat = (event: HeartbeatEvent) => power.get(event.siteId)?.onHeartbeat(event);
@@ -292,6 +304,7 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
       for (const poller of pollers) poller.stop();
       await udp?.close();
       for (const service of reminders) service.stop();
+      for (const monitor of voltage) monitor.stop();
       for (const service of power.values()) service.stop();
       mqtt?.end?.(true);
       notifierInstance.stop();

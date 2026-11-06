@@ -232,6 +232,33 @@ describe("Telegram channel", () => {
     expect(texts[1]).toMatch(/Хибна тривога/);
   });
 
+  it("announces low and high voltage and when it stabilized", async () => {
+    const { core: c, tg } = await start(LIVE_CHATS);
+    c.bus.emit("voltage.alert", { siteId: "4u", kind: "low", voltage: 189, since: T0 });
+    c.bus.emit("voltage.stabilized", {
+      siteId: "4u",
+      kind: "low",
+      voltage: 206,
+      since: T0,
+      at: T0 + 14 * 60_000,
+    });
+    c.bus.emit("voltage.alert", { siteId: "4u", kind: "high", voltage: 251, since: T0 });
+    c.bus.emit("voltage.stabilized", {
+      siteId: "4u",
+      kind: "high",
+      voltage: 236,
+      since: T0,
+      at: T0 + 6 * 60_000,
+    });
+    await flush(c);
+    expect(tg.sentTo(-1001).map((m) => m.payload.text)).toEqual([
+      "⚠️ Низька напруга: 189 В.\nБережіть техніку.",
+      "✅ Напругу стабілізовано: 206 В (середня за 2 хв).\nНизька напруга трималася 14 хв.",
+      "⚠️ Висока напруга: 251 В.\nБережіть техніку.",
+      "✅ Напругу стабілізовано: 236 В (середня за 2 хв).\nВисока напруга трималася 6 хв.",
+    ]);
+  });
+
   it("does not announce the first state after a fresh start", async () => {
     const { core: c, tg } = await start(LIVE_CHATS);
     c.bus.emit("power.changed", powerEvent("on", { previous: "unknown", previousSince: null }));
@@ -356,10 +383,10 @@ describe("Telegram commands (webhook)", () => {
     const [today, tomorrow] = tg.sentTo(-1001).map((m) => String(m.payload.text));
     expect(today).toMatch(/^📅 Розклад на 06\.11\.2026/);
     expect(today).toContain(
-      "Діють екстрені відключення.\n\nОстанній фіксований графік:\n1. 08:00 – 12:00 (4 год.)",
+      "Діють екстрені відключення.\n\nОстанній згаданий графік:\n1. 08:00 – 12:00 (4 год.)",
     );
     expect(tomorrow).toMatch(/^📅 Розклад на 07\.11\.2026/);
-    expect(tomorrow).not.toContain("Останній фіксований графік");
+    expect(tomorrow).not.toContain("Останній згаданий графік");
   });
 
   it("/sub toggles a personal subscription", async () => {

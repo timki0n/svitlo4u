@@ -76,8 +76,23 @@ describe("midnight-crossing: 21:00–24:00 today + 00:00–03:00 tomorrow is one
     // Missed-start tolerance: 50% of the 6 h window = 3 h.
     expect(nearestOutageMessage(ctx, at("2026-11-11 00:00"))).toBe(missed("21:00"));
     expect(nearestOutageMessage(ctx, at("2026-11-11 00:01"))).toBe(inProgress("21:00", "03:00"));
-    expect(nearestOutageMessage(ctx, at("2026-11-11 02:59"))).toBe(inProgress("21:00", "03:00"));
+    // Only while more than 40% of the window is ahead (2 h 24 min of 6 h): power often comes back
+    // early, so with less left the window counts as over.
+    expect(nearestOutageMessage(ctx, at("2026-11-11 00:35"))).toBe(inProgress("21:00", "03:00"));
+    expect(nearestOutageMessage(ctx, at("2026-11-11 00:36"))).toBe(NONE_TODAY);
+    expect(nearestOutageMessage(ctx, at("2026-11-11 02:59"))).toBe(NONE_TODAY);
     expect(nearestOutageMessage(ctx, at("2026-11-11 03:00"))).toBe(NONE_TODAY);
+  });
+
+  it("R3: power back inside the window → 'ще триває', never 'мало відбутися'", () => {
+    // Lost at 21:00, back at 21:40: the outage did happen.
+    expect(nearestOutageMessage(ctx, at("2026-11-10 21:40"), at("2026-11-10 21:40"))).toBe(
+      inProgress("21:00", "03:00"),
+    );
+    // On since before the window: it has not started yet.
+    expect(nearestOutageMessage(ctx, at("2026-11-10 21:40"), at("2026-11-10 15:00"))).toBe(
+      missed("21:00"),
+    );
   });
 
   it("R1: reminders only before the real start and the real end", () => {
@@ -163,12 +178,12 @@ describe("yesterday from history joins a window that crosses midnight (R1)", () 
 
   it("window is 22:00–02:00, not 00:00–02:00", () => {
     const withHistory: PlanContext = { ...base, yesterday };
-    // 50% of 4 h = 2 h after 22:00 → at 01:00 the window is simply in progress.
-    expect(nearestOutageMessage(withHistory, at("2026-11-10 01:00"))).toBe(
+    // 50% of 4 h = 2 h after 22:00 → at 00:10 the window is simply in progress (46% still ahead).
+    expect(nearestOutageMessage(withHistory, at("2026-11-10 00:10"))).toBe(
       inProgress("22:00", "02:00"),
     );
     // Without history it looks like a fresh 00:00–02:00 window that "should have started".
-    expect(nearestOutageMessage(base, at("2026-11-10 01:00"))).toBe(missed("00:00"));
+    expect(nearestOutageMessage(base, at("2026-11-10 00:10"))).toBe(missed("00:00"));
   });
 
   it("no 'outage in N min' reminders before 00:00 for the continuation", () => {

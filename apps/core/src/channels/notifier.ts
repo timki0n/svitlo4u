@@ -18,6 +18,8 @@ import {
   powerLabel,
   powerOffText,
   powerOnText,
+  voltageAlertText,
+  voltageStabilizedText,
 } from "./messages.ts";
 import type { AdminReports, TelegramChannel } from "./telegram.ts";
 
@@ -71,6 +73,20 @@ export class Notifier {
           eventAt: Number.isNaN(publishedAt) || publishedAt > fetchedAt ? fetchedAt : publishedAt,
           detectedAt: fetchedAt,
         });
+      }),
+      bus.on("voltage.alert", (e) => {
+        deps.telegram.announce(e.siteId, "voltage", voltageAlertText(e.kind, e.voltage), {
+          eventAt: e.since,
+          detectedAt: deps.clock.now(),
+        });
+      }),
+      bus.on("voltage.stabilized", (e) => {
+        deps.telegram.announce(
+          e.siteId,
+          "voltage",
+          voltageStabilizedText(e.kind, e.voltage, e.at - e.since),
+          { eventAt: e.at, detectedAt: deps.clock.now() },
+        );
       }),
       bus.on("power.blip", (e) => {
         const site = deps.state.site(e.siteId);

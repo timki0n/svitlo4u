@@ -89,6 +89,11 @@ export class SiteStateStore {
   planTexts(siteId: string, now: number): { restore: string; outage: string } | null {
     const ctx = this.planContext(siteId);
     if (!ctx) return null;
-    return { restore: nearestRestoreMessage(ctx, now), outage: nearestOutageMessage(ctx, now) };
+    const state = this.get(siteId);
+    const onSince = state.power === "on" ? state.since : null;
+    return {
+      restore: nearestRestoreMessage(ctx, now),
+      outage: nearestOutageMessage(ctx, now, onSince),
+    };
   }
 }

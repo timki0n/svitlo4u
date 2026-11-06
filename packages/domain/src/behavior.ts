@@ -43,6 +43,11 @@ export type ScheduleBehavior = {
   grace: GracePolicy;
   /** R3: power on during a planned window → talk about that window, not the next one. */
   inWindowAwareness: boolean;
+  /**
+   * R3: …but only while more than this share of the window is still ahead. Power often comes back
+   * early; with less left, the window is treated as over and the next outage is shown.
+   */
+  inWindowMinRemaining: number;
   tomorrowMonitor: TomorrowMonitorMode;
 };
 
@@ -56,6 +61,7 @@ export const LEGACY_BEHAVIOR: ScheduleBehavior = {
     restoreDelayMin: 90,
   },
   inWindowAwareness: false,
+  inWindowMinRemaining: 0,
   tomorrowMonitor: "published-only",
 };
 
@@ -70,5 +76,6 @@ export const DEFAULT_BEHAVIOR: ScheduleBehavior = {
     maxMinutes: 180,
   },
   inWindowAwareness: true,
+  inWindowMinRemaining: 0.4,
   tomorrowMonitor: "all-changes",
 };

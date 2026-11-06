@@ -3,7 +3,8 @@
  * A client gets the current state at once, then every change the moment it happens.
  * No replay: a reconnecting client starts from a fresh snapshot.
  *
- * Events: state (same body as /state), power, false-alarm, schedule, reminder, voltage.
+ * Events: state (same body as /state), power, false-alarm, schedule, reminder, voltage,
+ * voltage-alert, voltage-stabilized.
  */
 import type { ServerResponse } from "node:http";
 import type { FastifyInstance } from "fastify";
@@ -65,6 +66,17 @@ export class SseHub {
       ),
       bus.on("voltage.sample", (e) =>
         this.send(e.siteId, "voltage", { t: e.t, voltage: e.voltage }),
+      ),
+      bus.on("voltage.alert", (e) =>
+        this.send(e.siteId, "voltage-alert", { kind: e.kind, voltage: e.voltage, since: e.since }),
+      ),
+      bus.on("voltage.stabilized", (e) =>
+        this.send(e.siteId, "voltage-stabilized", {
+          kind: e.kind,
+          voltage: e.voltage,
+          since: e.since,
+          at: e.at,
+        }),
       ),
     );
   }

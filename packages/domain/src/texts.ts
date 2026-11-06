@@ -78,9 +78,7 @@ export function formatDayMessage(
   if (info.status === "EmergencyShutdowns") {
     const emergency = `${header}\n🚨 ${scheduleLink(ctx, "Графік")} не діє. Діють екстрені відключення.`;
     if (!lastFixed || lastFixed.length === 0) return emergency;
-    return [emergency, "", "Останній фіксований графік:", ...outageLines(ctx, lastFixed)].join(
-      "\n",
-    );
+    return [emergency, "", "Останній згаданий графік:", ...outageLines(ctx, lastFixed)].join("\n");
   }
   if (info.status === "WaitingForSchedule") {
     return `${header}\n⌛ Очікуємо оновлення`;

@@ -14,6 +14,7 @@ import {
   type PlanContext,
   planWindows,
   type ScheduleStatus,
+  windowInProgress,
 } from "@svitlo/domain";
 import type { Store } from "@svitlo/storage";
 import { lastFixedSchedule } from "../services/schedule.ts";
@@ -68,14 +69,17 @@ export function nextChange(state: SiteStateStore, siteId: string, now: number): 
     `${localDate(t, tz) === addDays(today, 1) ? "завтра " : ""}о ${formatHHMM(t, tz)}`;
 
   const current = windows.find((w) => w.start <= now && now < w.end);
-  if (current) {
-    return power === "off"
-      ? { kind: "restore", at: current.end, label: `Світло за графіком ${when(current.end)}` }
-      : {
-          kind: "window-in-progress",
-          at: current.end,
-          label: `За графіком відключення до ${formatHHMM(current.end, tz)}`,
-        };
+  if (current && power === "off") {
+    return { kind: "restore", at: current.end, label: `Світло за графіком ${when(current.end)}` };
+  }
+  // R3: with power on, a window with little left counts as over (power often returns early).
+  const ongoing = windowInProgress(ctx, now, windows);
+  if (ongoing) {
+    return {
+      kind: "window-in-progress",
+      at: ongoing.end,
+      label: `За графіком відключення до ${formatHHMM(ongoing.end, tz)}`,
+    };
   }
   if (power === "off") return null; // off-schedule: no planned end to promise
   const next = windows.filter((w) => w.start > now).sort((a, b) => a.start - b.start)[0];

@@ -72,6 +72,21 @@ export function planWindows(ctx: PlanContext, now: number): OutageWindow[] {
   return buildPlan(ctx, localDate(now, ctx.tz)).windows;
 }
 
+/**
+ * R3: the planned window running now, while more than `inWindowMinRemaining` of it is still ahead
+ * (power often returns early: with less left the window counts as over). Null otherwise.
+ */
+export function windowInProgress(
+  ctx: PlanContext,
+  now: number,
+  windows: readonly OutageWindow[] = planWindows(ctx, now),
+): OutageWindow | null {
+  const current = windows.find((w) => w.start <= now && now < w.end);
+  if (!current) return null;
+  const remaining = (current.end - now) / (current.end - current.start);
+  return remaining > ctx.behavior.inWindowMinRemaining ? current : null;
+}
+
 /** Shown when power goes off (and in /status while it is off). */
 export function nearestRestoreMessage(ctx: PlanContext, now: number): string {
   if (ctx.today.status === "EmergencyShutdowns") return emergencyText(ctx);
@@ -115,8 +130,16 @@ export function nearestRestoreMessage(ctx: PlanContext, now: number): string {
   return OFF_SCHEDULE_TEXT;
 }
 
-/** Shown when power comes back (and in /status while it is on). */
-export function nearestOutageMessage(ctx: PlanContext, now: number): string {
+/**
+ * Shown when power comes back (and in /status while it is on). `onSince`: when the current light
+ * began — power that came back inside a window means that outage did happen ("мало відбутися"
+ * would be wrong then).
+ */
+export function nearestOutageMessage(
+  ctx: PlanContext,
+  now: number,
+  onSince: number | null = null,
+): string {
   if (ctx.today.status === "EmergencyShutdowns") return emergencyText(ctx);
   if (!isPublishedSchedule(ctx.today.status) && ctx.tomorrow.status !== "ScheduleApplies") {
     return missingScheduleText(ctx, ctx.today.status, ctx.tomorrow.status);
@@ -126,10 +149,11 @@ export function nearestOutageMessage(ctx: PlanContext, now: number): string {
   const { windows, grace } = buildPlan(ctx, nowDate);
 
   if (ctx.behavior.inWindowAwareness) {
-    // R3: power is on during a planned window — talk about this window.
-    const current = windows.find((w) => w.start <= now && now < w.end);
+    // R3: power is on during a planned window — talk about this window while enough of it is left.
+    const current = windowInProgress(ctx, now, windows);
     if (current) {
-      return now - current.start <= grace(current).missed
+      const cameBackInside = onSince !== null && onSince > current.start;
+      return !cameBackInside && now - current.start <= grace(current).missed
         ? missedStartText(ctx, current.start)
         : windowInProgressText(ctx, current.start, current.end);
     }
@@ -138,6 +162,10 @@ export function nearestOutageMessage(ctx: PlanContext, now: number): string {
   const next = windows.filter((w) => w.start > now).sort((a, b) => a.start - b.start)[0];
   if (next) {
     return nextOutageText(ctx, next.start, localDate(next.start, ctx.tz) === addDays(nowDate, 1));
+  }
+  if (ctx.behavior.inWindowAwareness && windows.some((w) => w.start <= now && now < w.end)) {
+    // The rest of a window that counts as over, and nothing planned after it.
+    return NO_OUTAGES_TODAY_TEXT;
   }
 
   if (!ctx.behavior.inWindowAwareness) {

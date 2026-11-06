@@ -10,7 +10,7 @@ import { SCHEDULE_STATUSES } from "@svitlo/domain";
 import { z } from "zod";
 
 /** Contract version: bump the major for breaking changes (new paths under /api/v2). */
-export const API_VERSION = "1.2.0";
+export const API_VERSION = "1.3.0";
 
 const ms = z.number().describe("Unix time, ms");
 const duration = z.number().describe("Duration, ms");
@@ -335,7 +335,9 @@ export const routes = {
       "text/event-stream. On connect: `state` (same body as /state). Then: `state` after every " +
       "change, `power` {state, at, detectedAt, approximate}, `false-alarm` {outageStartedAt}, " +
       "`schedule` {kind, title, body, …}, `reminder` {kind, leadMinutes, start, end, power}, " +
-      "`voltage` {t, voltage}. Comment lines every 25 s keep the stream open. No replay: a " +
+      "`voltage` {t, voltage}, `voltage-alert` {kind: low|high, voltage, since} (below 190 V " +
+      "or from 245 V, confirmed within a minute), `voltage-stabilized` {kind, voltage, since, " +
+      "at} (2 minutes back to normal). Comment lines every 25 s keep the stream open. No replay: a " +
       "reconnecting client gets a fresh `state`.",
     tag: "sites",
     params: SiteParams,

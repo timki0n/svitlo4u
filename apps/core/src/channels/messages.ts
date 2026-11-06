@@ -63,6 +63,23 @@ function lateLine(
   return `${verb} ${options.approximate ? "орієнтовно о" : "о"} ${formatHHMM(options.at, options.tz)}.`;
 }
 
+const VOLTAGE_KIND = { low: "Низька", high: "Висока" } as const;
+
+export function voltageAlertText(kind: "low" | "high", voltage: number): string {
+  return `⚠️ ${VOLTAGE_KIND[kind]} напруга: ${voltage} В.\nБережіть техніку.`;
+}
+
+export function voltageStabilizedText(
+  kind: "low" | "high",
+  voltage: number,
+  lastedMs: number,
+): string {
+  return (
+    `✅ Напругу стабілізовано: ${voltage} В (середня за 2 хв).\n` +
+    `${VOLTAGE_KIND[kind]} напруга трималася ${formatDurationLong(lastedMs / 1000)}`
+  );
+}
+
 export const FALSE_ALARM_TEXT =
   "↩️ Хибна тривога: світло не зникало. Вибачте за попереднє повідомлення.";
 

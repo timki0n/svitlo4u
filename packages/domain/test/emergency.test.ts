@@ -44,7 +44,7 @@ describe("emergency day over its own published schedule", () => {
       [
         `📅 Розклад на 07.11.2026\n${EMERGENCY}`,
         "",
-        "Останній фіксований графік:",
+        "Останній згаданий графік:",
         "1. 08:00 – 12:00 (4 год.)",
         "2. 20:00 – 00:00 (4 год.)",
       ].join("\n"),
@@ -71,7 +71,7 @@ describe("emergency day over its own published schedule", () => {
       "2026-11-07",
     );
     expect(result.notification?.telegramText).toContain(
-      "Діють екстрені відключення.\n\nОстанній фіксований графік:\n1. 08:00 – 12:00",
+      "Діють екстрені відключення.\n\nОстанній згаданий графік:\n1. 08:00 – 12:00",
     );
   });
 });
