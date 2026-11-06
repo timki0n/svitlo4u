@@ -65,6 +65,8 @@ export type YasnoPollerOptions = {
   maxBackoffMs?: number;
   onUpdate: (update: YasnoUpdate) => void;
   onError?: (error: string, failures: number) => void;
+  /** First success after failures. */
+  onRecovered?: (failures: number) => void;
 };
 
 export class YasnoPoller {
@@ -73,6 +75,7 @@ export class YasnoPoller {
   private lastHash: string | null = null;
   private cdnEtag: string | null = null;
   private failures = 0;
+  private lastSuccess: number | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private stopped = true;
 
@@ -111,7 +114,7 @@ export class YasnoPoller {
           signal: AbortSignal.timeout(timeout),
         });
         if (response.status === 304) {
-          this.failures = 0;
+          this.succeeded();
           return { kind: "unchanged", source, latencyMs: this.now() - started };
         }
         body = await readJson(response);
@@ -127,7 +130,7 @@ export class YasnoPoller {
     const relevant: Record<string, unknown> = {};
     for (const group of this.options.groups) relevant[group] = parsed.data[group] ?? null;
     const hash = createHash("sha256").update(JSON.stringify(relevant)).digest("hex");
-    this.failures = 0;
+    this.succeeded();
     if (hash === this.lastHash)
       return { kind: "unchanged", source, latencyMs: this.now() - started };
     this.lastHash = hash;
@@ -168,6 +171,22 @@ export class YasnoPoller {
 
   private async fetchJson(url: string, init: RequestInit): Promise<unknown> {
     return readJson(await this.fetchFn(url, init));
+  }
+
+  /** Last successful poll (changed or not). */
+  get lastSuccessAt(): number | null {
+    return this.lastSuccess;
+  }
+
+  get consecutiveFailures(): number {
+    return this.failures;
+  }
+
+  private succeeded(): void {
+    const failures = this.failures;
+    this.failures = 0;
+    this.lastSuccess = this.now();
+    if (failures > 0) this.options.onRecovered?.(failures);
   }
 
   private fail(error: string, started: number): PollOutcome {

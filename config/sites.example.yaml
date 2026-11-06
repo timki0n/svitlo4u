@@ -1,5 +1,5 @@
-# Copy to config/sites.yaml on the server. Secrets are NOT stored here: each device names the
-# environment variable (deploy/.env) that holds its key.
+# Copy to config/sites.yaml on the server. Secrets are NOT stored here: each device and bot names
+# the environment variable (deploy/.env) that holds its key.
 sites:
   - id: 4u
     name: ЖК 4U
@@ -17,6 +17,14 @@ sites:
         zigbeeName: 4u-plug
     # detector:                  # optional overrides of DEFAULT_DETECTOR_CONFIG
     #   suspectAfterMs: 5000
+    telegram:
+      botTokenEnv: TG_4U_TOKEN # bot from @BotFather; one bot per site
+      adminChatId: 123456789 # alerts, /status log, /health /stats /notify
+      shadow: true # until switch-over: announcements only to the admin chat, with latency
+      chats: ["-1001234567890", "-1001234567890_12"] # chat id, or chatId_topicId for a forum topic
+      blockedChats: [] # commands here are deleted and ignored
+      silentChats: ["-1001234567890_12"] # non-admin messages here are deleted
+      # logStatusRequests: true    # copy every /status request to the admin chat
 
   - id: g6
     name: Група 6.1
@@ -26,3 +34,6 @@ sites:
         kind: esp
         transport: http # POST /iot/ping with X-Signature (light_bot_tg firmware)
         secretEnv: ESP_G6_SECRET
+    # telegram:
+    #   botTokenEnv: TG_G6_TOKEN   # the light_bot_tg bot keeps its /sub subscribers
+    #   commands: false            # send only, while light_bot_tg still owns the bot's webhook

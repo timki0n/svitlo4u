@@ -5,6 +5,7 @@
 import type {
   DetectorEffect,
   PowerReason,
+  PowerState,
   ReminderEvent,
   ScheduleNotification,
 } from "@svitlo/domain";
@@ -18,6 +19,8 @@ export type CoreEvents = {
     detectedAt: number;
     reason: PowerReason;
     approximate: boolean;
+    /** The state that just ended ("unknown" right after a first start). */
+    previous: PowerState;
     /** Start of the state that just ended (null when unknown). */
     previousSince: number | null;
   };
@@ -36,6 +39,7 @@ export type CoreEvents = {
   "heartbeat.rejected": { reason: RejectReason; remote: string; deviceId?: string };
   "zigbee.bridge": { online: boolean };
   "yasno.error": { error: string; failures: number };
+  "yasno.recovered": { failures: number };
 };
 
 export type DetectorEffectEvent = Exclude<DetectorEffect, { type: "probe" }>;

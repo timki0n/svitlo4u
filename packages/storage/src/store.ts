@@ -14,7 +14,7 @@ import {
   type ScheduleStatus,
   type VoltageSample,
 } from "@svitlo/domain";
-import { and, asc, desc, eq, gte, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, isNull, lt, lte, or, sql } from "drizzle-orm";
 import type { Db } from "./db.ts";
 import {
   detectorState,
@@ -36,7 +36,7 @@ export type OutboxItem = typeof notificationOutbox.$inferSelect;
 export type Store = ReturnType<typeof createStore>;
 
 export function createStore(db: Db) {
-  return {
+  const store = {
     db,
 
     sites: {
@@ -56,6 +56,16 @@ export function createStore(db: Db) {
       load(siteId: string): PersistedDetector | null {
         const row = db.select().from(detectorState).where(eq(detectorState.siteId, siteId)).get();
         return row ? (JSON.parse(row.stateJson) as PersistedDetector) : null;
+      },
+      /** When the detector state was last saved (≈ when the core last ran). */
+      savedAt(siteId: string): number | null {
+        return (
+          db
+            .select({ updatedAt: detectorState.updatedAt })
+            .from(detectorState)
+            .where(eq(detectorState.siteId, siteId))
+            .get()?.updatedAt ?? null
+        );
       },
       save(siteId: string, state: PersistedDetector, now = Date.now()): void {
         const row = { siteId, stateJson: JSON.stringify(state), updatedAt: now };
@@ -416,6 +426,46 @@ export function createStore(db: Db) {
           .where(eq(notificationOutbox.id, id))
           .run();
       },
+      /** Every pending item in creation order (the queue is small: it only holds undelivered items). */
+      pending(): OutboxItem[] {
+        return db
+          .select()
+          .from(notificationOutbox)
+          .where(eq(notificationOutbox.status, "pending"))
+          .orderBy(asc(notificationOutbox.id))
+          .all();
+      },
+      /** Pull waiting retries of a site/channel forward to now (connectivity is back). 429s keep their wait. */
+      retryNow(siteId: string, channel: string, now = Date.now()): number {
+        return db
+          .update(notificationOutbox)
+          .set({ nextAttemptAt: now })
+          .where(
+            and(
+              eq(notificationOutbox.siteId, siteId),
+              eq(notificationOutbox.channel, channel),
+              eq(notificationOutbox.status, "pending"),
+              gt(notificationOutbox.nextAttemptAt, now),
+              or(
+                isNull(notificationOutbox.lastError),
+                sql`${notificationOutbox.lastError} NOT LIKE '429%'`,
+              ),
+            ),
+          )
+          .run().changes;
+      },
+      stats(since: number): { pending: number; failed: number; sent: number } {
+        const rows = db
+          .select({ status: notificationOutbox.status, n: sql<number>`count(*)` })
+          .from(notificationOutbox)
+          .where(
+            or(eq(notificationOutbox.status, "pending"), gte(notificationOutbox.createdAt, since)),
+          )
+          .groupBy(notificationOutbox.status)
+          .all();
+        const count = (status: string) => rows.find((r) => r.status === status)?.n ?? 0;
+        return { pending: count("pending"), failed: count("failed"), sent: count("sent") };
+      },
       get(id: number): OutboxItem | null {
         return (
           db.select().from(notificationOutbox).where(eq(notificationOutbox.id, id)).get() ?? null
@@ -509,8 +559,27 @@ export function createStore(db: Db) {
           .where(eq(telegramSubscribers.siteId, siteId))
           .all();
       },
+      /** /sub: subscribe when not subscribed, otherwise unsubscribe. Returns the new state. */
+      toggle(siteId: string, chatId: number, threadId = 0, now = Date.now()): boolean {
+        return db.transaction(() => {
+          if (store.telegram.unsubscribe(siteId, chatId, threadId)) return false;
+          store.telegram.subscribe(siteId, chatId, threadId, now);
+          return true;
+        });
+      },
+      /** A group became a supergroup: its chat id changed. */
+      move(siteId: string, fromChatId: number, toChatId: number, now = Date.now()): void {
+        db.transaction(() => {
+          for (const row of store.telegram.list(siteId)) {
+            if (row.chatId !== fromChatId) continue;
+            store.telegram.unsubscribe(siteId, row.chatId, row.threadId);
+            store.telegram.subscribe(siteId, toChatId, row.threadId, now);
+          }
+        });
+      },
     },
   };
+  return store;
 }
 
 function rowToDay(row: typeof scheduleSnapshots.$inferSelect): DaySchedule {

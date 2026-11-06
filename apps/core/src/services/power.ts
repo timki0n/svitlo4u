@@ -137,6 +137,7 @@ export class PowerService {
           detectedAt: effect.detectedAt,
           reason: effect.reason,
           approximate: effect.approximate,
+          previous: before.power,
           previousSince: before.since,
         });
         break;

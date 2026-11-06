@@ -29,10 +29,22 @@ describe("loadConfig", () => {
       mqttUrl: null,
       mqttUser: "core",
       mqttPassword: null,
+      publicUrl: null,
+      telegramUpdates: "polling",
     });
   });
 
   it("rejects an invalid port", () => {
     expect(() => loadConfig({ PORT: "abc" })).toThrow(/Invalid PORT/);
+  });
+
+  it("uses Telegram webhooks once there is a public URL", () => {
+    const config = loadConfig({ PUBLIC_URL: "https://svitlo4u.info/" });
+    expect(config.publicUrl).toBe("https://svitlo4u.info");
+    expect(config.telegramUpdates).toBe("webhook");
+    expect(loadConfig({ TELEGRAM_UPDATES: "off" }).telegramUpdates).toBe("off");
+    expect(() => loadConfig({ PUBLIC_URL: "http://svitlo4u.info" })).toThrow(/PUBLIC_URL/);
+    expect(() => loadConfig({ PUBLIC_URL: "https://svitlo4u.info/app" })).toThrow(/PUBLIC_URL/);
+    expect(() => loadConfig({ TELEGRAM_UPDATES: "webhook" })).toThrow(/needs PUBLIC_URL/);
   });
 });

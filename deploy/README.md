@@ -69,9 +69,29 @@ every minute. zigbee2mqtt availability does not notice the plug disappearing —
 
 Cloudflare dashboard → Zero Trust → Networks → Tunnels → **Create tunnel** (Cloudflared) → name `svitlo4u`
 → copy the token into `deploy/.env` → add public hostname `svitlo4u.info` → service `http://core:8080`.
-Add a Cache Rule that bypasses cache for `/api/*`, `/iot/*`, `/tg/*`.
+Add a Cache Rule that bypasses cache for `/api/*`, `/iot/*`, `/telegram/*`.
 
 The `cloudflared` image is pinned and Dependabot bumps it daily, so merging its PR keeps the tunnel on the latest release.
+
+### Telegram
+
+Each site with a `telegram` section in `config/sites.yaml` gets its own bot:
+
+1. @BotFather → `/newbot` → put the token into `deploy/.env` under the name from `botTokenEnv`.
+2. For silent topics (`silentChats`) the bot must see all messages and delete them:
+   @BotFather → `/setprivacy` → Disable, and make the bot a group admin with "Delete messages".
+3. With `PUBLIC_URL` set, the core registers the webhook itself on start
+   (`/telegram/<site id>`, checked with a secret token derived from the bot token) and the command menu.
+4. `shadow: true` (the default) sends every announcement only to `adminChatId`, marked and with the
+   measured delay — run it next to the old bots, then set `shadow: false` to switch over.
+5. A bot that an old app still uses (its webhook) gets `commands: false`: the core only sends.
+
+Commands: `/start`, `/status`, `/today`, `/tomorrow`, `/sub` (personal notifications); in the admin
+chat also `/health`, `/stats`, `/notify <HTML>` (announcement to all chats of the site).
+
+Undelivered messages are retried for 30 minutes (5 s → 3 min backoff) and survive restarts;
+the admin chat hears about chats that reject messages, Yasno failures, zigbee2mqtt going offline,
+rejected heartbeats and core restarts (with the downtime).
 
 ## Run / update
 

@@ -12,6 +12,10 @@ export type CoreConfig = {
   mqttUrl: string | null;
   mqttUser: string;
   mqttPassword: string | null;
+  /** Public origin (https://svitlo4u.info): Telegram webhooks are registered under it. */
+  publicUrl: string | null;
+  /** How Telegram updates arrive: webhook (needs publicUrl), long polling, or not at all. */
+  telegramUpdates: "webhook" | "polling" | "off";
 };
 
 function port(value: string | undefined, fallback: number, name: string): number {
@@ -24,6 +28,15 @@ function port(value: string | undefined, fallback: number, name: string): number
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
   const httpPort = port(env.PORT, 8080, "PORT");
   if (httpPort === 0) throw new Error(`Invalid PORT: ${env.PORT}`);
+  // Empty values (compose `VAR: ${VAR:-}`) count as unset.
+  const publicUrl = env.PUBLIC_URL ? env.PUBLIC_URL.replace(/\/+$/, "") : null;
+  if (publicUrl && !/^https:\/\/[^/]+$/.test(publicUrl))
+    throw new Error(`Invalid PUBLIC_URL (https origin expected): ${env.PUBLIC_URL}`);
+  const updates = env.TELEGRAM_UPDATES || (publicUrl ? "webhook" : "polling");
+  if (updates !== "webhook" && updates !== "polling" && updates !== "off")
+    throw new Error(`Invalid TELEGRAM_UPDATES: ${updates}`);
+  if (updates === "webhook" && !publicUrl)
+    throw new Error("TELEGRAM_UPDATES=webhook needs PUBLIC_URL");
   return {
     host: env.HOST ?? "0.0.0.0",
     port: httpPort,
@@ -35,5 +48,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     mqttUrl: env.MQTT_URL ?? null,
     mqttUser: env.MQTT_USER ?? "core",
     mqttPassword: env.MQTT_CORE_PASSWORD ?? null,
+    publicUrl,
+    telegramUpdates: updates,
   };
 }

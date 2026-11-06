@@ -1,11 +1,13 @@
 /**
- * Wires the core: database, sites, adapters (UDP/HTTP heartbeat, Zigbee plug, Yasno) and services
- * (power, schedules, reminders) around one event bus. Channels subscribe to the bus (stage 5).
+ * Wires the core: database, sites, adapters (UDP/HTTP heartbeat, Zigbee plug, Yasno), services
+ * (power, schedules, reminders) and channels (Telegram via the outbox, SSE) around one event bus.
  */
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { closeDatabase, createStore, openDatabase, type Store } from "@svitlo/storage";
 import type { FastifyInstance } from "fastify";
+import type { Transformer } from "grammy";
+import type { UserFromGetMe } from "grammy/types";
 import { connect, type MqttClient } from "mqtt";
 import {
   type HeartbeatEvent,
@@ -17,6 +19,10 @@ import {
 } from "./adapters/heartbeat.ts";
 import { type MqttLike, type PlugAdapter, startPlugAdapter } from "./adapters/plug.ts";
 import { YasnoPoller } from "./adapters/yasno.ts";
+import { Notifier } from "./channels/notifier.ts";
+import { type ChannelSender, Outbox } from "./channels/outbox.ts";
+import { SseHub } from "./channels/sse.ts";
+import { TELEGRAM, TelegramChannel } from "./channels/telegram.ts";
 import type { CoreConfig } from "./config.ts";
 import { type Bus, EventBus } from "./runtime/bus.ts";
 import { type Clock, SystemClock } from "./runtime/clock.ts";
@@ -35,6 +41,8 @@ export type CoreDeps = {
   fetch?: (url: string, init?: RequestInit) => Promise<Response>;
   /** Do not bind a TCP port (tests use app.inject). */
   listen?: boolean;
+  /** Tests: answer Telegram Bot API calls without the network. */
+  telegram?: { transformer: Transformer; botInfo: UserFromGetMe; paceMs?: number };
 };
 
 export type Core = {
@@ -47,6 +55,10 @@ export type Core = {
   schedules: ScheduleService;
   pollers: YasnoPoller[];
   udp: UdpHeartbeatServer | null;
+  outbox: Outbox;
+  telegram: TelegramChannel;
+  notifier: Notifier;
+  sse: SseHub;
   stop: () => Promise<void>;
 };
 
@@ -74,9 +86,70 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
     });
   }
 
+  // ≈ when the core last ran (the detector state is saved every few seconds).
+  const previousRunAt = sites.reduce<number | null>((latest, site) => {
+    const savedAt = store.detector.savedAt(site.id);
+    return savedAt === null ? latest : Math.max(latest ?? 0, savedAt);
+  }, null);
+
   const bus: Bus = new EventBus((type, err) => log.error({ type, err }, "event handler failed"));
   const state = new SiteStateStore(sites);
   logEvents(bus, log, clock);
+
+  // Channels subscribe before any service starts, so no event is missed.
+  const senders = new Map<string, ChannelSender>();
+  const pollers: YasnoPoller[] = [];
+  const sse = new SseHub({ bus, state, clock });
+  let notifier: Notifier | null = null;
+  const outbox = new Outbox({
+    store,
+    clock,
+    senders,
+    log,
+    onUndelivered: (item, error) => notifier?.onUndelivered(item, error),
+    onSent: (item, sentAt) =>
+      log.info(
+        { id: item.id, kind: item.kind, target: item.target, ms: sentAt - item.createdAt },
+        "notification sent",
+      ),
+  });
+  const telegram = new TelegramChannel({
+    sites,
+    store,
+    state,
+    clock,
+    outbox,
+    reports: {
+      health: (id) => notifier?.reports.health(id) ?? "",
+      stats: (id) => notifier?.reports.stats(id) ?? "",
+    },
+    publicUrl: config.publicUrl,
+    updates: config.telegramUpdates,
+    log,
+    ...(deps.telegram
+      ? {
+          transformer: deps.telegram.transformer,
+          botInfo: deps.telegram.botInfo,
+          ...(deps.telegram.paceMs !== undefined ? { paceMs: deps.telegram.paceMs } : {}),
+        }
+      : {}),
+  });
+  senders.set(TELEGRAM, telegram.send);
+  const notifierInstance = new Notifier({
+    bus,
+    telegram,
+    state,
+    store,
+    clock,
+    sites,
+    version: config.version,
+    pollers: () => pollers,
+    sseClients: () => sse.count,
+    log,
+  });
+  notifier = notifierInstance;
+  telegram.registerRoutes(app);
+  sse.registerRoutes(app);
 
   // Zigbee plug
   const plugs = sites.flatMap((s) => (s.plug ? [s.plug] : []));
@@ -155,17 +228,20 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
     feed.groups.add(site.yasno.group);
     byFeed.set(key, feed);
   }
-  const pollers = [...byFeed.values()].map(
-    (feed) =>
-      new YasnoPoller({
-        region: feed.region,
-        dso: feed.dso,
-        groups: [...feed.groups],
-        now: () => clock.now(),
-        ...(deps.fetch ? { fetch: deps.fetch } : {}),
-        onUpdate: (update) => schedules.onYasnoUpdate(update),
-        onError: (error, failures) => bus.emit("yasno.error", { error, failures }),
-      }),
+  pollers.push(
+    ...[...byFeed.values()].map(
+      (feed) =>
+        new YasnoPoller({
+          region: feed.region,
+          dso: feed.dso,
+          groups: [...feed.groups],
+          now: () => clock.now(),
+          ...(deps.fetch ? { fetch: deps.fetch } : {}),
+          onUpdate: (update) => schedules.onYasnoUpdate(update),
+          onError: (error, failures) => bus.emit("yasno.error", { error, failures }),
+          onRecovered: (failures) => bus.emit("yasno.recovered", { failures }),
+        }),
+    ),
   );
 
   for (const service of power.values()) service.start();
@@ -174,6 +250,9 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
 
   await app.ready();
   if (deps.listen ?? true) await app.listen({ host: config.host, port: config.port });
+  outbox.start();
+  telegram.start();
+  notifierInstance.coreStarted(previousRunAt);
 
   return {
     app,
@@ -185,19 +264,28 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
     schedules,
     pollers,
     udp,
+    outbox,
+    telegram,
+    notifier: notifierInstance,
+    sse,
     stop: async () => {
       for (const poller of pollers) poller.stop();
       await udp?.close();
       for (const service of reminders) service.stop();
       for (const service of power.values()) service.stop();
       mqtt?.end?.(true);
+      notifierInstance.stop();
+      await telegram.stop();
+      // Let sends in progress finish; what is left stays in the outbox for the next start.
+      outbox.stop();
+      await Promise.race([outbox.idle(), new Promise((r) => setTimeout(r, 3_000).unref())]);
       await app.close();
       closeDatabase(db);
     },
   };
 }
 
-/** Until channels exist (stage 5), every decision is visible in the log. */
+/** Every decision is visible in the log too (channels may be off or in shadow mode). */
 function logEvents(bus: Bus, log: FastifyInstance["log"], clock: Clock): void {
   const iso = (t: number) => new Date(t).toISOString();
   bus.on("power.changed", (e) =>

@@ -51,4 +51,47 @@ describe("sites config", () => {
     expect(() => parseSitesConfig(YAML.replace("id: g6", "id: G 6"), env)).toThrow(/lowercase/);
     expect(() => parseSitesConfig("sites: []", env)).toThrow(/sites config/);
   });
+
+  it("parses per-site Telegram settings with forum topics; one bot per site", () => {
+    const telegram = (site: string, tokenEnv: string) => `
+  - id: ${site}
+    name: ${site}
+    yasno: { region: 25, dso: 902, group: "1.1" }
+    devices:
+      - { id: esp-${site}, kind: esp, transport: http, secretEnv: ESP_4U_SECRET }
+    telegram:
+      botTokenEnv: ${tokenEnv}
+      chats: ["-1001", "-1002_7"]
+      adminChatId: 42
+`;
+    const [site] = parseSitesConfig(`sites:${telegram("a", "TG_A")}`, { ...env, TG_A: "1:x" });
+    expect(site?.telegram).toMatchObject({
+      botToken: "1:x",
+      chats: [
+        { chatId: -1001, threadId: null },
+        { chatId: -1002, threadId: 7 },
+      ],
+      blockedChats: [],
+      silentChats: [],
+      adminChatId: 42,
+      shadow: true,
+      commands: true,
+    });
+    expect(() => parseSitesConfig(`sites:${telegram("a", "TG_A")}`, env)).toThrow(
+      /env TG_A \(bot of a\) is not set/,
+    );
+    expect(() =>
+      parseSitesConfig(`sites:${telegram("a", "TG_A")}${telegram("b", "TG_B")}`, {
+        ...env,
+        TG_A: "1:x",
+        TG_B: "1:x",
+      }),
+    ).toThrow(/reuses another site's Telegram bot/);
+    expect(() =>
+      parseSitesConfig(`sites:${telegram("a", "TG_A").replace('"-1001"', '"@chan"')}`, {
+        ...env,
+        TG_A: "1:x",
+      }),
+    ).toThrow(/chatId_threadId/);
+  });
 });
