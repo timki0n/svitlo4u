@@ -31,6 +31,7 @@ describe("loadConfig", () => {
       mqttPassword: null,
       publicUrl: null,
       telegramUpdates: "polling",
+      apiRatePerMinute: 120,
     });
   });
 

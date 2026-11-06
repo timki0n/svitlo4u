@@ -40,6 +40,13 @@ export function mergeWindows(windows: readonly OutageWindow[]): OutageWindow[] {
   return merged;
 }
 
+const APPLIES = new Set<ScheduleStatus>(["ScheduleApplies"]);
+
+/** Planned outage windows of the given days, merged (analytics, timelines). */
+export function plannedWindows(days: DayRef[], tz: string): OutageWindow[] {
+  return mergeWindows(collectSlots(days, APPLIES, tz).map(({ start, end }) => ({ start, end })));
+}
+
 /**
  * Time range covered by published schedules (ScheduleApplies / NoOutages), used to bound
  * light-on windows that run past the known data.

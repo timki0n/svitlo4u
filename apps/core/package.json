@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "node --watch src/main.ts",
     "start": "node src/main.ts",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "openapi": "node src/cli/openapi.ts"
   },
   "dependencies": {
     "@svitlo/domain": "workspace:*",

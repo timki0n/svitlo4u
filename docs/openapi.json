@@ -1,0 +1,2788 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "svitlo4u API",
+    "version": "1.0.0",
+    "description": "Power state, outage schedules and analytics. Instants are Unix ms, dates are local YYYY-MM-DD in the site's time zone, durations are ms. Responses are not cached."
+  },
+  "servers": [
+    {
+      "url": "https://svitlo4u.info"
+    }
+  ],
+  "tags": [
+    {
+      "name": "sites",
+      "description": "Live state and schedules"
+    },
+    {
+      "name": "analytics",
+      "description": "History"
+    },
+    {
+      "name": "meta"
+    }
+  ],
+  "paths": {
+    "/api/v1/sites": {
+      "get": {
+        "operationId": "sites",
+        "tags": [
+          "sites"
+        ],
+        "summary": "Configured sites",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sites": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "tz": {
+                            "type": "string"
+                          },
+                          "yasnoGroup": {
+                            "type": "string"
+                          },
+                          "hasPlug": {
+                            "type": "boolean",
+                            "description": "A Zigbee plug confirms power and measures voltage"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "name",
+                          "tz",
+                          "yasnoGroup",
+                          "hasPlug"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "sites"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (see Retry-After)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/state": {
+      "get": {
+        "operationId": "state",
+        "tags": [
+          "sites"
+        ],
+        "summary": "Current power state with the plan hint",
+        "parameters": [
+          {
+            "name": "siteId",
+            "in": "path",
+            "required": true,
+            "description": "Site id, e.g. 4u",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "siteId": {
+                      "type": "string"
+                    },
+                    "now": {
+                      "type": "number",
+                      "description": "Unix time, ms"
+                    },
+                    "power": {
+                      "type": "string",
+                      "enum": [
+                        "on",
+                        "off",
+                        "unknown"
+                      ]
+                    },
+                    "since": {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "description": "Unix time, ms"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Start of the current power state"
+                    },
+                    "hint": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "text": {
+                              "type": "string",
+                              "description": "Plain text"
+                            },
+                            "html": {
+                              "type": "string",
+                              "description": "Same text with the schedule link (Telegram HTML)"
+                            }
+                          },
+                          "required": [
+                            "text",
+                            "html"
+                          ],
+                          "additionalProperties": false,
+                          "description": "Plan hint for the current state: when power returns / when the next outage is"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "next": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "outage",
+                                "restore",
+                                "window-in-progress"
+                              ],
+                              "description": "outage: next planned outage starts; restore: power is off, the planned window ends; window-in-progress: power is on although a planned window runs until `at`"
+                            },
+                            "at": {
+                              "type": "number",
+                              "description": "Unix time, ms"
+                            },
+                            "label": {
+                              "type": "string",
+                              "description": "e.g. «Відключення о 16:00», «Світло за графіком о 20:00»"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "at",
+                            "label"
+                          ],
+                          "additionalProperties": false,
+                          "description": "Next planned change (by schedule, not a promise)"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "schedule": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "updatedOn": {
+                              "description": "Yasno's update time (ISO)",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "fetchedAt": {
+                              "anyOf": [
+                                {
+                                  "type": "number",
+                                  "description": "Unix time, ms"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "updatedOn",
+                            "fetchedAt"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "voltage": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "type": "number"
+                            },
+                            "at": {
+                              "anyOf": [
+                                {
+                                  "type": "number",
+                                  "description": "Unix time, ms"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "at"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "lastEspAt": {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "description": "Unix time, ms"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "siteId",
+                    "now",
+                    "power",
+                    "since",
+                    "hint",
+                    "next",
+                    "schedule",
+                    "voltage",
+                    "lastEspAt"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown site",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (see Retry-After)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/events": {
+      "get": {
+        "operationId": "events",
+        "tags": [
+          "sites"
+        ],
+        "summary": "Live updates (Server-Sent Events)",
+        "description": "text/event-stream. On connect: `state` (same body as /state). Then: `state` after every change, `power` {state, at, detectedAt, approximate}, `false-alarm` {outageStartedAt}, `schedule` {kind, title, body, …}, `reminder` {kind, leadMinutes, start, end, power}, `voltage` {t, voltage}. Comment lines every 25 s keep the stream open. No replay: a reconnecting client gets a fresh `state`.",
+        "parameters": [
+          {
+            "name": "siteId",
+            "in": "path",
+            "required": true,
+            "description": "Site id, e.g. 4u",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Event stream (first event: state)",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "siteId": {
+                      "type": "string"
+                    },
+                    "now": {
+                      "type": "number",
+                      "description": "Unix time, ms"
+                    },
+                    "power": {
+                      "type": "string",
+                      "enum": [
+                        "on",
+                        "off",
+                        "unknown"
+                      ]
+                    },
+                    "since": {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "description": "Unix time, ms"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Start of the current power state"
+                    },
+                    "hint": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "text": {
+                              "type": "string",
+                              "description": "Plain text"
+                            },
+                            "html": {
+                              "type": "string",
+                              "description": "Same text with the schedule link (Telegram HTML)"
+                            }
+                          },
+                          "required": [
+                            "text",
+                            "html"
+                          ],
+                          "additionalProperties": false,
+                          "description": "Plan hint for the current state: when power returns / when the next outage is"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "next": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "outage",
+                                "restore",
+                                "window-in-progress"
+                              ],
+                              "description": "outage: next planned outage starts; restore: power is off, the planned window ends; window-in-progress: power is on although a planned window runs until `at`"
+                            },
+                            "at": {
+                              "type": "number",
+                              "description": "Unix time, ms"
+                            },
+                            "label": {
+                              "type": "string",
+                              "description": "e.g. «Відключення о 16:00», «Світло за графіком о 20:00»"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "at",
+                            "label"
+                          ],
+                          "additionalProperties": false,
+                          "description": "Next planned change (by schedule, not a promise)"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "schedule": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "updatedOn": {
+                              "description": "Yasno's update time (ISO)",
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "fetchedAt": {
+                              "anyOf": [
+                                {
+                                  "type": "number",
+                                  "description": "Unix time, ms"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "updatedOn",
+                            "fetchedAt"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "voltage": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "type": "number"
+                            },
+                            "at": {
+                              "anyOf": [
+                                {
+                                  "type": "number",
+                                  "description": "Unix time, ms"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "at"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "lastEspAt": {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "description": "Unix time, ms"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "siteId",
+                    "now",
+                    "power",
+                    "since",
+                    "hint",
+                    "next",
+                    "schedule",
+                    "voltage",
+                    "lastEspAt"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown site",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (see Retry-After)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/widget": {
+      "get": {
+        "operationId": "widget",
+        "tags": [
+          "sites"
+        ],
+        "summary": "Everything a home-screen widget shows, with ready labels",
+        "parameters": [
+          {
+            "name": "siteId",
+            "in": "path",
+            "required": true,
+            "description": "Site id, e.g. 4u",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "siteId": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "now": {
+                      "type": "number",
+                      "description": "Unix time, ms"
+                    },
+                    "power": {
+                      "type": "string",
+                      "enum": [
+                        "on",
+                        "off",
+                        "unknown"
+                      ]
+                    },
+                    "since": {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "description": "Unix time, ms"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "title": {
+                      "type": "string",
+                      "description": "«Світло є» / «Світла немає» / «Стан невідомий»"
+                    },
+                    "subtitle": {
+                      "description": "«уже 3 год. 20 хв.»",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "hint": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "next": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "outage",
+                                "restore",
+                                "window-in-progress"
+                              ],
+                              "description": "outage: next planned outage starts; restore: power is off, the planned window ends; window-in-progress: power is on although a planned window runs until `at`"
+                            },
+                            "at": {
+                              "type": "number",
+                              "description": "Unix time, ms"
+                            },
+                            "label": {
+                              "type": "string",
+                              "description": "e.g. «Відключення о 16:00», «Світло за графіком о 20:00»"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "at",
+                            "label"
+                          ],
+                          "additionalProperties": false,
+                          "description": "Next planned change (by schedule, not a promise)"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "timeline": {
+                      "type": "object",
+                      "properties": {
+                        "start": {
+                          "type": "number",
+                          "description": "Unix time, ms"
+                        },
+                        "end": {
+                          "type": "number",
+                          "description": "Unix time, ms"
+                        },
+                        "days": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "date": {
+                                "type": "string",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                                "description": "Local calendar date, YYYY-MM-DD"
+                              },
+                              "status": {
+                                "type": "string",
+                                "enum": [
+                                  "ScheduleApplies",
+                                  "NoOutages",
+                                  "WaitingForSchedule",
+                                  "EmergencyShutdowns",
+                                  "Unknown"
+                                ]
+                              },
+                              "label": {
+                                "type": "string",
+                                "description": "«Сьогодні, 06.11» / «Завтра, 07.11»"
+                              },
+                              "segments": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "start": {
+                                      "type": "number",
+                                      "description": "Unix time, ms"
+                                    },
+                                    "end": {
+                                      "type": "number",
+                                      "description": "Unix time, ms"
+                                    },
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "on",
+                                        "off",
+                                        "unknown"
+                                      ],
+                                      "description": "Planned state"
+                                    },
+                                    "label": {
+                                      "type": "string",
+                                      "description": "«08:00–12:00»; for unknown days the reason"
+                                    }
+                                  },
+                                  "required": [
+                                    "start",
+                                    "end",
+                                    "kind",
+                                    "label"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "required": [
+                              "date",
+                              "status",
+                              "label",
+                              "segments"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "description": "Today and tomorrow, 48 hours"
+                        },
+                        "actual": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "start": {
+                                "type": "number",
+                                "description": "Unix time, ms"
+                              },
+                              "end": {
+                                "anyOf": [
+                                  {
+                                    "type": "number",
+                                    "description": "Unix time, ms"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "start",
+                              "end"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "description": "Real outages in the timeline so far (end null = ongoing)"
+                        }
+                      },
+                      "required": [
+                        "start",
+                        "end",
+                        "days",
+                        "actual"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "refreshAt": {
+                      "type": "number",
+                      "description": "When the widget should be re-rendered at the latest"
+                    }
+                  },
+                  "required": [
+                    "siteId",
+                    "name",
+                    "now",
+                    "power",
+                    "since",
+                    "title",
+                    "subtitle",
+                    "hint",
+                    "next",
+                    "timeline",
+                    "refreshAt"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown site",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (see Retry-After)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/schedule": {
+      "get": {
+        "operationId": "schedule",
+        "tags": [
+          "sites"
+        ],
+        "summary": "Planned outages of one day (live for today/tomorrow, history otherwise)",
+        "parameters": [
+          {
+            "name": "siteId",
+            "in": "path",
+            "required": true,
+            "description": "Site id, e.g. 4u",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            }
+          },
+          {
+            "name": "date",
+            "in": "query",
+            "required": false,
+            "description": "Default: today",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "siteId": {
+                      "type": "string"
+                    },
+                    "date": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                      "description": "Local calendar date, YYYY-MM-DD"
+                    },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "live",
+                        "history",
+                        "none"
+                      ]
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ScheduleApplies",
+                        "NoOutages",
+                        "WaitingForSchedule",
+                        "EmergencyShutdowns",
+                        "Unknown"
+                      ]
+                    },
+                    "updatedOn": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "outages": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "start": {
+                            "type": "number",
+                            "description": "Unix time, ms"
+                          },
+                          "end": {
+                            "type": "number",
+                            "description": "Unix time, ms"
+                          },
+                          "label": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "start",
+                          "end",
+                          "label"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "siteId",
+                    "date",
+                    "source",
+                    "status",
+                    "updatedOn",
+                    "outages"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown site",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (see Retry-After)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/outages": {
+      "get": {
+        "operationId": "outages",
+        "tags": [
+          "sites"
+        ],
+        "summary": "Real outages in a date range (false alarms excluded)",
+        "parameters": [
+          {
+            "name": "siteId",
+            "in": "path",
+            "required": true,
+            "description": "Site id, e.g. 4u",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "First day (default: 29 days before `to`)",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "Last day, inclusive (default: today)",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "siteId": {
+                      "type": "string"
+                    },
+                    "range": {
+                      "type": "object",
+                      "properties": {
+                        "start": {
+                          "type": "number",
+                          "description": "Unix time, ms"
+                        },
+                        "end": {
+                          "type": "number",
+                          "description": "Unix time, ms"
+                        }
+                      },
+                      "required": [
+                        "start",
+                        "end"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "outages": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "start": {
+                            "type": "number",
+                            "description": "Unix time, ms"
+                          },
+                          "end": {
+                            "anyOf": [
+                              {
+                                "type": "number",
+                                "description": "Unix time, ms"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "description": "null = ongoing"
+                          },
+                          "durationMs": {
+                            "type": "number",
+                            "description": "Duration, ms"
+                          }
+                        },
+                        "required": [
+                          "start",
+                          "end",
+                          "durationMs"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "siteId",
+                    "range",
+                    "outages"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown site",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (see Retry-After)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/analytics/summary": {
+      "get": {
+        "operationId": "summary",
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Totals for a date range",
+        "parameters": [
+          {
+            "name": "siteId",
+            "in": "path",
+            "required": true,
+            "description": "Site id, e.g. 4u",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "First day (default: 29 days before `to`)",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "Last day, inclusive (default: today)",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "siteId": {
+                      "type": "string"
+                    },
+                    "range": {
+                      "type": "object",
+                      "properties": {
+                        "start": {
+                          "type": "number",
+                          "description": "Unix time, ms"
+                        },
+                        "end": {
+                          "type": "number",
+                          "description": "Unix time, ms"
+                        }
+                      },
+                      "required": [
+                        "start",
+                        "end"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "durationMs": {
+                      "type": "number",
+                      "description": "Duration, ms"
+                    },
+                    "offMs": {
+                      "type": "number",
+                      "description": "Duration, ms"
+                    },
+                    "onMs": {
+                      "type": "number",
+                      "description": "Duration, ms"
+                    },
+                    "offShare": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    "outages": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991,
+                      "description": "Outages that started inside the range"
+                    },
+                    "longestOutageMs": {
+                      "type": "number",
+                      "description": "Duration, ms"
+                    },
+                    "averageOutageMs": {
+                      "type": "number",
+                      "description": "Duration, ms"
+                    },
+                    "longestLightOnMs": {
+                      "type": "number",
+                      "description": "Duration, ms"
+                    }
+                  },
+                  "required": [
+                    "siteId",
+                    "range",
+                    "durationMs",
+                    "offMs",
+                    "onMs",
+                    "offShare",
+                    "outages",
+                    "longestOutageMs",
+                    "averageOutageMs",
+                    "longestLightOnMs"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown site",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (see Retry-After)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/analytics/daily": {
+      "get": {
+        "operationId": "daily",
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Outage time per day, week or month",
+        "parameters": [
+          {
+            "name": "siteId",
+            "in": "path",
+            "required": true,
+            "description": "Site id, e.g. 4u",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "First day (default: 29 days before `to`)",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "Last day, inclusive (default: today)",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          },
+          {
+            "name": "granularity",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "default": "day",
+              "type": "string",
+              "enum": [
+                "day",
+                "week",
+                "month"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "siteId": {
+                      "type": "string"
+                    },
+                    "range": {
+                      "type": "object",
+                      "properties": {
+                        "start": {
+                          "type": "number",
+                          "description": "Unix time, ms"
+                        },
+                        "end": {
+                          "type": "number",
+                          "description": "Unix time, ms"
+                        }
+                      },
+                      "required": [
+                        "start",
+                        "end"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "granularity": {
+                      "type": "string",
+                      "enum": [
+                        "day",
+                        "week",
+                        "month"
+                      ]
+                    },
+                    "buckets": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "key": {
+                            "type": "string",
+                            "description": "2026-11-06 | 2026-W45 | 2026-11"
+                          },
+                          "start": {
+                            "type": "number",
+                            "description": "Unix time, ms"
+                          },
+                          "end": {
+                            "type": "number",
+                            "description": "Unix time, ms"
+                          },
+                          "durationMs": {
+                            "type": "number",
+                            "description": "Duration, ms"
+                          },
+                          "offMs": {
+                            "type": "number",
+                            "description": "Duration, ms"
+                          },
+                          "offShare": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          },
+                          "outages": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "longestOutageMs": {
+                            "type": "number",
+                            "description": "Duration, ms"
+                          }
+                        },
+                        "required": [
+                          "key",
+                          "start",
+                          "end",
+                          "durationMs",
+                          "offMs",
+                          "offShare",
+                          "outages",
+                          "longestOutageMs"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "siteId",
+                    "range",
+                    "granularity",
+                    "buckets"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown site",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (see Retry-After)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/analytics/heatmap": {
+      "get": {
+        "operationId": "heatmap",
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Share of time without power by weekday and hour",
+        "parameters": [
+          {
+            "name": "siteId",
+            "in": "path",
+            "required": true,
+            "description": "Site id, e.g. 4u",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "First day (default: 29 days before `to`)",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "Last day, inclusive (default: today)",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "default": "actual",
+              "type": "string",
+              "enum": [
+                "actual",
+                "planned"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "siteId": {
+                      "type": "string"
+                    },
+                    "range": {
+                      "type": "object",
+                      "properties": {
+                        "start": {
+                          "type": "number",
+                          "description": "Unix time, ms"
+                        },
+                        "end": {
+                          "type": "number",
+                          "description": "Unix time, ms"
+                        }
+                      },
+                      "required": [
+                        "start",
+                        "end"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "actual",
+                        "planned"
+                      ]
+                    },
+                    "offMs": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": {
+                          "type": "number",
+                          "description": "Duration, ms"
+                        }
+                      },
+                      "description": "[weekday 0=Mon..6][hour 0..23]"
+                    },
+                    "totalMs": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": {
+                          "type": "number",
+                          "description": "Duration, ms"
+                        }
+                      }
+                    },
+                    "share": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": {
+                          "anyOf": [
+                            {
+                              "type": "number",
+                              "minimum": 0,
+                              "maximum": 1
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "siteId",
+                    "range",
+                    "source",
+                    "offMs",
+                    "totalMs",
+                    "share"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown site",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (see Retry-After)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/analytics/plan-vs-fact": {
+      "get": {
+        "operationId": "planVsFact",
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Planned windows compared with real outages",
+        "parameters": [
+          {
+            "name": "siteId",
+            "in": "path",
+            "required": true,
+            "description": "Site id, e.g. 4u",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "First day (default: 29 days before `to`)",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "Last day, inclusive (default: today)",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "siteId": {
+                      "type": "string"
+                    },
+                    "range": {
+                      "type": "object",
+                      "properties": {
+                        "start": {
+                          "type": "number",
+                          "description": "Unix time, ms"
+                        },
+                        "end": {
+                          "type": "number",
+                          "description": "Unix time, ms"
+                        }
+                      },
+                      "required": [
+                        "start",
+                        "end"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "matches": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "plan": {
+                            "type": "object",
+                            "properties": {
+                              "start": {
+                                "type": "number",
+                                "description": "Unix time, ms"
+                              },
+                              "end": {
+                                "type": "number",
+                                "description": "Unix time, ms"
+                              }
+                            },
+                            "required": [
+                              "start",
+                              "end"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "actual": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "start": {
+                                  "type": "number",
+                                  "description": "Unix time, ms"
+                                },
+                                "end": {
+                                  "type": "number",
+                                  "description": "Unix time, ms"
+                                }
+                              },
+                              "required": [
+                                "start",
+                                "end"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "startDeviationMs": {
+                            "description": "Actual start − planned start",
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "endDeviationMs": {
+                            "description": "Actual end − planned end",
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "coveredMs": {
+                            "type": "number",
+                            "description": "Duration, ms"
+                          }
+                        },
+                        "required": [
+                          "plan",
+                          "actual",
+                          "startDeviationMs",
+                          "endDeviationMs",
+                          "coveredMs"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "unplanned": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "start": {
+                            "type": "number",
+                            "description": "Unix time, ms"
+                          },
+                          "end": {
+                            "type": "number",
+                            "description": "Unix time, ms"
+                          }
+                        },
+                        "required": [
+                          "start",
+                          "end"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "totals": {
+                      "type": "object",
+                      "properties": {
+                        "plannedMs": {
+                          "type": "number",
+                          "description": "Duration, ms"
+                        },
+                        "actualMs": {
+                          "type": "number",
+                          "description": "Duration, ms"
+                        },
+                        "overlapMs": {
+                          "type": "number",
+                          "description": "Duration, ms"
+                        },
+                        "offScheduleMs": {
+                          "type": "number",
+                          "description": "Duration, ms"
+                        },
+                        "plannedButLightMs": {
+                          "type": "number",
+                          "description": "Duration, ms"
+                        },
+                        "executedShare": {
+                          "anyOf": [
+                            {
+                              "type": "number",
+                              "minimum": 0,
+                              "maximum": 1
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "windows": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "executedWindows": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "averageStartDeviationMs": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "averageEndDeviationMs": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "plannedMs",
+                        "actualMs",
+                        "overlapMs",
+                        "offScheduleMs",
+                        "plannedButLightMs",
+                        "executedShare",
+                        "windows",
+                        "executedWindows",
+                        "averageStartDeviationMs",
+                        "averageEndDeviationMs"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "siteId",
+                    "range",
+                    "matches",
+                    "unplanned",
+                    "totals"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown site",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (see Retry-After)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/analytics/voltage": {
+      "get": {
+        "operationId": "voltage",
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Mains voltage from the Zigbee plug",
+        "description": "granularity=hour allows ranges up to 31 days.",
+        "parameters": [
+          {
+            "name": "siteId",
+            "in": "path",
+            "required": true,
+            "description": "Site id, e.g. 4u",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "First day (default: 29 days before `to`)",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "Last day, inclusive (default: today)",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          },
+          {
+            "name": "granularity",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "default": "day",
+              "type": "string",
+              "enum": [
+                "hour",
+                "day",
+                "week",
+                "month"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "siteId": {
+                      "type": "string"
+                    },
+                    "range": {
+                      "type": "object",
+                      "properties": {
+                        "start": {
+                          "type": "number",
+                          "description": "Unix time, ms"
+                        },
+                        "end": {
+                          "type": "number",
+                          "description": "Unix time, ms"
+                        }
+                      },
+                      "required": [
+                        "start",
+                        "end"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "granularity": {
+                      "type": "string",
+                      "enum": [
+                        "hour",
+                        "day",
+                        "week",
+                        "month"
+                      ]
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {
+                        "count": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "min": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "max": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "avg": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "below": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991,
+                          "description": "Readings below 207 V"
+                        },
+                        "above": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991,
+                          "description": "Readings above 253 V"
+                        },
+                        "belowShare": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1
+                        },
+                        "aboveShare": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1
+                        }
+                      },
+                      "required": [
+                        "count",
+                        "min",
+                        "max",
+                        "avg",
+                        "below",
+                        "above",
+                        "belowShare",
+                        "aboveShare"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "buckets": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "key": {
+                            "type": "string"
+                          },
+                          "start": {
+                            "type": "number",
+                            "description": "Unix time, ms"
+                          },
+                          "end": {
+                            "type": "number",
+                            "description": "Unix time, ms"
+                          },
+                          "count": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "min": {
+                            "type": "number"
+                          },
+                          "max": {
+                            "type": "number"
+                          },
+                          "avg": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "key",
+                          "start",
+                          "end",
+                          "count",
+                          "min",
+                          "max",
+                          "avg"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "siteId",
+                    "range",
+                    "granularity",
+                    "summary",
+                    "buckets"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown site",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (see Retry-After)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/analytics/schedule-changes": {
+      "get": {
+        "operationId": "scheduleChanges",
+        "tags": [
+          "analytics"
+        ],
+        "summary": "How often and how late Yasno changed the schedule",
+        "parameters": [
+          {
+            "name": "siteId",
+            "in": "path",
+            "required": true,
+            "description": "Site id, e.g. 4u",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "First day (default: 29 days before `to`)",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "Last day, inclusive (default: today)",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "siteId": {
+                      "type": "string"
+                    },
+                    "days": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "date": {
+                            "type": "string",
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                            "description": "Local calendar date, YYYY-MM-DD"
+                          },
+                          "versions": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "changesAfterPublish": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "firstPublishedAt": {
+                            "anyOf": [
+                              {
+                                "type": "number",
+                                "description": "Unix time, ms"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "publishLeadMs": {
+                            "description": "How long before the day it was published",
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "finalStatus": {
+                            "type": "string",
+                            "enum": [
+                              "ScheduleApplies",
+                              "NoOutages",
+                              "WaitingForSchedule",
+                              "EmergencyShutdowns",
+                              "Unknown"
+                            ]
+                          },
+                          "hadEmergency": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "date",
+                          "versions",
+                          "changesAfterPublish",
+                          "firstPublishedAt",
+                          "publishLeadMs",
+                          "finalStatus",
+                          "hadEmergency"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "totals": {
+                      "type": "object",
+                      "properties": {
+                        "days": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "publishedDays": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "changedDays": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991,
+                          "description": "Days changed after the first publication"
+                        },
+                        "totalChanges": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "emergencyDays": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "medianPublishLeadMs": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "days",
+                        "publishedDays",
+                        "changedDays",
+                        "totalChanges",
+                        "emergencyDays",
+                        "medianPublishLeadMs"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "siteId",
+                    "days",
+                    "totals"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown site",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (see Retry-After)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/openapi.json": {
+      "get": {
+        "operationId": "openapi",
+        "tags": [
+          "meta"
+        ],
+        "summary": "This document",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (see Retry-After)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

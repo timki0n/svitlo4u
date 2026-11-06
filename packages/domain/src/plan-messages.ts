@@ -67,6 +67,11 @@ function buildPlan(ctx: PlanContext, nowDate: string): Plan {
   return { refs, windows, grace };
 }
 
+/** Planned windows around `now` (yesterday…tomorrow) exactly as the plan texts see them. */
+export function planWindows(ctx: PlanContext, now: number): OutageWindow[] {
+  return buildPlan(ctx, localDate(now, ctx.tz)).windows;
+}
+
 /** Shown when power goes off (and in /status while it is off). */
 export function nearestRestoreMessage(ctx: PlanContext, now: number): string {
   if (ctx.today.status === "EmergencyShutdowns") return emergencyText(ctx);

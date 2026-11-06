@@ -48,6 +48,7 @@ export {
   nearestOutageStart,
   nearestRestoreMessage,
   type PlanContext,
+  planWindows,
 } from "./plan-messages.ts";
 export {
   DEFAULT_DETECTOR_CONFIG,
@@ -108,7 +109,14 @@ export {
   localMidnight,
   zonedToEpoch,
 } from "./time.ts";
-export { knownRange, mergeWindows, type OutageWindow, windowGrace } from "./windows.ts";
+export {
+  type DayRef,
+  knownRange,
+  mergeWindows,
+  type OutageWindow,
+  plannedWindows,
+  windowGrace,
+} from "./windows.ts";
 export {
   type DayInfo,
   type DaySchedule,

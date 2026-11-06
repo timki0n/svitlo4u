@@ -1,13 +1,16 @@
 # svitlo4u
 
 Power monitoring for a residential complex: real power state (ESP32 heartbeat + Zigbee plug),
-Yasno outage schedules, Telegram and push notifications. Successor of `svitlo_web` and `light_bot_tg`.
+Yasno outage schedules, Telegram notifications, a public API for the web app and widgets.
+Successor of `svitlo_web` and `light_bot_tg`.
 
 ## Layout
 
 ```
 apps/core/        Node service: adapters, services, channels, HTTP API
 packages/domain/  Pure domain logic (no I/O) + tests
+packages/storage/ SQLite schema, migrations, repositories
+docs/             ESP protocol, OpenAPI (generated)
 deploy/           Docker Compose for the Orange Pi: core, cloudflared, mosquitto, zigbee2mqtt
 ```
 
@@ -23,6 +26,13 @@ pnpm check        # lint + typecheck + tests
 
 TypeScript runs natively in Node (type stripping) — no build step. Use erasable syntax only
 (no enums/namespaces) and import local files with the `.ts` extension.
+
+## API
+
+`/api/v1/*`: state, widget, schedules, outages, analytics and live updates (SSE). The contract is
+`apps/core/src/api/contract.ts` (Zod); [`docs/openapi.json`](docs/openapi.json) is generated from it
+(`pnpm --filter @svitlo/core openapi`) and a test fails while the two differ. Responses are
+`Cache-Control: no-store`, limited to `API_RATE_PER_MINUTE` (120) per client.
 
 ## CI
 

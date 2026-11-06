@@ -11,7 +11,8 @@
       "**",
       "!packages/domain/test/golden",
       "!packages/domain/test/fixtures",
-      "!packages/storage/migrations"
+      "!packages/storage/migrations",
+      "!docs/openapi.json"
     ]
   },
   "formatter": {

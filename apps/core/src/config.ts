@@ -16,12 +16,20 @@ export type CoreConfig = {
   publicUrl: string | null;
   /** How Telegram updates arrive: webhook (needs publicUrl), long polling, or not at all. */
   telegramUpdates: "webhook" | "polling" | "off";
+  /** Public API requests per minute per client (0 = no limit). */
+  apiRatePerMinute: number;
 };
 
 function port(value: string | undefined, fallback: number, name: string): number {
   const parsed = Number(value ?? fallback);
   if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65535)
     throw new Error(`Invalid ${name}: ${value}`);
+  return parsed;
+}
+
+function nonNegative(value: string | undefined, fallback: number, name: string): number {
+  const parsed = Number(value || fallback);
+  if (!Number.isInteger(parsed) || parsed < 0) throw new Error(`Invalid ${name}: ${value}`);
   return parsed;
 }
 
@@ -50,5 +58,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     mqttPassword: env.MQTT_CORE_PASSWORD ?? null,
     publicUrl,
     telegramUpdates: updates,
+    apiRatePerMinute: nonNegative(env.API_RATE_PER_MINUTE, 120, "API_RATE_PER_MINUTE"),
   };
 }

@@ -6,6 +6,7 @@ import {
   DEFAULT_BEHAVIOR,
   nearestOutageMessage,
   nearestRestoreMessage,
+  type PlanContext,
   type PowerState,
 } from "@svitlo/domain";
 import type { SiteConfig } from "../sites-config.ts";
@@ -69,12 +70,12 @@ export class SiteStateStore {
     Object.assign(this.get(siteId), patch);
   }
 
-  /** "When will power come back" / "next outage" for the current moment (production behaviour). */
-  planTexts(siteId: string, now: number): { restore: string; outage: string } | null {
+  /** The schedule as the plan texts see it (production behaviour), or null before Yasno answered. */
+  planContext(siteId: string): PlanContext | null {
     const state = this.get(siteId);
     if (!state.schedule) return null;
     const site = this.site(siteId);
-    const ctx = {
+    return {
       tz: site.tz,
       linkUrl: site.linkUrl,
       behavior: DEFAULT_BEHAVIOR,
@@ -82,6 +83,12 @@ export class SiteStateStore {
       tomorrow: state.schedule.tomorrow,
       yesterday: state.schedule.yesterday,
     };
+  }
+
+  /** "When will power come back" / "next outage" for the current moment. */
+  planTexts(siteId: string, now: number): { restore: string; outage: string } | null {
+    const ctx = this.planContext(siteId);
+    if (!ctx) return null;
     return { restore: nearestRestoreMessage(ctx, now), outage: nearestOutageMessage(ctx, now) };
   }
 }

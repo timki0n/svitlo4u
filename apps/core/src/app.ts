@@ -19,6 +19,8 @@ import {
 } from "./adapters/heartbeat.ts";
 import { type MqttLike, type PlugAdapter, startPlugAdapter } from "./adapters/plug.ts";
 import { YasnoPoller } from "./adapters/yasno.ts";
+import { RateLimiter, registerApiGuards } from "./api/rate-limit.ts";
+import { registerApi } from "./api/routes.ts";
 import { Notifier } from "./channels/notifier.ts";
 import { type ChannelSender, Outbox } from "./channels/outbox.ts";
 import { SseHub } from "./channels/sse.ts";
@@ -43,6 +45,8 @@ export type CoreDeps = {
   listen?: boolean;
   /** Tests: answer Telegram Bot API calls without the network. */
   telegram?: { transformer: Transformer; botInfo: UserFromGetMe; paceMs?: number };
+  /** Validate every API response against the contract (default: on under Vitest). */
+  strictApi?: boolean;
 };
 
 export type Core = {
@@ -148,6 +152,22 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
     log,
   });
   notifier = notifierInstance;
+  // Public API: rate limit + no-store first, then the routes.
+  registerApiGuards(
+    app,
+    new RateLimiter({
+      perMinute: config.apiRatePerMinute,
+      burst: Math.max(1, Math.ceil(config.apiRatePerMinute / 2)),
+      now: () => clock.now(),
+    }),
+  );
+  registerApi(app, {
+    sites,
+    state,
+    store,
+    clock,
+    strict: deps.strictApi ?? Boolean(process.env.VITEST),
+  });
   telegram.registerRoutes(app);
   sse.registerRoutes(app);
 
