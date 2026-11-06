@@ -1,0 +1,84 @@
+{
+ "description": "Real ESP32 heartbeat timeline (UDP {\"ping\": uptime_seconds}) from the production journal, 2026-11-04..06. Packets arrive every ~2 s; consecutive packets less than 5 s apart are grouped into segments. Replay generates packets every intervalMs inside each segment, uptime growing 1:1. Between segments: 7 Wi-Fi gaps of 10-12 s (uptime continues) and 3 real outages (uptime resets).",
+ "intervalMs": 2005,
+ "maxIntervalMsInsideSegments": 4325,
+ "segments": [
+  {
+   "from": 1793790199417,
+   "upFrom": 8767,
+   "to": 1793811398467,
+   "upTo": 29966,
+   "packets": 10574
+  },
+  {
+   "from": 1793907265540,
+   "upFrom": 5,
+   "to": 1793922082615,
+   "upTo": 14822,
+   "packets": 7390
+  },
+  {
+   "from": 1793922092788,
+   "upFrom": 14832,
+   "to": 1793924761463,
+   "upTo": 17501,
+   "packets": 1332
+  },
+  {
+   "from": 1793924773502,
+   "upFrom": 17513,
+   "to": 1793926838726,
+   "upTo": 19578,
+   "packets": 1031
+  },
+  {
+   "from": 1793926849346,
+   "upFrom": 19589,
+   "to": 1793929546097,
+   "upTo": 22286,
+   "packets": 1346
+  },
+  {
+   "from": 1793945532857,
+   "upFrom": 5,
+   "to": 1793946451319,
+   "upTo": 923,
+   "packets": 459
+  },
+  {
+   "from": 1793946462809,
+   "upFrom": 935,
+   "to": 1793948524148,
+   "upTo": 2996,
+   "packets": 1029
+  },
+  {
+   "from": 1793948535305,
+   "upFrom": 3008,
+   "to": 1793950598545,
+   "upTo": 5071,
+   "packets": 1030
+  },
+  {
+   "from": 1793950609946,
+   "upFrom": 5082,
+   "to": 1793954156928,
+   "upTo": 8629,
+   "packets": 1770
+  },
+  {
+   "from": 1793954168763,
+   "upFrom": 8641,
+   "to": 1793957845974,
+   "upTo": 12318,
+   "packets": 1835
+  },
+  {
+   "from": 1793967022862,
+   "upFrom": 4,
+   "to": 1793967652436,
+   "upTo": 634,
+   "packets": 315
+  }
+ ]
+}

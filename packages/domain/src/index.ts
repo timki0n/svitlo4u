@@ -12,6 +12,23 @@ export {
   type PlanContext,
 } from "./plan-messages.ts";
 export {
+  DEFAULT_DETECTOR_CONFIG,
+  type DetectorConfig,
+  type DetectorEffect,
+  type DetectorInput,
+  type DetectorState,
+  type DetectorStep,
+  type EspSample,
+  initialDetectorState,
+  nextWakeAt,
+  type PersistedDetector,
+  type PowerReason,
+  type PowerState,
+  type ProbePurpose,
+  persistDetector,
+  stepDetector,
+} from "./power-detector.ts";
+export {
   buildReminderEvents,
   REMINDER_LEADS,
   REMINDER_TRIGGER_WINDOW_MS,
