@@ -69,6 +69,8 @@ describe("loadConfig", () => {
       telegramUpdates: "polling",
       apiRatePerMinute: 120,
       webDir: null,
+      rendererCdpUrl: null,
+      renderWebUrl: "http://127.0.0.1:8080",
     });
   });
 

@@ -89,7 +89,18 @@ Each site with a `telegram` section in `config/sites.yaml` gets its own bot:
 5. A bot that an old app still uses (its webhook) gets `commands: false`: the core only sends.
 
 Commands: `/start`, `/status`, `/today`, `/tomorrow`, `/sub` (personal notifications); in the admin
-chat also `/health`, `/stats`, `/notify <HTML>` (announcement to all chats of the site).
+chat also `/health`, `/stats`, `/notify <HTML>` (announcement to all chats of the site) and
+`/testscreenshot [завтра]` (the schedule picture, to check how it looks).
+
+Schedule notices carry a picture of that day's schedule card. The `renderer` service (headless
+Chromium) opens the core's own `#/render/<site>/<today|tomorrow>` page and the core sends the
+screenshot with the text as its caption (a text over 1024 characters follows the picture). If the
+picture cannot be made within 15 s the notice goes out as text. Without `RENDERER_CDP_URL`
+pictures are off. To make one by hand:
+
+```bash
+docker compose exec core node apps/core/src/cli/render.ts 4u tomorrow /tmp/tomorrow.png
+```
 
 Undelivered messages are retried for 30 minutes (5 s → 3 min backoff) and survive restarts;
 the admin chat hears about chats that reject messages, Yasno failures, zigbee2mqtt going offline,

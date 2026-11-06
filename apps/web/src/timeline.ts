@@ -99,15 +99,31 @@ export function spacedMarks<T extends { at: number; now?: boolean }>(
   width = { now: 26, other: 14 },
 ): T[] {
   const inside = marks.filter((m) => m.at >= from && m.at < to);
-  const w = (m: T) => (m.now ? width.now : width.other);
+  const box = (m: T) => labelBox(pct(m.at, from, to), m.now ? width.now : width.other);
+  const GAP = 2;
   const kept = inside.filter((m) => m.now);
   for (const m of inside.filter((x) => !x.now).sort((a, b) => a.at - b.at)) {
-    const fits = kept.every(
-      (k) => Math.abs(pct(m.at, from, to) - pct(k.at, from, to)) >= (w(m) + w(k)) / 2,
-    );
+    const [left, right] = box(m);
+    const fits = kept.every((k) => {
+      const [kl, kr] = box(k);
+      return right + GAP <= kl || kr + GAP <= left;
+    });
     if (fits) kept.push(m);
   }
   return kept.sort((a, b) => a.at - b.at);
+}
+
+/** How a label sits at position p (percent): centred, or pinned to the start/end near an edge. */
+export function labelAnchor(p: number): "start" | "middle" | "end" {
+  return p > 80 ? "end" : p < 12 ? "start" : "middle";
+}
+
+/** The span [left, right] in percent that a label of width w takes at position p. */
+export function labelBox(p: number, w: number): [number, number] {
+  const anchor = labelAnchor(p);
+  if (anchor === "end") return [p - w, p];
+  if (anchor === "start") return [p, p + w];
+  return [p - w / 2, p + w / 2];
 }
 
 /** Position inside [from, to) in percent. */

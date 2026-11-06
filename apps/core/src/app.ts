@@ -3,7 +3,8 @@
  * (power, schedules, reminders) and channels (Telegram via the outbox, SSE) around one event bus.
  */
 import { existsSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { KYIV_TZ } from "@svitlo/domain";
 import { closeDatabase, createStore, openDatabase, type Store } from "@svitlo/storage";
 import type { FastifyInstance } from "fastify";
@@ -31,6 +32,7 @@ import { type Bus, EventBus } from "./runtime/bus.ts";
 import { type Clock, SystemClock } from "./runtime/clock.ts";
 import { buildServer } from "./server.ts";
 import { BackupService, loadBackupConfig } from "./services/backup.ts";
+import { ChromiumScheduleImages, type ScheduleImages } from "./services/images.ts";
 import { PowerService } from "./services/power.ts";
 import { ReminderService } from "./services/reminders.ts";
 import { ScheduleService } from "./services/schedule.ts";
@@ -52,6 +54,8 @@ export type CoreDeps = {
   strictApi?: boolean;
   /** Replace the network of the backup uploads (tests). */
   backupFetch?: (request: Request) => Promise<Response>;
+  /** Replace the schedule pictures (tests); null turns them off. */
+  images?: ScheduleImages | null;
 };
 
 export type Core = {
@@ -111,6 +115,17 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
   const pollers: YasnoPoller[] = [];
   let backup: BackupService | null = null;
   const sse = new SseHub({ bus, state, clock });
+  const images: ScheduleImages | null =
+    deps.images !== undefined
+      ? deps.images
+      : config.rendererCdpUrl
+        ? new ChromiumScheduleImages({
+            cdpUrl: config.rendererCdpUrl,
+            webUrl: config.renderWebUrl,
+            dir: join(config.dbPath === ":memory:" ? tmpdir() : dirname(config.dbPath), "images"),
+            log,
+          })
+        : null;
   let notifier: Notifier | null = null;
   const outbox = new Outbox({
     store,
@@ -136,6 +151,7 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
     },
     publicUrl: config.publicUrl,
     updates: config.telegramUpdates,
+    images,
     log,
     ...(deps.telegram
       ? {
@@ -157,6 +173,7 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
     pollers: () => pollers,
     sseClients: () => sse.count,
     backup: () => backup?.status ?? null,
+    images,
     log,
   });
   notifier = notifierInstance;

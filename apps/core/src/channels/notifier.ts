@@ -8,6 +8,7 @@ import type { YasnoPoller } from "../adapters/yasno.ts";
 import type { Bus, CoreEvents } from "../runtime/bus.ts";
 import type { Clock, Timer } from "../runtime/clock.ts";
 import type { BackupResult, BackupStatus } from "../services/backup.ts";
+import type { RenderDay, ScheduleImages } from "../services/images.ts";
 import type { SiteStateStore } from "../services/state.ts";
 import type { SiteConfig } from "../sites-config.ts";
 import {
@@ -42,6 +43,8 @@ export type NotifierDeps = {
   sseClients: () => number;
   /** Null when backups are not configured. */
   backup?: () => BackupStatus | null;
+  /** Schedule pictures for the notices; null: text only. */
+  images?: ScheduleImages | null;
   log: { info: (obj: object, msg: string) => void };
 };
 
@@ -75,10 +78,19 @@ export class Notifier {
         const schedule = deps.state.get(e.siteId).schedule;
         const fetchedAt = schedule?.fetchedAt ?? deps.clock.now();
         const publishedAt = schedule?.updatedOn ? Date.parse(schedule.updatedOn) : Number.NaN;
-        deps.telegram.announce(e.siteId, "schedule", e.notification.telegramText, {
-          eventAt: Number.isNaN(publishedAt) || publishedAt > fetchedAt ? fetchedAt : publishedAt,
-          detectedAt: fetchedAt,
-        });
+        const announce = (photo: string | null) =>
+          deps.telegram.announce(e.siteId, "schedule", e.notification.telegramText, {
+            eventAt: Number.isNaN(publishedAt) || publishedAt > fetchedAt ? fetchedAt : publishedAt,
+            detectedAt: fetchedAt,
+            ...(photo ? { photo } : {}),
+          });
+        if (!deps.images) {
+          announce(null);
+          return;
+        }
+        // The picture of that day goes with the text; without one the text goes alone.
+        const day: RenderDay = e.notification.kind === "today_updated" ? "today" : "tomorrow";
+        deps.images.render(e.siteId, day).then(announce, () => announce(null));
       }),
       bus.on("voltage.alert", (e) => {
         deps.telegram.announce(e.siteId, "voltage", voltageAlertText(e.kind, e.voltage), {

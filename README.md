@@ -41,6 +41,14 @@ computes nothing itself: totals, forecasts and outcomes come from the API. In pr
 serves `apps/web/dist` from `WEB_DIR` on the same origin: hashed assets are cached for a year,
 `index.html` is revalidated and carries a strict CSP (everything from `'self'`).
 
+`#/render/<site>/<today|tomorrow>` is the schedule card alone, 420 px wide — the picture the core
+sends to Telegram. Try it against any Chromium started with `--remote-debugging-port`:
+
+```bash
+export RENDERER_CDP_URL=http://127.0.0.1:9222 RENDER_WEB_URL=http://localhost:5173
+pnpm --filter @svitlo/core render 4u tomorrow tomorrow.png
+```
+
 ## API
 
 `/api/v1/*`: state, widget, schedules, outages, analytics and live updates (SSE). The contract is

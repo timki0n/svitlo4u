@@ -11,6 +11,7 @@ import { type Core, startCore } from "../app.ts";
 import { loadConfig } from "../config.ts";
 import type { CoreEvents } from "../runtime/bus.ts";
 import { ManualClock } from "../runtime/clock.ts";
+import type { ScheduleImages } from "../services/images.ts";
 import { webhookSecret } from "./telegram.ts";
 
 const LIVE = readFileSync(
@@ -108,7 +109,12 @@ afterEach(async () => {
 
 async function start(
   telegramYaml: string,
-  options: { clock?: ManualClock; listen?: boolean; tg?: ReturnType<typeof fakeTelegram> } = {},
+  options: {
+    clock?: ManualClock;
+    listen?: boolean;
+    tg?: ReturnType<typeof fakeTelegram>;
+    images?: ScheduleImages | null;
+  } = {},
 ) {
   const tg = options.tg ?? fakeTelegram();
   const clock = options.clock ?? new ManualClock(T0);
@@ -127,6 +133,7 @@ async function start(
     fetch: fakeYasno,
     listen: options.listen ?? false,
     telegram: { transformer: tg.transformer, botInfo: BOT_INFO, paceMs: 0 },
+    ...(options.images !== undefined ? { images: options.images } : {}),
   });
   await core.outbox.idle();
   return { core, tg, clock };
@@ -612,5 +619,114 @@ describe("SSE", () => {
 
     abort.abort();
     await vi.waitFor(() => expect(c.sse.count).toBe(0));
+  });
+});
+
+describe("schedule pictures", () => {
+  /** A picture renderer that hands out one PNG file and remembers what it was asked for. */
+  function fakeImages(file: string | null) {
+    const asked: string[] = [];
+    const images: ScheduleImages = {
+      render: async (siteId, day) => {
+        asked.push(`${siteId}/${day}`);
+        return file;
+      },
+    };
+    return { images, asked };
+  }
+  const png = () => {
+    const file = join(dir, "pic.png");
+    writeFileSync(file, "png");
+    return file;
+  };
+  const photoReply = (call: Call): Reply | undefined =>
+    call.method === "sendPhoto"
+      ? {
+          ok: true,
+          result: {
+            message_id: 1,
+            date: 0,
+            chat: { id: call.payload.chat_id },
+            photo: [{ file_id: "SMALL" }, { file_id: "PHOTO-1" }],
+          },
+        }
+      : undefined;
+  const notice = (kind: "today_updated" | "tomorrow_published", text: string) => ({
+    siteId: "4u",
+    notification: {
+      kind,
+      telegramText: text,
+      web: {
+        type: "schedule_updated" as const,
+        category: "schedule_change" as const,
+        title: "",
+        body: "",
+      },
+    },
+  });
+  const photos = (tg: ReturnType<typeof fakeTelegram>, chatId: number) =>
+    tg.calls.filter((c) => c.method === "sendPhoto" && c.payload.chat_id === chatId);
+
+  it("the day's picture goes with the notice as its caption; later sends reuse the upload", async () => {
+    const tg = fakeTelegram();
+    tg.respondWith(photoReply);
+    const { images, asked } = fakeImages(png());
+    const { core: c } = await start(LIVE_CHATS, { tg, images });
+    c.bus.emit("schedule.notification", notice("tomorrow_published", "📅 Графік на завтра"));
+    await flush(c);
+    expect(asked).toEqual(["4u/tomorrow"]);
+    for (const chat of [-1001, -1002]) {
+      expect(photos(tg, chat)).toHaveLength(1);
+      expect(photos(tg, chat)[0]?.payload).toMatchObject({
+        caption: "📅 Графік на завтра",
+        parse_mode: "HTML",
+      });
+      expect(tg.sentTo(chat)).toHaveLength(0);
+    }
+    expect(photos(tg, -1002)[0]?.payload).toMatchObject({ message_thread_id: 7 });
+
+    c.bus.emit("schedule.notification", notice("today_updated", "📅 Графік змінено"));
+    await flush(c);
+    expect(asked).toEqual(["4u/tomorrow", "4u/today"]);
+    expect(photos(tg, -1001)[1]?.payload.photo).toBe("PHOTO-1");
+  });
+
+  it("a text too long for a caption follows the picture; no picture → text alone", async () => {
+    const tg = fakeTelegram();
+    tg.respondWith(photoReply);
+    const long = `📅 ${"дуже довгий графік ".repeat(70)}`;
+    const { core: c } = await start(LIVE_CHATS, { tg, images: fakeImages(png()).images });
+    c.bus.emit("schedule.notification", notice("tomorrow_published", long));
+    await flush(c);
+    const toFirst = tg.calls.filter(
+      (call) => call.payload.chat_id === -1001 && /^send(Photo|Message)$/.test(call.method),
+    );
+    expect(toFirst.map((call) => call.method)).toEqual(["sendPhoto", "sendMessage"]);
+    expect(toFirst[0]?.payload.caption).toBeUndefined();
+    expect(toFirst[1]?.payload.text).toBe(long);
+    await core?.stop();
+    core = null;
+
+    const tg2 = fakeTelegram();
+    const { core: c2 } = await start(LIVE_CHATS, { tg: tg2, images: fakeImages(null).images });
+    c2.bus.emit("schedule.notification", notice("today_updated", "📅 Графік змінено"));
+    await flush(c2);
+    expect(tg2.calls.some((call) => call.method === "sendPhoto")).toBe(false);
+    expect(tg2.sentTo(-1001)[0]?.payload.text).toBe("📅 Графік змінено");
+  });
+
+  it("/testscreenshot sends the picture to the admin chat only", async () => {
+    const tg = fakeTelegram();
+    tg.respondWith(photoReply);
+    const { images, asked } = fakeImages(png());
+    const { core: c } = await start(LIVE_CHATS, { tg, images });
+    await postUpdate(c, message({ id: ADMIN, type: "private" }, "/testscreenshot завтра"));
+    await vi.waitFor(() => expect(photos(tg, ADMIN)).toHaveLength(1));
+    expect(photos(tg, ADMIN)[0]?.payload).toMatchObject({ caption: "🧪 Графік на завтра" });
+    expect(asked).toEqual(["4u/tomorrow"]);
+
+    await postUpdate(c, message({ id: 555, type: "private" }, "/testscreenshot"));
+    await flush(c);
+    expect(asked).toHaveLength(1);
   });
 });

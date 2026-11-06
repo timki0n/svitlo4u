@@ -20,6 +20,10 @@ export type CoreConfig = {
   apiRatePerMinute: number;
   /** Built web app (apps/web/dist) served at /; null: API only. */
   webDir: string | null;
+  /** DevTools endpoint of the headless Chromium for schedule pictures; null: text only. */
+  rendererCdpUrl: string | null;
+  /** This core as the renderer's browser reaches it (it opens the web app's #/render page). */
+  renderWebUrl: string;
 };
 
 function port(value: string | undefined, fallback: number, name: string): number {
@@ -62,5 +66,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     telegramUpdates: updates,
     apiRatePerMinute: nonNegative(env.API_RATE_PER_MINUTE, 120, "API_RATE_PER_MINUTE"),
     webDir: env.WEB_DIR || null,
+    rendererCdpUrl: env.RENDERER_CDP_URL || null,
+    renderWebUrl: env.RENDER_WEB_URL || `http://127.0.0.1:${httpPort}`,
   };
 }

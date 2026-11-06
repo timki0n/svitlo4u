@@ -7,6 +7,7 @@
  * only, with measured latency — the new core runs next to the legacy bots until switch-over.
  */
 import { createHash, timingSafeEqual } from "node:crypto";
+import { existsSync } from "node:fs";
 import {
   addDays,
   dayInfo,
@@ -17,9 +18,10 @@ import {
 } from "@svitlo/domain";
 import type { OutboxItem, Store } from "@svitlo/storage";
 import type { FastifyInstance } from "fastify";
-import { Bot, type Context, GrammyError, HttpError, type Transformer } from "grammy";
+import { Bot, type Context, GrammyError, HttpError, InputFile, type Transformer } from "grammy";
 import type { Update, UserFromGetMe } from "grammy/types";
 import type { Clock } from "../runtime/clock.ts";
+import type { ScheduleImages } from "../services/images.ts";
 import { lastFixedSchedule } from "../services/schedule.ts";
 import type { SiteStateStore } from "../services/state.ts";
 import {
@@ -42,13 +44,18 @@ import type { DeliveryResult, EnqueueItem, Outbox } from "./outbox.ts";
 export const TELEGRAM = "telegram";
 
 export type TelegramPayload = {
+  /** HTML; the photo's caption when there is a photo (may be empty). */
   text: string;
+  /** A picture (PNG file) sent with the text as its caption. */
+  photo?: string;
   silent?: boolean;
   /** Shadow copies: append measured latency at send time. */
   latency?: { eventAt: number; detectedAt: number | null };
 };
 
 export type AnnounceOptions = {
+  /** Schedule picture to send with the text (see ScheduleImages). */
+  photo?: string;
   silent?: boolean;
   eventAt?: number;
   detectedAt?: number | null;
@@ -81,6 +88,8 @@ export type TelegramDeps = {
   botInfo?: UserFromGetMe;
   /** Pause between sends of one bot (Telegram allows ~30 messages/s). */
   paceMs?: number;
+  /** Schedule pictures (/testscreenshot); null: not configured. */
+  images?: ScheduleImages | null;
 };
 
 const COMMANDS = [
@@ -104,6 +113,15 @@ const DEAD_CHAT = [
 ];
 
 const SEND_OPTIONS = { parse_mode: "HTML", link_preview_options: { is_disabled: true } } as const;
+/** Telegram's caption limit, in characters of the rendered text. */
+const CAPTION_MAX = 1024;
+/** Room for the latency footer that shadow copies get at send time. */
+const SHADOW_FOOTER = 120;
+
+/** Length of HTML as Telegram counts it (tags and entities rendered). */
+function renderedLength(html: string): number {
+  return html.replace(/<[^>]*>/g, "").replace(/&(lt|gt|amp|quot|#39);/g, "_").length;
+}
 const INIT_RETRY_MS = 30_000;
 const ADMIN_CACHE_MS = 10 * 60_000;
 
@@ -172,6 +190,8 @@ export class TelegramChannel {
   private readonly deps: TelegramDeps;
   private readonly bots = new Map<string, SiteBot>();
   private readonly retryTimers = new Set<NodeJS.Timeout>();
+  /** Uploaded pictures: file → Telegram file_id, so other chats get it without a new upload. */
+  private readonly photoIds = new Map<string, string>();
   private stopped = false;
 
   constructor(deps: TelegramDeps) {
@@ -205,6 +225,24 @@ export class TelegramChannel {
     const { config } = siteBot;
     const targets = this.audience(siteId, config);
     const base = { siteId, channel: TELEGRAM, kind };
+    /** One target's items: the text as the picture's caption, or the picture first when too long. */
+    const itemsFor = (target: string, payload: TelegramPayload, dedupe?: string): EnqueueItem[] => {
+      const key = (suffix: string) => (dedupe ? { dedupeKey: `${dedupe}${suffix}` } : {});
+      if (!options.photo) return [{ ...base, target, payload, ...key("") }];
+      const room = CAPTION_MAX - (payload.latency ? SHADOW_FOOTER : 0);
+      if (renderedLength(payload.text) <= room) {
+        return [{ ...base, target, payload: { ...payload, photo: options.photo }, ...key("") }];
+      }
+      const picture: TelegramPayload = {
+        text: "",
+        photo: options.photo,
+        ...(payload.silent ? { silent: true } : {}),
+      };
+      return [
+        { ...base, target, payload: picture, ...key("|photo") },
+        { ...base, target, payload, ...key("") },
+      ];
+    };
     let items: EnqueueItem[];
     if (config.shadow) {
       if (config.adminChatId === undefined) return 0;
@@ -215,22 +253,16 @@ export class TelegramChannel {
           ? { latency: { eventAt: options.eventAt, detectedAt: options.detectedAt ?? null } }
           : {}),
       };
-      items = [
-        {
-          ...base,
-          target: String(config.adminChatId),
-          payload,
-          ...(options.dedupeKey ? { dedupeKey: `${options.dedupeKey}|shadow` } : {}),
-        },
-      ];
+      items = itemsFor(
+        String(config.adminChatId),
+        payload,
+        options.dedupeKey ? `${options.dedupeKey}|shadow` : undefined,
+      );
     } else {
       const payload: TelegramPayload = { text, ...(options.silent ? { silent: true } : {}) };
-      items = targets.map((target) => ({
-        ...base,
-        target,
-        payload,
-        ...(options.dedupeKey ? { dedupeKey: `${options.dedupeKey}|${target}` } : {}),
-      }));
+      items = targets.flatMap((target) =>
+        itemsFor(target, payload, options.dedupeKey ? `${options.dedupeKey}|${target}` : undefined),
+      );
     }
     return this.deps.outbox.enqueue(items);
   }
@@ -281,6 +313,29 @@ export class TelegramChannel {
     if (payload.latency) {
       text += `\n\n${latencyFooter(payload.latency.eventAt, payload.latency.detectedAt, this.deps.clock.now())}`;
     }
+    if (payload.photo) {
+      const known = this.photoIds.get(payload.photo);
+      if (known || existsSync(payload.photo)) {
+        try {
+          const message = await siteBot.bot.api.sendPhoto(
+            target.chatId,
+            known ?? new InputFile(payload.photo),
+            {
+              ...(text ? { caption: text, parse_mode: "HTML" as const } : {}),
+              ...(target.threadId !== null ? { message_thread_id: target.threadId } : {}),
+              ...(payload.silent ? { disable_notification: true } : {}),
+            },
+          );
+          const fileId = message.photo?.at(-1)?.file_id;
+          if (!known && fileId) this.rememberPhoto(payload.photo, fileId);
+          return { status: "sent" };
+        } catch (error) {
+          return this.classify(item, target, error);
+        }
+      }
+      // The picture is gone (old files are cleaned up): the text alone still goes out.
+      if (!text) return { status: "failed", error: "picture file is gone", quiet: true };
+    }
     try {
       await siteBot.bot.api.sendMessage(target.chatId, text, {
         ...SEND_OPTIONS,
@@ -292,6 +347,14 @@ export class TelegramChannel {
       return this.classify(item, target, error);
     }
   };
+
+  private rememberPhoto(file: string, fileId: string): void {
+    this.photoIds.set(file, fileId);
+    if (this.photoIds.size > 50) {
+      const oldest = this.photoIds.keys().next().value;
+      if (oldest !== undefined) this.photoIds.delete(oldest);
+    }
+  }
 
   private classify(item: OutboxItem, target: ChatTarget, error: unknown): DeliveryResult {
     if (error instanceof GrammyError) {
@@ -452,6 +515,25 @@ export class TelegramChannel {
     });
     bot.command("stats", async (ctx) => {
       if (isAdminChat(ctx)) await reply(ctx, reports.stats(site.id));
+    });
+    bot.command("testscreenshot", async (ctx) => {
+      if (!isAdminChat(ctx)) return;
+      const day = /завтра|tomorrow/i.test(ctx.match) ? "tomorrow" : "today";
+      const which = day === "today" ? "сьогодні" : "завтра";
+      const images = this.deps.images;
+      if (!images) {
+        await reply(ctx, "Картинки вимкнено: не задано RENDERER_CDP_URL.");
+        return;
+      }
+      const file = await images.render(site.id, day);
+      if (!file) {
+        await reply(
+          ctx,
+          `Картинку на ${which} не зроблено: графіка немає або рендер не відповів (деталі в логах).`,
+        );
+        return;
+      }
+      await ctx.replyWithPhoto(new InputFile(file), { caption: `🧪 Графік на ${which}` });
     });
     bot.command("notify", async (ctx) => {
       if (!isAdminChat(ctx)) return;

@@ -3,6 +3,7 @@ import { Guard } from "./Guard.tsx";
 import { HistoryScreen } from "./History.tsx";
 import { useLive } from "./live.ts";
 import { NowScreen } from "./Now.tsx";
+import { RenderSchedule } from "./Render.tsx";
 import { ScheduleScreen } from "./Schedule.tsx";
 import { Nav, type Tab } from "./ui.tsx";
 
@@ -11,7 +12,18 @@ function tabFromHash(): Tab {
   return hash === "schedule" || hash === "history" ? hash : "now";
 }
 
+/** #/render/<site>/<today|tomorrow>: the schedule picture for Telegram (see Render.tsx). */
+function renderTarget(): { siteId: string; which: "today" | "tomorrow" } | null {
+  const m = /^#\/render\/([a-z0-9][a-z0-9-]*)\/(today|tomorrow)$/.exec(location.hash);
+  return m ? { siteId: m[1] as string, which: m[2] as "today" | "tomorrow" } : null;
+}
+
 export function App() {
+  const render = renderTarget();
+  return render ? <RenderSchedule siteId={render.siteId} which={render.which} /> : <Site />;
+}
+
+function Site() {
   const [tab, setTab] = useState<Tab>(tabFromHash);
   const live = useLive();
 

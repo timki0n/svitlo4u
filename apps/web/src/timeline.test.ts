@@ -57,4 +57,10 @@ describe("labels above a band", () => {
     const kept = spacedMarks(marks, t(18), t(24)).map((m) => m.at / M);
     expect(kept).toEqual([19 * 60 + 11, 22 * 60 + 21]);
   });
+
+  it("a label pinned to the end of the band takes its room to the left", () => {
+    // «зараз 23:35» sits right-aligned and covers 22:21, though their centres are far apart
+    const marks = [{ at: t(22, 21) }, { at: t(23, 35), now: true }];
+    expect(spacedMarks(marks, t(18), t(24)).map((m) => m.at / M)).toEqual([23 * 60 + 35]);
+  });
 });

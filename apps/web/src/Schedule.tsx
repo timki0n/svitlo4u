@@ -6,14 +6,16 @@ import {
   changes,
   clipPieces,
   dayPieces,
+  labelAnchor,
   type Piece,
   pct,
   spacedMarks,
-  windowEdges,
 } from "./timeline.ts";
 import { ConnectionNotice, Header, Icon, LegendItem, Segmented, Split } from "./ui.tsx";
 
 type Which = "today" | "tomorrow";
+
+const HOUR = 3_600_000;
 
 export function ScheduleScreen({ live }: { live: Live }) {
   const [which, setWhich] = useState<Which>("today");
@@ -50,35 +52,54 @@ export function ScheduleScreen({ live }: { live: Live }) {
   );
 }
 
-function DayView({
+/** Whether the day has anything to draw: a schedule, or emergency shutdowns. */
+export function drawable(day: TimelineDay): boolean {
+  const published = day.status === "ScheduleApplies" || day.status === "NoOutages";
+  return (
+    day.segments.length > 0 &&
+    (published || day.overlay === "emergency" || day.status === "EmergencyShutdowns")
+  );
+}
+
+export function DayView({
   live,
   day,
   today,
   updatedOn,
+  showDate = true,
 }: {
   live: Live;
   day: TimelineDay;
   today: boolean;
   updatedOn: string | null;
+  /** The status line of a day ahead names its date (the picture has it in its title instead). */
+  showDate?: boolean;
 }) {
   const tz = live.site?.tz ?? "Europe/Kyiv";
   const now = live.now;
   const first = day.segments[0];
   const last = day.segments[day.segments.length - 1];
   const emergency = day.overlay === "emergency";
-  const published = day.status === "ScheduleApplies" || day.status === "NoOutages";
 
-  if (!first || !last || (!published && !emergency && day.status !== "EmergencyShutdowns")) {
+  if (!first || !last || !drawable(day)) {
     return <NoSchedule waiting={day.status === "WaitingForSchedule"} today={today} />;
   }
 
   const range = { start: first.start, end: last.end };
   const plannedOff = day.segments.filter((s) => s.kind === "off");
   const actual = today ? (live.widget?.timeline.actual ?? []) : [];
-  const pieces = dayPieces(range, now, actual, plannedOff, emergency ? "last" : "plan");
-  const marks: { at: number; text: string; now?: boolean }[] = today
-    ? changes(pieces).map((at) => ({ at, text: hhmm(at, tz) }))
-    : windowEdges(plannedOff, range).map((at) => ({ at, text: hhmm(at, tz) }));
+  // The cells carry the plan for the whole day; a thin line above them, what really happened.
+  const plan: Piece[] = plannedOff.map((s) => ({
+    start: s.start,
+    end: s.end,
+    kind: emergency ? "last" : "plan",
+  }));
+  const fact = today ? dayPieces(range, now, actual, []) : [];
+  // The row above the cells belongs to the fact only: times of real changes and «now».
+  const marks: { at: number; text: string; now?: boolean }[] = changes(fact).map((at) => ({
+    at,
+    text: hhmm(at, tz),
+  }));
   if (today && now >= range.start && now < range.end)
     marks.push({ at: now, text: `зараз ${hhmm(now, tz)}`, now: true });
   const updated = updatedOn ? hhmm(Date.parse(updatedOn), tz) : null;
@@ -95,7 +116,7 @@ function DayView({
     const what = day.status === "NoOutages" ? "Відключень не заплановано" : "Графік діє";
     status = (
       <p className="muted" style={{ marginTop: -4, fontSize: 13 }}>
-        {today ? what : `${dayLabel(day.date)} · ${what.toLowerCase()}`}
+        {today || !showDate ? what : `${dayLabel(day.date)} · ${what.toLowerCase()}`}
         {updated && ` · оновлено о ${updated}`}
       </p>
     );
@@ -110,7 +131,7 @@ function DayView({
         <div
           className="bands"
           role="img"
-          aria-label={describe(day, pieces, tz, today ? now : null)}
+          aria-label={describe(day, [...fact, ...plan], tz, today ? now : null)}
         >
           {[0, 1, 2, 3].map((q) => (
             <Band
@@ -118,7 +139,9 @@ function DayView({
               from={range.start + q * 6 * 3_600_000}
               to={q === 3 ? range.end : range.start + (q + 1) * 6 * 3_600_000}
               firstHour={q * 6}
-              pieces={pieces}
+              plan={plan}
+              fact={fact}
+              now={today ? now : null}
               marks={marks}
             />
           ))}
@@ -135,8 +158,8 @@ function DayView({
               <Split
                 onMs={expected.onMs}
                 offMs={expected.offMs}
-                onKind={today ? "on" : "light-plan"}
-                offKind={today ? "off" : "plan"}
+                onKind={today ? "bar-on" : "light-plan"}
+                offKind={today ? "bar-off" : "plan"}
               />
             </>
           ) : (
@@ -146,7 +169,9 @@ function DayView({
                   <LegendItem kind="last">Останній графік</LegendItem>
                 </div>
               )}
-              {past && <Split onMs={past.onMs} offMs={past.offMs} />}
+              {past && (
+                <Split onMs={past.onMs} offMs={past.offMs} onKind="bar-on" offKind="bar-off" />
+              )}
             </>
           )}
         </div>
@@ -163,24 +188,50 @@ function Band({
   from,
   to,
   firstHour,
-  pieces,
+  plan,
+  fact,
+  now,
   marks,
 }: {
   from: number;
   to: number;
   firstHour: number;
-  pieces: readonly Piece[];
+  plan: readonly Piece[];
+  fact: readonly Piece[];
+  /** Today: the fact line ends here, the rest of it is still ahead. */
+  now: number | null;
   marks: readonly { at: number; text: string; now?: boolean }[];
 }) {
-  const own = clipPieces(pieces, from, to);
+  const planned = clipPieces(plan, from, to);
+  const happened = clipPieces(fact, from, to);
   const inside = marks.filter((m) => m.at >= from && m.at < to);
   const labels = spacedMarks(marks, from, to);
+  const ahead = now === null ? from : Math.min(Math.max(now, from), to);
+  const nowHere = now !== null && now >= from && now < to;
+  const span = (start: number, end: number) => ({
+    left: `${pct(start, from, to)}%`,
+    width: `${pct(end, from, to) - pct(start, from, to)}%`,
+  });
+  /** «08:00», or the plan's edge when a window starts or ends inside the hour: «08:30». */
+  const edges = plan.flatMap((p) => [p.start, p.end]);
+  const hourLabel = (h: number) => {
+    const start = from + h * HOUR;
+    const edge = edges.find((e) => e > start && e < start + HOUR);
+    const minutes = edge === undefined ? 0 : Math.round((edge - start) / 60_000);
+    return `${String(firstHour + h).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+  };
   return (
     <div className="band">
       <div className="band-marks" aria-hidden="true">
         {labels.map((m) => {
           const p = pct(m.at, from, to);
-          const shift = p > 80 ? "translateX(-100%)" : p < 12 ? "none" : "translateX(-50%)";
+          const anchor = labelAnchor(p);
+          const shift =
+            anchor === "end"
+              ? "translateX(-100%)"
+              : anchor === "start"
+                ? "none"
+                : "translateX(-50%)";
           return (
             <span key={m.at} style={{ left: `${p}%`, transform: shift }}>
               {m.text}
@@ -188,34 +239,46 @@ function Band({
           );
         })}
       </div>
+      <div className="fact-line" aria-hidden="true">
+        {happened.map((piece) => (
+          <span
+            key={piece.start}
+            className="fact"
+            data-kind={piece.kind}
+            style={span(piece.start, piece.end)}
+          />
+        ))}
+        {/* A day ahead has no fact yet: its line stays empty, the labels mark the plan. */}
+        {now !== null && ahead < to && (
+          <span className="fact-ahead" style={{ left: `${pct(ahead, from, to)}%` }} />
+        )}
+        {now !== null &&
+          inside
+            .filter((m) => !m.now)
+            .map((m) => (
+              <span key={m.at} className="fact-tick" style={{ left: `${pct(m.at, from, to)}%` }} />
+            ))}
+      </div>
       <div className="band-track" aria-hidden="true">
-        {own.map((piece) => (
+        {/* The hours lie under the plan: its hatch is drawn over them. */}
+        {[0, 1, 2, 3, 4, 5].map((h) => (
+          <span key={`h${h}`} className="hour-label" style={{ left: `${((h + 0.5) / 6) * 100}%` }}>
+            {hourLabel(h)}
+          </span>
+        ))}
+        {planned.map((piece) => (
           <span
             key={piece.start}
             className="piece"
             data-kind={piece.kind}
-            style={{
-              left: `${pct(piece.start, from, to)}%`,
-              width: `${pct(piece.end, from, to) - pct(piece.start, from, to)}%`,
-            }}
+            style={span(piece.start, piece.end)}
           />
         ))}
         {[1, 2, 3, 4, 5].map((h) => (
           <span key={h} className="hour-line" style={{ left: `${(h / 6) * 100}%` }} />
         ))}
-        {inside.map((m) => (
-          <span
-            key={`l${m.at}`}
-            className={m.now ? "now-line" : "change-line"}
-            style={{ left: `${pct(m.at, from, to)}%` }}
-          />
-        ))}
       </div>
-      <div className="band-hours" aria-hidden="true">
-        {[0, 1, 2, 3, 4, 5, 6].map((h) => (
-          <span key={h}>{String(firstHour + h).padStart(2, "0")}</span>
-        ))}
-      </div>
+      {nowHere && <span className="band-now" style={{ left: `${pct(now, from, to)}%` }} />}
     </div>
   );
 }
