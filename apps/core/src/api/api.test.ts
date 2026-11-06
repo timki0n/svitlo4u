@@ -315,7 +315,7 @@ describe("API v1", () => {
     expect((await get(c, "/api/v1/sites", ip("198.51.100.1"))).status).toBe(200);
   });
 
-  it("emergency shutdowns are shown over the last fixed schedule (R15)", async () => {
+  it("emergency shutdowns are shown over the schedule published for that day (R15)", async () => {
     const emergency = (date: string) => ({
       slots: [],
       date: `${date}T00:00:00+02:00`,
@@ -329,33 +329,62 @@ describe("API v1", () => {
       },
     });
     const c = await start();
-    seed(c); // 09.11 is the last day with a fixed schedule: 08–12 and 20–24
+    seed(c);
+    // 10.11 had a schedule (08–12, 20–24) until the emergency; 11.11 was never published.
+    const publishedAt = NOW - 3 * 3_600_000;
+    c.store.schedules.saveIfChanged(
+      "4u",
+      "2026-11-10",
+      parseDay(yasnoDay("2026-11-10", [slot("08:00", "12:00"), slot("20:00", "24:00")])),
+      publishedAt,
+    );
 
     const widget = (await get(c, "/api/v1/sites/4u/widget")).body;
-    for (const day of widget.timeline.days) {
-      expect(day).toMatchObject({
-        status: "EmergencyShutdowns",
-        overlay: "emergency",
-        basedOn: "2026-11-09",
-        note: "Діють екстрені відключення · графік на 09.11",
-      });
-      expect(
-        day.segments.map((s: { kind: string; label: string }) => `${s.kind} ${s.label}`),
-      ).toEqual(["on 00:00–08:00", "off 08:00–12:00", "on 12:00–20:00", "off 20:00–24:00"]);
-    }
-    expect(widget.next).toBeNull(); // the old schedule does not apply: no promises from it
+    const [today, tomorrow] = widget.timeline.days;
+    expect(today).toMatchObject({
+      status: "EmergencyShutdowns",
+      overlay: "emergency",
+      note: "Діють екстрені відключення · графік не діє",
+    });
+    expect(
+      today.segments.map((s: { kind: string; label: string }) => `${s.kind} ${s.label}`),
+    ).toEqual(["on 00:00–08:00", "off 08:00–12:00", "on 12:00–20:00", "off 20:00–24:00"]);
+    expect(tomorrow).toMatchObject({
+      status: "EmergencyShutdowns",
+      overlay: null,
+      segments: [{ kind: "unknown", label: "Діють екстрені відключення" }],
+    });
+    expect(widget.next).toBeNull(); // the cancelled schedule does not apply: no promises from it
     expect(widget.hint).toMatch(/Діють екстрені відключення/);
 
     const schedule = (await get(c, "/api/v1/sites/4u/schedule")).body;
     expect(schedule).toMatchObject({ status: "EmergencyShutdowns", outages: [] });
     expect(schedule.lastFixed).toMatchObject({
-      date: "2026-11-09",
+      publishedAt,
       outages: [
         { start: at("2026-11-10", "08:00"), label: "08:00–12:00" },
         { label: "20:00–24:00" },
       ],
     });
-    expect((await get(c, "/api/v1/sites/4u/schedule?date=2026-11-09")).body.lastFixed).toBeNull();
+    expect((await get(c, "/api/v1/sites/4u/schedule?date=2026-11-11")).body.lastFixed).toBeNull();
+
+    // Statistics keep the cancelled plan next to what really happened.
+    const pvf = (
+      await get(c, "/api/v1/sites/4u/analytics/plan-vs-fact?from=2026-11-08&to=2026-11-10")
+    ).body;
+    expect(pvf.cancelledByEmergency).toEqual([
+      {
+        date: "2026-11-10",
+        publishedAt,
+        plan: { start: at("2026-11-10", "08:00"), end: at("2026-11-10", "12:00") },
+        coveredMs: 235 * 60_000, // 08:05–12:00 without power
+      },
+    ]);
+    expect(pvf.totals.windows).toBe(4); // only plans that applied (08.11 and 09.11)
+    expect(pvf.unplanned).toContainEqual({
+      start: at("2026-11-10", "08:05"),
+      end: at("2026-11-10", "12:10"),
+    });
   });
 
   it("serves the OpenAPI document, and docs/openapi.json matches the contract", async () => {

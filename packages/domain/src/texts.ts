@@ -4,7 +4,7 @@
  */
 import type { ScheduleStatus } from "./schedule-status.ts";
 import { formatHHMM, pad2, toZoned } from "./time.ts";
-import { type DayInfo, type DaySchedule, type TimedSlot, timedOutageSlots } from "./yasno.ts";
+import type { DayInfo, TimedSlot } from "./yasno.ts";
 
 export type TextContext = { tz: string; linkUrl: string };
 
@@ -55,24 +55,6 @@ export function windowInProgressText(ctx: TextContext, start: number, end: numbe
   );
 }
 
-/**
- * R15: the last schedule with outages published for a day (or, failing that, for an earlier day),
- * shown under "emergency shutdowns" instead of nothing. Outages are placed on the shown day.
- */
-export type LastFixedSchedule = {
-  /** Day the schedule was published for. */
-  date: string;
-  outages: TimedSlot[];
-};
-
-export function lastFixedOn(
-  fixed: { date: string; day: DaySchedule },
-  date: string,
-  tz: string,
-): LastFixedSchedule {
-  return { date: fixed.date, outages: timedOutageSlots(fixed.day, date, tz) };
-}
-
 function outageLines(ctx: TextContext, outages: readonly TimedSlot[]): string[] {
   return outages.map(
     (outage, index) =>
@@ -82,25 +64,23 @@ function outageLines(ctx: TextContext, outages: readonly TimedSlot[]): string[] 
 }
 
 /**
- * /today, /tomorrow and schedule-change body (legacy build_today_message). With `lastFixed`
- * (R15), an emergency day also lists the last fixed schedule underneath.
+ * /today, /tomorrow and schedule-change body (legacy build_today_message). R15: for an emergency
+ * day, `lastFixed` — outages of the schedule published for that same day before the emergency —
+ * is listed underneath.
  */
 export function formatDayMessage(
   ctx: TextContext,
   info: DayInfo,
-  lastFixed: LastFixedSchedule | null = null,
+  lastFixed: readonly TimedSlot[] | null = null,
 ): string {
   const [y, m, d] = info.date.split("-");
   const header = `📅 Розклад на ${d}.${m}.${y}`;
   if (info.status === "EmergencyShutdowns") {
     const emergency = `${header}\n🚨 ${scheduleLink(ctx, "Графік")} не діє. Діють екстрені відключення.`;
-    if (!lastFixed || lastFixed.outages.length === 0) return emergency;
-    const [, fm, fd] = lastFixed.date.split("-");
-    const title =
-      lastFixed.date === info.date
-        ? "Останній фіксований графік:"
-        : `Останній фіксований графік (на ${fd}.${fm}):`;
-    return [emergency, "", title, ...outageLines(ctx, lastFixed.outages)].join("\n");
+    if (!lastFixed || lastFixed.length === 0) return emergency;
+    return [emergency, "", "Останній фіксований графік:", ...outageLines(ctx, lastFixed)].join(
+      "\n",
+    );
   }
   if (info.status === "WaitingForSchedule") {
     return `${header}\n⌛ Очікуємо оновлення`;

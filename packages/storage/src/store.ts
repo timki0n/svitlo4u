@@ -261,23 +261,23 @@ export function createStore(db: Db) {
         return [...latest.values()].map((row) => ({ date: row.date, day: rowToDay(row) }));
       },
       /**
-       * R15: the latest version with planned outages (ScheduleApplies) published for `date`, or else
-       * for the closest earlier day — what is shown under "emergency shutdowns".
+       * R15: the latest version of `date` with planned outages (ScheduleApplies) — the plan that
+       * emergency shutdowns cancelled. Null when the day never had one.
        */
-      lastFixed(siteId: string, date: string): { date: string; day: DaySchedule } | null {
+      lastFixed(siteId: string, date: string): { day: DaySchedule; fetchedAt: number } | null {
         const row = db
           .select()
           .from(scheduleSnapshots)
           .where(
             and(
               eq(scheduleSnapshots.siteId, siteId),
-              lte(scheduleSnapshots.date, date),
+              eq(scheduleSnapshots.date, date),
               eq(scheduleSnapshots.status, "ScheduleApplies"),
             ),
           )
-          .orderBy(desc(scheduleSnapshots.date), desc(scheduleSnapshots.fetchedAt))
+          .orderBy(desc(scheduleSnapshots.fetchedAt))
           .get();
-        return row ? { date: row.date, day: rowToDay(row) } : null;
+        return row ? { day: rowToDay(row), fetchedAt: row.fetchedAt } : null;
       },
       /** Every stored version (for schedule-change analytics). */
       versions(siteId: string, fromDate: string, toDate: string): ScheduleSnapshot[] {

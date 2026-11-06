@@ -335,32 +335,31 @@ describe("Telegram commands (webhook)", () => {
     );
   });
 
-  it("/today and /tomorrow use the schedule in memory; emergency days list the last fixed one", async () => {
+  it("/today and /tomorrow use the schedule in memory; an emergency day lists its own last schedule", async () => {
     const { core: c, tg } = await start(LIVE_CHATS);
     await vi.waitFor(() => expect(c.state.get("4u").schedule).not.toBeNull());
-    // The live fixture has emergency shutdowns on both days; 05.11 still had a fixed schedule.
-    const fixed = parseDay({
-      date: "2026-11-05T00:00:00+02:00",
-      status: "ScheduleApplies",
-      slots: [{ start: 480, end: 720, type: "Definite" }],
+    // The live fixture has emergency shutdowns on both days. 06.11 had a schedule before the
+    // emergency; 07.11 never had one, and the schedule of 05.11 must not stand in for it.
+    const published = (date: string) => ({
+      ...parseDay({
+        date: `${date}T00:00:00+02:00`,
+        status: "ScheduleApplies",
+        slots: [{ start: 480, end: 720, type: "Definite" }],
+      }),
+      date,
     });
-    c.store.schedules.saveIfChanged(
-      "4u",
-      "2026-11-05",
-      { ...fixed, date: "2026-11-05" },
-      T0 - 86_400_000,
-    );
+    c.store.schedules.saveIfChanged("4u", "2026-11-05", published("2026-11-05"), T0 - 86_400_000);
+    c.store.schedules.saveIfChanged("4u", "2026-11-06", published("2026-11-06"), T0 - 3_600_000);
     await postUpdate(c, message(group, "/today"));
     await postUpdate(c, message(group, "/tomorrow"));
     await vi.waitFor(() => expect(tg.sentTo(-1001)).toHaveLength(2));
     const [today, tomorrow] = tg.sentTo(-1001).map((m) => String(m.payload.text));
     expect(today).toMatch(/^📅 Розклад на 06\.11\.2026/);
+    expect(today).toContain(
+      "Діють екстрені відключення.\n\nОстанній фіксований графік:\n1. 08:00 – 12:00 (4 год.)",
+    );
     expect(tomorrow).toMatch(/^📅 Розклад на 07\.11\.2026/);
-    for (const text of [today, tomorrow]) {
-      expect(text).toContain(
-        "Діють екстрені відключення.\n\nОстанній фіксований графік (на 05.11):\n1. 08:00 – 12:00 (4 год.)",
-      );
-    }
+    expect(tomorrow).not.toContain("Останній фіксований графік");
   });
 
   it("/sub toggles a personal subscription", async () => {

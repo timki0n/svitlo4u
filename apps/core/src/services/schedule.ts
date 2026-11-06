@@ -8,12 +8,12 @@ import {
   type DaySchedule,
   DEFAULT_BEHAVIOR,
   type GroupSchedule,
-  type LastFixedSchedule,
-  lastFixedOn,
   localDate,
   pollToday,
   pollTomorrow,
+  type TimedSlot,
   type TrackedDay,
+  timedOutageSlots,
 } from "@svitlo/domain";
 import type { Store } from "@svitlo/storage";
 import type { YasnoUpdate } from "../adapters/yasno.ts";
@@ -22,14 +22,19 @@ import type { Clock } from "../runtime/clock.ts";
 import type { SiteConfig } from "../sites-config.ts";
 import type { SiteStateStore } from "./state.ts";
 
-/** R15: the last fixed schedule placed on `date` (shown under emergency shutdowns). */
+/**
+ * R15: the schedule published for `date` before emergency shutdowns replaced it — shown under
+ * the emergency state and kept in plan-vs-fact. Null when that day never had one.
+ */
 export function lastFixedSchedule(
   store: Store,
   site: Pick<SiteConfig, "id" | "tz">,
   date: string,
-): LastFixedSchedule | null {
+): { publishedAt: number; outages: TimedSlot[] } | null {
   const fixed = store.schedules.lastFixed(site.id, date);
-  return fixed ? lastFixedOn(fixed, date, site.tz) : null;
+  if (!fixed) return null;
+  const outages = timedOutageSlots(fixed.day, date, site.tz);
+  return outages.length > 0 ? { publishedAt: fixed.fetchedAt, outages } : null;
 }
 
 export type ScheduleServiceDeps = {
@@ -77,7 +82,7 @@ export class ScheduleService {
     const text = {
       tz: site.tz,
       linkUrl: site.linkUrl,
-      lastFixed: (date: string) => lastFixedSchedule(store, site, date),
+      lastFixed: (date: string) => lastFixedSchedule(store, site, date)?.outages ?? null,
     };
 
     // Baselines come from the DB before this update is stored.

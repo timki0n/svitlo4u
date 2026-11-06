@@ -4,13 +4,14 @@
  */
 import type { TomorrowMonitorMode } from "./behavior.ts";
 import { isPublishedSchedule, type ScheduleStatus } from "./schedule-status.ts";
+import { formatDayMessage, scheduleLink, type TextContext } from "./texts.ts";
 import {
-  formatDayMessage,
-  type LastFixedSchedule,
-  scheduleLink,
-  type TextContext,
-} from "./texts.ts";
-import { type DayInfo, type DaySchedule, dayInfo, isScheduleWithoutOutages } from "./yasno.ts";
+  type DayInfo,
+  type DaySchedule,
+  dayInfo,
+  isScheduleWithoutOutages,
+  type TimedSlot,
+} from "./yasno.ts";
 
 export type TrackedDay = {
   date: string;
@@ -69,9 +70,9 @@ function notification(
   };
 }
 
-/** R15: the last fixed schedule for a date (from history); absent → legacy texts. */
+/** R15: outages of the schedule published for a date before emergency shutdowns; absent → legacy texts. */
 export type MonitorTextContext = TextContext & {
-  lastFixed?: (date: string) => LastFixedSchedule | null;
+  lastFixed?: (date: string) => TimedSlot[] | null;
 };
 
 function dayBody(ctx: MonitorTextContext, info: DayInfo): string {

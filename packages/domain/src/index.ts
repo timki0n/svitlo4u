@@ -96,8 +96,6 @@ export {
   formatDurationLong,
   formatLastScheduleUpdate,
   formatLeadLabel,
-  type LastFixedSchedule,
-  lastFixedOn,
   scheduleLink,
   type TextContext,
   withLastScheduleUpdate,

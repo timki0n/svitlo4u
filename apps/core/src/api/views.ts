@@ -160,23 +160,17 @@ export function widgetView(
       return {
         ...base,
         overlay: null,
-        basedOn: null,
         note: null,
         segments: planSegments(dayStart, dayEnd, own, tz),
       };
     }
-    // R15: emergency shutdowns over the last fixed schedule, not an empty day.
+    // R15: emergency shutdowns over the schedule published for this day, if there was one.
     const fixed = status === "EmergencyShutdowns" ? lastFixedSchedule(store, site, date) : null;
-    if (fixed && fixed.outages.length > 0) {
-      const [, fm, fd] = fixed.date.split("-");
+    if (fixed) {
       return {
         ...base,
         overlay: "emergency" as const,
-        basedOn: fixed.date === date ? null : fixed.date,
-        note:
-          fixed.date === date
-            ? "Діють екстрені відключення · останній графік"
-            : `Діють екстрені відключення · графік на ${fd}.${fm}`,
+        note: "Діють екстрені відключення · графік не діє",
         segments: planSegments(dayStart, dayEnd, mergeWindows(fixed.outages), tz),
       };
     }
@@ -184,7 +178,6 @@ export function widgetView(
     return {
       ...base,
       overlay: null,
-      basedOn: null,
       note: null,
       segments: [{ start: dayStart, end: dayEnd, kind: "unknown" as const, label }],
     };
@@ -265,6 +258,6 @@ export function dayScheduleView(
     status: day.status,
     updatedOn,
     outages: labelled(dayInfo(day, date, tz, updatedOn).outages),
-    lastFixed: fixed ? { date: fixed.date, outages: labelled(fixed.outages) } : null,
+    lastFixed: fixed ? { publishedAt: fixed.publishedAt, outages: labelled(fixed.outages) } : null,
   };
 }

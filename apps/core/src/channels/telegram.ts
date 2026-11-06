@@ -408,7 +408,11 @@ export class TelegramChannel {
         info.status === "EmergencyShutdowns" ? lastFixedSchedule(store, site, info.date) : null;
       await reply(
         ctx,
-        withLastScheduleUpdate(text, formatDayMessage(text, info, lastFixed), schedule.updatedOn),
+        withLastScheduleUpdate(
+          text,
+          formatDayMessage(text, info, lastFixed?.outages ?? null),
+          schedule.updatedOn,
+        ),
       );
     };
     bot.command("today", dayCommand("today"));

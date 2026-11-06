@@ -183,21 +183,18 @@ describe("schedule snapshots", () => {
     expect(final?.day).toEqual(B);
   });
 
-  it("last fixed schedule (R15): latest ScheduleApplies of the day, else of an earlier day", () => {
+  it("last fixed schedule (R15): the latest ScheduleApplies version of that same day only", () => {
     const emergency = { ...day("EmergencyShutdowns", []), date: "2026-11-11" };
+    // Other days never count: 11.11 published straight as emergency has nothing to show.
+    store.schedules.saveIfChanged(SITE, "2026-11-10", { ...A, date: "2026-11-10" }, min(0));
+    store.schedules.saveIfChanged(SITE, "2026-11-12", { ...A, date: "2026-11-12" }, min(0));
+    store.schedules.saveIfChanged(SITE, "2026-11-11", emergency, min(1));
     expect(store.schedules.lastFixed(SITE, "2026-11-11")).toBeNull();
 
-    store.schedules.saveIfChanged(SITE, "2026-11-10", { ...A, date: "2026-11-10" }, min(0));
-    store.schedules.saveIfChanged(SITE, "2026-11-11", emergency, min(1));
-    expect(store.schedules.lastFixed(SITE, "2026-11-11")).toMatchObject({
-      date: "2026-11-10",
-      day: { status: "ScheduleApplies" },
-    });
-
-    store.schedules.saveIfChanged(SITE, "2026-11-11", B, min(2));
-    store.schedules.saveIfChanged(SITE, "2026-11-11", emergency, min(3));
-    store.schedules.saveIfChanged(SITE, "2026-11-12", A, min(4)); // a later day never counts
-    expect(store.schedules.lastFixed(SITE, "2026-11-11")).toEqual({ date: "2026-11-11", day: B });
+    store.schedules.saveIfChanged(SITE, "2026-11-11", A, min(2));
+    store.schedules.saveIfChanged(SITE, "2026-11-11", B, min(3));
+    store.schedules.saveIfChanged(SITE, "2026-11-11", emergency, min(4));
+    expect(store.schedules.lastFixed(SITE, "2026-11-11")).toEqual({ day: B, fetchedAt: min(3) });
   });
 });
 

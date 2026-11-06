@@ -8,9 +8,11 @@ import {
   type Interval,
   localDate,
   localMidnight,
+  mergeWindows,
   outageBuckets,
   outageIntervals,
   outageSummary,
+  overlapMs,
   plannedWindows,
   planVsFact,
   scheduleChangeStats,
@@ -23,6 +25,7 @@ import type { Store } from "@svitlo/storage";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Clock } from "../runtime/clock.ts";
+import { lastFixedSchedule } from "../services/schedule.ts";
 import type { SiteStateStore } from "../services/state.ts";
 import type { SiteConfig } from "../sites-config.ts";
 import {
@@ -204,15 +207,29 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps): void {
   });
 
   bind("planVsFact", ({ params, query }, now) => {
-    const r = dateRange(query, site(params.siteId).tz, now);
-    return {
-      siteId: params.siteId,
-      range: r.range,
-      ...planVsFact(planned(params.siteId, r), records(params.siteId, r.range), {
-        range: r.range,
-        now,
-      }),
-    };
+    const s = site(params.siteId);
+    const r = dateRange(query, s.tz, now);
+    const outages = records(params.siteId, r.range);
+    const result = planVsFact(planned(params.siteId, r), outages, { range: r.range, now });
+    // R15: plans that emergency shutdowns cancelled stay visible next to what really happened.
+    const actual = union(outageIntervals(outages, now));
+    const past = Math.min(r.range.end, now);
+    const cancelledByEmergency = store.schedules
+      .finalDays(params.siteId, r.from, r.to)
+      .filter(({ day }) => day.status === "EmergencyShutdowns")
+      .flatMap(({ date }) => {
+        const fixed = lastFixedSchedule(store, s, date);
+        if (!fixed) return [];
+        return mergeWindows(fixed.outages)
+          .filter((w) => w.start < past)
+          .map((w) => ({
+            date,
+            publishedAt: fixed.publishedAt,
+            plan: { start: w.start, end: w.end },
+            coveredMs: overlapMs(actual, [{ start: w.start, end: Math.min(w.end, past) }]),
+          }));
+      });
+    return { siteId: params.siteId, range: r.range, ...result, cancelledByEmergency };
   });
 
   bind("voltage", ({ params, query }, now) => {
