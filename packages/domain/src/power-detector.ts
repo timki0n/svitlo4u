@@ -54,7 +54,16 @@ export const DEFAULT_DETECTOR_CONFIG: DetectorConfig = {
   uptimeToleranceMs: 10_000,
 };
 
-export type EspSample = { t: number; up: number | null; boot: string | null };
+export type EspSample = {
+  t: number;
+  up: number | null;
+  boot: string | null;
+  /** Why the ESP last booted (v2 firmware): poweron, brownout, sw, panic, wdt, … */
+  resetReason?: string | null;
+};
+
+/** ESP reboots that are not caused by the mains (the ESP restarted itself). */
+const NON_POWER_RESETS = new Set(["sw", "panic", "wdt", "deepsleep", "usb", "ext"]);
 
 export type ProbePurpose =
   /** The ESP went silent: is there power? A timeout means no. */
@@ -92,7 +101,7 @@ export type PersistedDetector = Pick<
 >;
 
 export type DetectorInput =
-  | { type: "esp"; t: number; up: number | null; boot?: string | null }
+  | { type: "esp"; t: number; up: number | null; boot?: string | null; resetReason?: string | null }
   /** Any message from the plug (report, announce, answer to a read). voltage null = not included. */
   | { type: "plug"; t: number; voltage: number | null }
   | { type: "tick"; t: number };
@@ -172,7 +181,16 @@ export function stepDetector(
 ): DetectorStep {
   switch (input.type) {
     case "esp":
-      return onEsp(state, { t: input.t, up: input.up, boot: input.boot ?? null }, config);
+      return onEsp(
+        state,
+        {
+          t: input.t,
+          up: input.up,
+          boot: input.boot ?? null,
+          resetReason: input.resetReason ?? null,
+        },
+        config,
+      );
     case "plug":
       return onPlug(state, input.t, input.voltage, config);
     case "tick":
@@ -314,6 +332,10 @@ function onEsp(s: DetectorState, sample: EspSample, config: DetectorConfig): Det
 
   // Power was "on".
   if (rebooted === true && gapStart !== null) {
+    // The firmware says why it booted: a crash or watchdog restart is not a power event.
+    if (sample.resetReason && NON_POWER_RESETS.has(sample.resetReason)) {
+      return { state: next, effects };
+    }
     if (gapIncludesDowntime) {
       // The mains went down while the core was not running.
       const offAt = s.lastPowerEvidence ?? gapStart;

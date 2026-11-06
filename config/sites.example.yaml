@@ -1,0 +1,28 @@
+# Copy to config/sites.yaml on the server. Secrets are NOT stored here: each device names the
+# environment variable (deploy/.env) that holds its key.
+sites:
+  - id: 4u
+    name: ЖК 4U
+    tz: Europe/Kyiv
+    linkUrl: https://svitlo4u.info
+    yasno: { region: 25, dso: 902, group: "12.1" }
+    devices:
+      - id: esp-4u
+        kind: esp
+        transport: udp # signed v2 packets, see docs/esp-protocol.md
+        secretEnv: ESP_4U_SECRET
+        legacyIps: ["192.168.0.225"] # accept unsigned {"ping":N} until the firmware is updated
+      - id: 4u-plug
+        kind: plug
+        zigbeeName: 4u-plug
+    # detector:                  # optional overrides of DEFAULT_DETECTOR_CONFIG
+    #   suspectAfterMs: 5000
+
+  - id: g6
+    name: Група 6.1
+    yasno: { region: 25, dso: 902, group: "6.1" }
+    devices:
+      - id: esp-g6
+        kind: esp
+        transport: http # POST /iot/ping with X-Signature (light_bot_tg firmware)
+        secretEnv: ESP_G6_SECRET

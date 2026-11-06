@@ -16,3 +16,9 @@ data/
 deploy/mosquitto/config/passwd
 deploy/zigbee2mqtt/*
 !deploy/zigbee2mqtt/*.example.yaml
+
+# site config with real ids/addresses lives on the server only
+config/sites.yaml
+
+# ESP firmware secrets (Wi-Fi password, device key)
+firmware/**/secrets.h

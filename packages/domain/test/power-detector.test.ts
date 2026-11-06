@@ -226,6 +226,48 @@ describe("power detector — ESP + Zigbee plug", () => {
   });
 });
 
+describe("power detector — firmware reset reason (v2)", () => {
+  it("a crash/watchdog restart of the ESP is not a blip", () => {
+    const { effects } = simulate({
+      start: T0,
+      inputs: [
+        ...espPackets(s(0), s(60), UP0),
+        { type: "esp", t: s(63), up: 1, boot: "b2", resetReason: "panic" },
+        ...plugReports(s(1), s(80)),
+      ],
+      plug: alive,
+    });
+    expect(readable(effects)).toEqual([]);
+  });
+
+  it("a power-on reset still is", () => {
+    const { effects } = simulate({
+      start: T0,
+      inputs: [
+        ...espPackets(s(0), s(60), UP0),
+        { type: "esp", t: s(63), up: 1, boot: "b2", resetReason: "poweron" },
+        ...plugReports(s(1), s(80)),
+      ],
+      plug: alive,
+    });
+    expect(readable(effects)).toEqual([{ blip: [60, 62] }]);
+  });
+
+  it("an ESP watchdog restart while the core was down is not an outage", () => {
+    const persisted = persistDetector(
+      simulate({ config: { zigbee: false }, start: T0, inputs: espPackets(s(0), s(60), UP0) })
+        .state,
+    );
+    const { effects } = simulate({
+      config: { zigbee: false },
+      start: s(600),
+      persisted,
+      inputs: [{ type: "esp", t: s(601), up: 30, boot: "b3", resetReason: "wdt" }],
+    });
+    expect(effects).toEqual([]);
+  });
+});
+
 describe("power detector — ESP only (no plug)", () => {
   const config = { zigbee: false };
 
