@@ -1,0 +1,64 @@
+name: svitlo4u
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  core:
+    image: ghcr.io/timki0n/svitlo4u-core:${CORE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      TZ: Europe/Kyiv
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      # API/health only on localhost; the public entry point is the Cloudflare tunnel.
+      - "127.0.0.1:${CORE_HTTP_PORT:-8090}:8080"
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - mosquitto
+    logging: *logging
+
+  # Cloudflare Tunnel (remote-managed). Version is pinned and bumped daily by Dependabot,
+  # so it always tracks the latest cloudflared release.
+  cloudflared:
+    image: cloudflare/cloudflared:2026.10.7
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in deploy/.env}
+    depends_on:
+      - core
+    logging: *logging
+
+  mosquitto:
+    image: eclipse-mosquitto:2.1.2-alpine
+    restart: unless-stopped
+    # No published ports: only reachable from the compose network.
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - mosquitto-data:/mosquitto/data
+    logging: *logging
+
+  zigbee2mqtt:
+    image: koenkk/zigbee2mqtt:2.14.3
+    restart: unless-stopped
+    environment:
+      TZ: Europe/Kyiv
+    devices:
+      - /dev/zigbee:/dev/zigbee
+    volumes:
+      - ./zigbee2mqtt:/app/data
+      - /run/udev:/run/udev:ro
+    ports:
+      # Frontend for pairing — localhost only, open via: ssh -L 8099:127.0.0.1:8099 svitlo
+      - "127.0.0.1:8099:8080"
+    depends_on:
+      - mosquitto
+    logging: *logging
+
+volumes:
+  mosquitto-data:

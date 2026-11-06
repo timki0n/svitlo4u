@@ -1,0 +1,18 @@
+node_modules/
+coverage/
+dist/
+*.log
+
+# secrets and runtime data — never commit (public repo)
+.env
+.env.*
+!.env.example
+*.db
+*.db-shm
+*.db-wal
+data/
+
+# deploy runtime files on the server
+deploy/mosquitto/config/passwd
+deploy/zigbee2mqtt/*
+!deploy/zigbee2mqtt/*.example.yaml

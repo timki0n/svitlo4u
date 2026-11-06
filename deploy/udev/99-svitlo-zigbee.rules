@@ -1,0 +1,5 @@
+# Stable /dev/zigbee for the CH340-based Zigbee coordinator.
+# CH340 has no serial number, so match the physical USB port instead of /dev/serial/by-id.
+# Install: sudo cp 99-svitlo-zigbee.rules /etc/udev/rules.d/ && sudo udevadm control --reload && sudo udevadm trigger
+# If the dongle moves to another USB port, update ID_PATH (udevadm info -q property -n /dev/ttyUSB0 | grep ID_PATH=).
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", ENV{ID_PATH}=="platform-xhci-hcd.11.auto-usb-0:1:1.0", SYMLINK+="zigbee", GROUP="dialout", MODE="0660"

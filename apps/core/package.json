@@ -1,0 +1,15 @@
+{
+  "name": "@svitlo/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/main.ts",
+    "start": "node src/main.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@svitlo/domain": "workspace:*",
+    "fastify": "5.12.8"
+  }
+}

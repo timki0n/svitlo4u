@@ -1,0 +1,34 @@
+# Copy to deploy/zigbee2mqtt/configuration.yaml on the server.
+# zigbee2mqtt rewrites this file (network keys etc.), so it is git-ignored.
+version: 5
+
+homeassistant:
+  enabled: false
+
+frontend:
+  enabled: true
+  port: 8080
+
+mqtt:
+  base_topic: zigbee2mqtt
+  server: mqtt://mosquitto:1883
+  user: "!secret.yaml mqtt_user"
+  password: "!secret.yaml mqtt_password"
+
+serial:
+  port: /dev/zigbee
+  # TI CC26xx with Z-Stack 3.x.0 behind a CH340 bridge.
+  adapter: zstack
+  # Asserted DTR/RTS keep this dongle in reset — never enable hardware flow control.
+  rtscts: false
+
+advanced:
+  # 15 sits between Wi-Fi channels 1 and 6; check the AP channel before pairing devices.
+  channel: 15
+  network_key: GENERATE
+  pan_id: GENERATE
+  ext_pan_id: GENERATE
+  log_level: info
+
+availability:
+  enabled: true
