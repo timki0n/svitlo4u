@@ -31,9 +31,25 @@ const PALETTE = {
 };
 
 const STATES = {
-  on: { lamp: 1, hemi: 1.55, sun: 0.85, bars: 0.75, bar: PALETTE.lampCool, flicker: false },
-  low: { lamp: 0.55, hemi: 1.4, sun: 0.75, bars: 0.55, bar: PALETTE.lampLow, flicker: true },
-  off: { lamp: 0, hemi: 0.95, sun: 0.35, bars: 1, bar: PALETTE.gen, flicker: false },
+  on: {
+    lamp: 1,
+    hemi: 1.55,
+    sun: 0.85,
+    bars: 0.75,
+    bar: PALETTE.lampCool,
+    flicker: false,
+    sign: 0.9,
+  },
+  low: {
+    lamp: 0.55,
+    hemi: 1.4,
+    sun: 0.75,
+    bars: 0.55,
+    bar: PALETTE.lampLow,
+    flicker: true,
+    sign: 0.5,
+  },
+  off: { lamp: 0, hemi: 0.95, sun: 0.35, bars: 1, bar: PALETTE.gen, flicker: false, sign: 0 },
 } as const;
 
 const FADE = 380;
@@ -127,6 +143,40 @@ export function createBuilding(
   const annexSide = shadowed(new THREE.Mesh(rounded(14, annexH, 33, 4, 2), clayMat));
   annexSide.position.set(31, annexH / 2, 26);
   model.add(annexFront, annexSide);
+
+  // «4U» on the roof of the annex next to the tower, like the complex's sign: lit while there is
+  // light, dark without it. Bold glyphs drawn as shapes (no font file), extruded like the clay.
+  const signMat = keep(
+    new THREE.MeshStandardMaterial({
+      color: "#e8461c",
+      emissive: "#ff5a1f",
+      emissiveIntensity: 0,
+      roughness: 0.55,
+    }),
+  );
+  const sign = shadowed(
+    new THREE.Mesh(
+      keep(
+        new THREE.ExtrudeGeometry([glyphFour(0), glyphU(5.6)], {
+          depth: 0.9,
+          bevelEnabled: true,
+          bevelThickness: 0.15,
+          bevelSize: 0.12,
+          bevelSegments: 2,
+          curveSegments: 18,
+        }),
+      ),
+      signMat,
+    ),
+  );
+  sign.scale.setScalar(1.15);
+  // Along the middle of the annex roof (x 24–38, z 9.5–42.5), facing outwards, away from the
+  // tower: turned a quarter round, the text runs towards −z and its face looks to +x.
+  const signWidth = 10 * 1.15;
+  const signDepth = 0.9 * 1.15;
+  sign.rotation.y = Math.PI / 2;
+  sign.position.set(31 - signDepth / 2, annexH + 0.1, 26 + signWidth / 2);
+  model.add(sign);
   const court = shadowed(new THREE.Mesh(rounded(17, 0.5, 10, 2, 0.25), courtMat));
   court.position.set(-21, 0.25, 26);
   model.add(court);
@@ -247,8 +297,13 @@ export function createBuilding(
   const from = new Float32Array(lights.length);
   const to = new Float32Array(lights.length);
   const startAt = new Float64Array(lights.length);
-  type Look = { hemi: number; sun: number; bars: number };
-  const look: Look = { hemi: STATES[initial].hemi, sun: STATES[initial].sun, bars: 0 };
+  type Look = { hemi: number; sun: number; bars: number; sign: number };
+  const look: Look = {
+    hemi: STATES[initial].hemi,
+    sun: STATES[initial].sun,
+    bars: 0,
+    sign: STATES[initial].sign,
+  };
   let lookFrom: Look = { ...look };
   let lookTo: Look = { ...look };
   let lookStart = 0;
@@ -283,7 +338,7 @@ export function createBuilding(
       startAt[i] = instant || reducedMotion ? now - FADE : now + delay;
     }
     lookFrom = { ...look };
-    lookTo = { hemi: s.hemi, sun: s.sun, bars: s.bars };
+    lookTo = { hemi: s.hemi, sun: s.sun, bars: s.bars, sign: s.sign };
     lookStart = instant || reducedMotion ? now - 2000 : now;
     animating = true;
     wake();
@@ -306,6 +361,8 @@ export function createBuilding(
     look.hemi = lookFrom.hemi + (lookTo.hemi - lookFrom.hemi) * ks;
     look.sun = lookFrom.sun + (lookTo.sun - lookFrom.sun) * ks;
     look.bars = lookFrom.bars + (lookTo.bars - lookFrom.bars) * ks;
+    look.sign = lookFrom.sign + (lookTo.sign - lookFrom.sign) * ks;
+    signMat.emissiveIntensity = look.sign;
     if (ks < 1) busy = true;
     hemi.intensity = look.hemi;
     sun.intensity = look.sun;
@@ -474,4 +531,44 @@ export function createBuilding(
       renderer.dispose();
     },
   };
+}
+
+/** A bold «4», 4.6 × 6 m, from x0 (closed counter, like the complex's sign). */
+function glyphFour(x0: number): THREE.Shape {
+  const pts: [number, number][] = [
+    [2.6, 0],
+    [3.9, 0],
+    [3.9, 1.4],
+    [4.6, 1.4],
+    [4.6, 2.7],
+    [3.9, 2.7],
+    [3.9, 6],
+    [2.7, 6],
+    [0, 2.7],
+    [0, 1.4],
+    [2.6, 1.4],
+  ];
+  const shape = new THREE.Shape(pts.map(([x, y]) => new THREE.Vector2(x0 + x, y)));
+  const counter = new THREE.Path([
+    new THREE.Vector2(x0 + 1.5, 2.7),
+    new THREE.Vector2(x0 + 2.6, 4.05),
+    new THREE.Vector2(x0 + 2.6, 2.7),
+  ]);
+  shape.holes.push(counter);
+  return shape;
+}
+
+/** A bold «U», 4.4 × 6 m, from x0. */
+function glyphU(x0: number): THREE.Shape {
+  const shape = new THREE.Shape();
+  shape.moveTo(x0, 6);
+  shape.lineTo(x0, 2.2);
+  shape.absarc(x0 + 2.2, 2.2, 2.2, Math.PI, 2 * Math.PI, false);
+  shape.lineTo(x0 + 4.4, 6);
+  shape.lineTo(x0 + 3.1, 6);
+  shape.lineTo(x0 + 3.1, 2.2);
+  shape.absarc(x0 + 2.2, 2.2, 0.9, 2 * Math.PI, Math.PI, true);
+  shape.lineTo(x0 + 1.3, 6);
+  shape.closePath();
+  return shape;
 }
