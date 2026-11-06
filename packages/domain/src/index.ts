@@ -74,6 +74,7 @@ export {
   reminderWindows,
 } from "./reminders.ts";
 export {
+  daySignature,
   type PollResult,
   pollToday,
   pollTomorrow,

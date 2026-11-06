@@ -36,12 +36,17 @@ export type PollResult = {
   notification: ScheduleNotification | null;
 };
 
+/** Identity of a day's schedule: raw status + every slot (incl. NotPlanned). Stored with snapshots. */
+export function daySignature(day: Pick<DaySchedule, "rawStatus" | "slots">): string {
+  return JSON.stringify([day.rawStatus, day.slots.map((s) => [s.start, s.end, s.type])]);
+}
+
 function track(day: DaySchedule, date: string): TrackedDay {
   return {
     date,
     status: day.status,
     rawStatus: day.rawStatus,
-    signature: JSON.stringify([day.rawStatus, day.slots.map((s) => [s.start, s.end, s.type])]),
+    signature: daySignature(day),
     withoutOutages: isScheduleWithoutOutages(day),
   };
 }
