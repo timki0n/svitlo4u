@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   addDays,
   calendarBuckets,
+  dayTotals,
   type Interval,
   isoWeekKey,
   KYIV_TZ,
@@ -202,6 +203,39 @@ describe("plan vs fact", () => {
       executedWindows: 2,
       averageStartDeviationMs: -5 * M,
       averageEndDeviationMs: 10 * M,
+      outcomes: {
+        asPlanned: 1, // 18–22: back exactly at 22:00
+        returnedEarly: 0,
+        returnedLate: 1, // 08–12: back at 12:20
+        noOutage: 1, // 00–02: no outage at all
+        averageEarlyMs: null,
+        averageLateMs: 20 * M,
+      },
+    });
+  });
+
+  it("outcomes: early and late beyond 15 minutes; an unfinished window is not judged", () => {
+    const plan = [
+      iv("2026-11-10 08:00", "2026-11-10 12:00"),
+      iv("2026-11-10 14:00", "2026-11-10 16:00"),
+      iv("2026-11-10 20:00", "2026-11-10 24:00"),
+    ];
+    const actual = [
+      { start: at("2026-11-10 08:02"), end: at("2026-11-10 11:20") },
+      { start: at("2026-11-10 14:00"), end: at("2026-11-10 16:10") },
+      { start: at("2026-11-10 20:00"), end: null },
+    ];
+    const { totals } = planVsFact(plan, actual, {
+      range: day("2026-11-10"),
+      now: at("2026-11-10 21:00"),
+    });
+    expect(totals.outcomes).toEqual({
+      asPlanned: 1, // back 10 min late is still on time
+      returnedEarly: 1,
+      returnedLate: 0,
+      noOutage: 0,
+      averageEarlyMs: 40 * M,
+      averageLateMs: null,
     });
   });
 
@@ -211,6 +245,50 @@ describe("plan vs fact", () => {
       now: at("2026-11-10 19:00"),
     });
     expect(result.totals.plannedMs).toBe(1 * H);
+    expect(result.totals.outcomes).toMatchObject({ asPlanned: 0, noOutage: 0 });
+  });
+});
+
+describe("day totals", () => {
+  const today = day("2026-11-10");
+  const plan = [
+    iv("2026-11-10 08:00", "2026-11-10 12:00"),
+    iv("2026-11-10 20:00", "2026-11-11 00:00"),
+  ];
+  const outages = [
+    { start: at("2026-11-10 08:02"), end: at("2026-11-10 11:20") },
+    { start: at("2026-11-10 15:30"), end: at("2026-11-10 17:22") },
+    { start: at("2026-11-10 17:40"), end: at("2026-11-10 17:41"), falseAlarm: true },
+  ];
+
+  it("so far by fact; the rest of the day by the plan", () => {
+    const totals = dayTotals(today, at("2026-11-10 19:37"), outages, plan);
+    expect(totals.past).toEqual({ onMs: (14 * 60 + 27) * M, offMs: (5 * 60 + 10) * M });
+    // still light until 20:00 (23 min), then the planned window to midnight
+    expect(totals.expected).toEqual({ onMs: (14 * 60 + 50) * M, offMs: (9 * 60 + 10) * M });
+  });
+
+  it("an ongoing outage counts until now; no plan → nothing expected", () => {
+    const ongoing = [{ start: at("2026-11-10 14:20"), end: null }];
+    const totals = dayTotals(today, at("2026-11-10 20:22"), ongoing, null);
+    expect(totals.past).toEqual({ onMs: (14 * 60 + 20) * M, offMs: (6 * 60 + 2) * M });
+    expect(totals.expected).toBeNull();
+  });
+
+  it("tomorrow is all plan; a finished day is all fact", () => {
+    const tomorrow = day("2026-11-11");
+    const plan11 = [
+      iv("2026-11-11 04:00", "2026-11-11 08:00"),
+      iv("2026-11-11 20:30", "2026-11-12 00:00"),
+    ];
+    expect(dayTotals(tomorrow, at("2026-11-10 19:37"), [], plan11)).toEqual({
+      past: { onMs: 0, offMs: 0 },
+      expected: { onMs: 16.5 * H, offMs: 7.5 * H },
+    });
+    expect(dayTotals(today, at("2026-11-11 09:00"), outages, plan)).toEqual({
+      past: { onMs: (24 * 60 - 310) * M, offMs: 310 * M },
+      expected: { onMs: (24 * 60 - 310) * M, offMs: 310 * M },
+    });
   });
 });
 
@@ -286,6 +364,7 @@ describe("voltage", () => {
     { t: at("2026-11-10 10:50"), voltage: 205 },
     { t: at("2026-11-10 11:10"), voltage: 255 },
     { t: at("2026-11-10 11:40"), voltage: 231 },
+    { t: at("2026-11-10 11:50"), voltage: 0 }, // outage: no power at all, not low voltage
   ];
 
   it("summary against EN 50160 limits (230 V ± 10 %)", () => {

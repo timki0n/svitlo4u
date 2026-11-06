@@ -81,7 +81,13 @@ jobs:
         run: |
           docker run -d --name core -p 8080:8080 svitlo4u-core:ci
           for _ in $(seq 1 20); do
-            if curl -fsS http://127.0.0.1:8080/health; then echo; exit 0; fi
+            if curl -fsS http://127.0.0.1:8080/health; then
+              echo
+              # the web app is served from the same image
+              curl -fsS http://127.0.0.1:8080/ | grep -q '<div id="root">' && exit 0
+              echo "web app missing at /"
+              break
+            fi
             sleep 1
           done
           docker logs core

@@ -69,7 +69,9 @@ every minute. zigbee2mqtt availability does not notice the plug disappearing —
 
 Cloudflare dashboard → Zero Trust → Networks → Tunnels → **Create tunnel** (Cloudflared) → name `svitlo4u`
 → copy the token into `deploy/.env` → add public hostname `svitlo4u.info` → service `http://core:8080`.
-Add a Cache Rule that bypasses cache for `/api/*`, `/iot/*`, `/telegram/*`.
+Add a Cache Rule that bypasses cache for `/api/*`, `/iot/*`, `/telegram/*`. The web app at `/` is
+served by the core itself (hashed `/assets/*` are immutable, `index.html` is revalidated), so the
+default caching is fine for it.
 
 The `cloudflared` image is pinned and Dependabot bumps it daily, so merging its PR keeps the tunnel on the latest release.
 

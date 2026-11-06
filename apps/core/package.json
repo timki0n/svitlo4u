@@ -11,6 +11,7 @@
     "backup": "node src/cli/backup.ts"
   },
   "dependencies": {
+    "@fastify/static": "10.1.10",
     "@svitlo/domain": "workspace:*",
     "@svitlo/storage": "workspace:*",
     "aws4fetch": "1.0.20",

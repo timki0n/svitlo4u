@@ -5,6 +5,7 @@ import {
   addDays,
   type DaySchedule,
   dayInfo,
+  dayTotals,
   formatDurationLong,
   formatHHMM,
   localDate,
@@ -19,6 +20,7 @@ import {
 import type { Store } from "@svitlo/storage";
 import { lastFixedSchedule } from "../services/schedule.ts";
 import type { SiteStateStore } from "../services/state.ts";
+import { DEFAULT_VOLTAGE_WATCH } from "../services/voltage.ts";
 import type { ResponseOf } from "./contract.ts";
 
 type NextChange = NonNullable<ResponseOf<"state">["next"]>;
@@ -52,9 +54,22 @@ export function stateView(state: SiteStateStore, siteId: string, now: number): R
       ? { updatedOn: current.schedule.updatedOn, fetchedAt: current.schedule.fetchedAt }
       : null,
     voltage:
-      current.lastVoltage !== null ? { value: current.lastVoltage, at: current.lastPlugAt } : null,
+      current.lastVoltage !== null
+        ? {
+            value: current.lastVoltage,
+            at: current.lastPlugAt,
+            level: voltageLevel(current.lastVoltage),
+          }
+        : null,
     lastEspAt: current.lastEspAt,
   };
+}
+
+/** The reading against the alert thresholds (the monitor confirms episodes; this is instant). */
+export function voltageLevel(value: number): "normal" | "low" | "high" {
+  if (value < DEFAULT_VOLTAGE_WATCH.low) return "low";
+  if (value >= DEFAULT_VOLTAGE_WATCH.high) return "high";
+  return "normal";
 }
 
 /** The next planned change relevant to the current power state. */
@@ -151,6 +166,17 @@ export function widgetView(
   const start = localMidnight(today, tz);
   const end = localMidnight(addDays(today, 2), tz);
   const windows = ctx ? planWindows(ctx, now) : [];
+  const records = store.outages
+    .list(siteId, { start, end: Math.max(start, now) })
+    .filter((o) => !o.falseAlarm);
+  /** So far by fact, the rest by the plan (null: no plan applies to the day). */
+  const totals = (dayStart: number, dayEnd: number, segments: readonly Segment[] | null) =>
+    dayTotals(
+      { start: dayStart, end: dayEnd },
+      now,
+      records,
+      segments ? segments.filter((s) => s.kind === "off") : null,
+    );
 
   const days = [today, addDays(today, 1)].map((date, index) => {
     const day = ctx ? liveDay(ctx, date, today) : null;
@@ -161,11 +187,13 @@ export function widgetView(
     const base = { date, status, label: `${index === 0 ? "Сьогодні" : "Завтра"}, ${d}.${m}` };
     if (status === "ScheduleApplies" || status === "NoOutages") {
       const own = status === "ScheduleApplies" ? windows : [];
+      const segments = planSegments(dayStart, dayEnd, own, tz);
       return {
         ...base,
         overlay: null,
         note: null,
-        segments: planSegments(dayStart, dayEnd, own, tz),
+        segments,
+        totals: totals(dayStart, dayEnd, segments),
       };
     }
     // R15: emergency shutdowns over the schedule published for this day, if there was one.
@@ -176,6 +204,7 @@ export function widgetView(
         overlay: "emergency" as const,
         note: "Діють екстрені відключення · графік не діє",
         segments: planSegments(dayStart, dayEnd, mergeWindows(fixed.outages), tz),
+        totals: totals(dayStart, dayEnd, null),
       };
     }
     const label = UNKNOWN_LABEL[status] ?? "Графік недоступний";
@@ -184,13 +213,11 @@ export function widgetView(
       overlay: null,
       note: null,
       segments: [{ start: dayStart, end: dayEnd, kind: "unknown" as const, label }],
+      totals: totals(dayStart, dayEnd, null),
     };
   });
 
-  const actual = store.outages
-    .list(siteId, { start, end: Math.max(start, now) })
-    .filter((o) => !o.falseAlarm)
-    .map((o) => ({ start: Math.max(o.start, start), end: o.end }));
+  const actual = records.map((o) => ({ start: Math.max(o.start, start), end: o.end }));
 
   const title =
     view.power === "on" ? "Світло є" : view.power === "off" ? "Світла немає" : "Стан невідомий";

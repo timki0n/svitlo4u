@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "svitlo4u API",
-    "version": "1.3.0",
+    "version": "1.4.0",
     "description": "Power state, outage schedules and analytics. Instants are Unix ms, dates are local YYYY-MM-DD in the site's time zone, durations are ms. Responses are not cached."
   },
   "servers": [
@@ -274,11 +274,21 @@
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "level": {
+                              "type": "string",
+                              "enum": [
+                                "normal",
+                                "low",
+                                "high"
+                              ],
+                              "description": "By the alert thresholds: low below 190 V, high from 245 V"
                             }
                           },
                           "required": [
                             "value",
-                            "at"
+                            "at",
+                            "level"
                           ],
                           "additionalProperties": false
                         },
@@ -532,11 +542,21 @@
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "level": {
+                              "type": "string",
+                              "enum": [
+                                "normal",
+                                "low",
+                                "high"
+                              ],
+                              "description": "By the alert thresholds: low below 190 V, high from 245 V"
                             }
                           },
                           "required": [
                             "value",
-                            "at"
+                            "at",
+                            "level"
                           ],
                           "additionalProperties": false
                         },
@@ -820,6 +840,61 @@
                                   ],
                                   "additionalProperties": false
                                 }
+                              },
+                              "totals": {
+                                "type": "object",
+                                "properties": {
+                                  "past": {
+                                    "type": "object",
+                                    "properties": {
+                                      "onMs": {
+                                        "type": "number",
+                                        "description": "Duration, ms"
+                                      },
+                                      "offMs": {
+                                        "type": "number",
+                                        "description": "Duration, ms"
+                                      }
+                                    },
+                                    "required": [
+                                      "onMs",
+                                      "offMs"
+                                    ],
+                                    "additionalProperties": false,
+                                    "description": "From midnight to now (the whole day once it is over), by real outages"
+                                  },
+                                  "expected": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "onMs": {
+                                            "type": "number",
+                                            "description": "Duration, ms"
+                                          },
+                                          "offMs": {
+                                            "type": "number",
+                                            "description": "Duration, ms"
+                                          }
+                                        },
+                                        "required": [
+                                          "onMs",
+                                          "offMs"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ],
+                                    "description": "The whole day: the past as it was plus the plan for the rest. Null when no plan applies (emergency shutdowns, no schedule yet)."
+                                  }
+                                },
+                                "required": [
+                                  "past",
+                                  "expected"
+                                ],
+                                "additionalProperties": false
                               }
                             },
                             "required": [
@@ -828,7 +903,8 @@
                               "label",
                               "overlay",
                               "note",
-                              "segments"
+                              "segments",
+                              "totals"
                             ],
                             "additionalProperties": false
                           },
@@ -2238,6 +2314,65 @@
                             "number",
                             "null"
                           ]
+                        },
+                        "outcomes": {
+                          "type": "object",
+                          "properties": {
+                            "asPlanned": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991,
+                              "description": "Back within 15 minutes of the planned end"
+                            },
+                            "returnedEarly": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "returnedLate": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "noOutage": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991,
+                              "description": "The window passed without an outage"
+                            },
+                            "averageEarlyMs": {
+                              "anyOf": [
+                                {
+                                  "type": "number",
+                                  "description": "Duration, ms"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "averageLateMs": {
+                              "anyOf": [
+                                {
+                                  "type": "number",
+                                  "description": "Duration, ms"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "asPlanned",
+                            "returnedEarly",
+                            "returnedLate",
+                            "noOutage",
+                            "averageEarlyMs",
+                            "averageLateMs"
+                          ],
+                          "additionalProperties": false,
+                          "description": "Finished windows by how they went; a window in progress is not judged yet"
                         }
                       },
                       "required": [
@@ -2250,7 +2385,8 @@
                         "windows",
                         "executedWindows",
                         "averageStartDeviationMs",
-                        "averageEndDeviationMs"
+                        "averageEndDeviationMs",
+                        "outcomes"
                       ],
                       "additionalProperties": false
                     }
@@ -2436,7 +2572,8 @@
                         "count": {
                           "type": "integer",
                           "minimum": -9007199254740991,
-                          "maximum": 9007199254740991
+                          "maximum": 9007199254740991,
+                          "description": "Readings while there was power (50 V or less means an outage and is left out)"
                         },
                         "min": {
                           "type": [

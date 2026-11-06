@@ -7,7 +7,8 @@ Successor of `svitlo_web` and `light_bot_tg`.
 ## Layout
 
 ```
-apps/core/        Node service: adapters, services, channels, HTTP API
+apps/core/        Node service: adapters, services, channels, HTTP API; serves the web app
+apps/web/         Web app (React + Vite): «Зараз», «Графік», «Історія»; 3D figure on three.js
 packages/domain/  Pure domain logic (no I/O) + tests
 packages/storage/ SQLite schema, migrations, repositories
 docs/             ESP protocol, OpenAPI (generated)
@@ -27,6 +28,19 @@ pnpm check        # lint + typecheck + tests
 TypeScript runs natively in Node (type stripping) — no build step. Use erasable syntax only
 (no enums/namespaces) and import local files with the `.ts` extension.
 
+### Web
+
+```bash
+pnpm --filter @svitlo/web dev     # http://localhost:5173, API proxied to https://svitlo4u.info
+pnpm --filter @svitlo/web build   # apps/web/dist
+```
+
+Point the dev proxy at another core with `SVITLO_API` (environment or `apps/web/.env.local`, e.g.
+`SVITLO_API=http://127.0.0.1:8080`). The web takes its types from the core's API contract and
+computes nothing itself: totals, forecasts and outcomes come from the API. In production the core
+serves `apps/web/dist` from `WEB_DIR` on the same origin: hashed assets are cached for a year,
+`index.html` is revalidated and carries a strict CSP (everything from `'self'`).
+
 ## API
 
 `/api/v1/*`: state, widget, schedules, outages, analytics and live updates (SSE). The contract is
@@ -38,4 +52,4 @@ TypeScript runs natively in Node (type stripping) — no build step. Use erasabl
 
 - `check`: Biome, `tsc` (TypeScript 7), Vitest
 - `secrets`: gitleaks over the full history — the repo is public, secrets live only in `deploy/.env` on the server
-- `image`: native `linux/arm64` build, smoke test of `/health`, push to `ghcr.io/timki0n/svitlo4u-core` on `main`
+- `image`: native `linux/arm64` build (the web app is built in it too), smoke test of `/health` and `/`, push to `ghcr.io/timki0n/svitlo4u-core` on `main`

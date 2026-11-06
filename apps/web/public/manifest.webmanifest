@@ -1,0 +1,10 @@
+{
+  "name": "Світло · ЖК 4U",
+  "short_name": "Світло",
+  "lang": "uk",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1f2024",
+  "theme_color": "#1f2024",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

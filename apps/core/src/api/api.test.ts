@@ -161,6 +161,13 @@ describe("API v1", () => {
     });
     expect(body.hint.text).toBe("Найближче відключення о 20:00");
 
+    c.state.update("4u", { lastVoltage: 186, lastPlugAt: NOW });
+    expect((await get(c, "/api/v1/sites/4u/state")).body.voltage).toEqual({
+      value: 186,
+      at: NOW,
+      level: "low",
+    });
+
     clock.advanceTo(at("2026-11-10", "21:00"));
     c.state.update("4u", { power: "off", since: at("2026-11-10", "20:01") });
     const off = (await get(c, "/api/v1/sites/4u/state")).body;
@@ -205,6 +212,16 @@ describe("API v1", () => {
     expect(body.timeline.actual).toEqual([
       { start: at("2026-11-10", "08:05"), end: at("2026-11-10", "12:10") },
     ]);
+    // So far by fact (08:05–12:10 without light), the rest by the plan (20:00–24:00).
+    const MIN = 60_000;
+    expect(body.timeline.days[0].totals).toEqual({
+      past: { onMs: 535 * MIN, offMs: 245 * MIN },
+      expected: { onMs: 955 * MIN, offMs: 485 * MIN },
+    });
+    expect(body.timeline.days[1].totals).toEqual({
+      past: { onMs: 0, offMs: 0 },
+      expected: { onMs: 18 * 60 * MIN, offMs: 6 * 60 * MIN },
+    });
 
     clock.advanceTo(at("2026-11-10", "19:50"));
     expect((await get(c, "/api/v1/sites/4u/widget")).body.refreshAt).toBe(
@@ -276,6 +293,10 @@ describe("API v1", () => {
 
     const pvf = (await get(c, `/api/v1/sites/4u/analytics/plan-vs-fact?${range}`)).body;
     expect(pvf.totals).toMatchObject({ windows: 5, executedWindows: 3 });
+    // All five windows are over: −10 min is on time, two passed without an outage.
+    const o = pvf.totals.outcomes;
+    expect(o.asPlanned + o.returnedEarly + o.returnedLate + o.noOutage).toBe(5);
+    expect(o.noOutage).toBe(2);
     expect(pvf.matches[0]).toMatchObject({
       plan: { start: at("2026-11-08", "08:00"), end: at("2026-11-08", "12:00") },
       startDeviationMs: 10 * 60_000,

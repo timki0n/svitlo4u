@@ -18,6 +18,8 @@ export type CoreConfig = {
   telegramUpdates: "webhook" | "polling" | "off";
   /** Public API requests per minute per client (0 = no limit). */
   apiRatePerMinute: number;
+  /** Built web app (apps/web/dist) served at /; null: API only. */
+  webDir: string | null;
 };
 
 function port(value: string | undefined, fallback: number, name: string): number {
@@ -59,5 +61,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
     publicUrl,
     telegramUpdates: updates,
     apiRatePerMinute: nonNegative(env.API_RATE_PER_MINUTE, 120, "API_RATE_PER_MINUTE"),
+    webDir: env.WEB_DIR || null,
   };
 }

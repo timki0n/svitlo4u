@@ -10,7 +10,7 @@ import { SCHEDULE_STATUSES } from "@svitlo/domain";
 import { z } from "zod";
 
 /** Contract version: bump the major for breaking changes (new paths under /api/v2). */
-export const API_VERSION = "1.3.0";
+export const API_VERSION = "1.4.0";
 
 const ms = z.number().describe("Unix time, ms");
 const duration = z.number().describe("Duration, ms");
@@ -22,6 +22,7 @@ const power = z.enum(["on", "off", "unknown"]);
 const scheduleStatus = z.enum(SCHEDULE_STATUSES);
 const interval = z.object({ start: ms, end: ms });
 const share = z.number().min(0).max(1);
+const lightSplit = z.object({ onMs: duration, offMs: duration });
 
 export const SiteParams = z.object({
   siteId: z
@@ -80,7 +81,15 @@ export const State = z.object({
       fetchedAt: ms.nullable(),
     })
     .nullable(),
-  voltage: z.object({ value: z.number(), at: ms.nullable() }).nullable(),
+  voltage: z
+    .object({
+      value: z.number(),
+      at: ms.nullable(),
+      level: z
+        .enum(["normal", "low", "high"])
+        .describe("By the alert thresholds: low below 190 V, high from 245 V"),
+    })
+    .nullable(),
   lastEspAt: ms.nullable(),
 });
 
@@ -105,6 +114,17 @@ export const TimelineDay = z.object({
     ),
   note: z.string().nullable().describe("«Діють екстрені відключення · графік не діє»"),
   segments: z.array(Segment),
+  totals: z.object({
+    past: lightSplit.describe(
+      "From midnight to now (the whole day once it is over), by real outages",
+    ),
+    expected: lightSplit
+      .nullable()
+      .describe(
+        "The whole day: the past as it was plus the plan for the rest. Null when no plan applies " +
+          "(emergency shutdowns, no schedule yet).",
+      ),
+  }),
 });
 
 export const Widget = z.object({
@@ -238,6 +258,16 @@ export const PlanVsFact = z.object({
     executedWindows: z.number().int(),
     averageStartDeviationMs: z.number().nullable(),
     averageEndDeviationMs: z.number().nullable(),
+    outcomes: z
+      .object({
+        asPlanned: z.number().int().describe("Back within 15 minutes of the planned end"),
+        returnedEarly: z.number().int(),
+        returnedLate: z.number().int(),
+        noOutage: z.number().int().describe("The window passed without an outage"),
+        averageEarlyMs: duration.nullable(),
+        averageLateMs: duration.nullable(),
+      })
+      .describe("Finished windows by how they went; a window in progress is not judged yet"),
   }),
 });
 
@@ -246,7 +276,10 @@ export const Voltage = z.object({
   range: interval,
   granularity: z.enum(["hour", "day", "week", "month"]),
   summary: z.object({
-    count: z.number().int(),
+    count: z
+      .number()
+      .int()
+      .describe("Readings while there was power (50 V or less means an outage and is left out)"),
     min: z.number().nullable(),
     max: z.number().nullable(),
     avg: z.number().nullable(),

@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { loadConfig } from "./config.ts";
 import { buildServer } from "./server.ts";
 
@@ -13,6 +16,39 @@ describe("GET /health", () => {
     expect(response.statusCode).toBe(200);
     expect(response.headers["cache-control"]).toBe("no-store");
     expect(response.json()).toMatchObject({ status: "ok", version: "test" });
+  });
+});
+
+describe("web app", () => {
+  const dir = mkdtempSync(join(tmpdir(), "svitlo-web-"));
+  mkdirSync(join(dir, "assets"));
+  writeFileSync(join(dir, "index.html"), "<!doctype html><title>svitlo4u</title>");
+  writeFileSync(join(dir, "assets", "app-1a2b3c.js"), "console.log(1)");
+  const app = buildServer({ ...loadConfig({}), logLevel: "silent", webDir: dir });
+  afterAll(async () => {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("serves index.html at / for revalidation, with a CSP", async () => {
+    const response = await app.inject({ method: "GET", url: "/" });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain("svitlo4u");
+    expect(response.headers["cache-control"]).toBe("no-cache");
+    expect(response.headers["content-security-policy"]).toContain("default-src 'self'");
+  });
+
+  it("caches hashed assets forever; /health stays an API route", async () => {
+    const asset = await app.inject({ method: "GET", url: "/assets/app-1a2b3c.js" });
+    expect(asset.headers["cache-control"]).toBe("public, max-age=31536000, immutable");
+    const health = await app.inject({ method: "GET", url: "/health" });
+    expect(health.headers["cache-control"]).toBe("no-store");
+  });
+
+  it("is off without a built app", async () => {
+    const bare = buildServer({ ...loadConfig({}), logLevel: "silent", webDir: join(dir, "nope") });
+    expect((await bare.inject({ method: "GET", url: "/" })).statusCode).toBe(404);
+    await bare.close();
   });
 });
 
@@ -32,6 +68,7 @@ describe("loadConfig", () => {
       publicUrl: null,
       telegramUpdates: "polling",
       apiRatePerMinute: 120,
+      webDir: null,
     });
   });
 

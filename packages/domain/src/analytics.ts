@@ -151,8 +151,29 @@ export type PlanVsFact = {
     executedWindows: number;
     averageStartDeviationMs: number | null;
     averageEndDeviationMs: number | null;
+    /** How finished windows went (a window still in progress is not judged yet). */
+    outcomes: PlanOutcomes;
   };
 };
+
+/** Finished windows by how they went; «on time» is within {@link PLAN_ON_TIME_MS} of the plan. */
+export type PlanOutcomes = {
+  /** Power went off and came back within the tolerance of the planned end. */
+  asPlanned: number;
+  /** Power came back earlier than planned (by more than the tolerance). */
+  returnedEarly: number;
+  /** Power came back later than planned (by more than the tolerance). */
+  returnedLate: number;
+  /** The window passed without an outage. */
+  noOutage: number;
+  /** Mean of how much earlier power came back, over `returnedEarly` windows. */
+  averageEarlyMs: number | null;
+  /** Mean of how much later power came back, over `returnedLate` windows. */
+  averageLateMs: number | null;
+};
+
+/** A window counts as kept «as planned» when power came back within 15 minutes of its end. */
+export const PLAN_ON_TIME_MS = 15 * 60_000;
 
 /**
  * Compare planned windows with actual outages. An actual outage belongs to the planned window it
@@ -166,9 +187,10 @@ export function planVsFact(
 ): PlanVsFact {
   const range = upToNow(options.range, options.now);
   const tolerance = options.matchToleranceMs ?? HOUR;
-  const windows = union(plan)
-    .map((w) => clip(w, range))
-    .filter((w): w is Interval => w !== null);
+  const clipped = union(plan)
+    .map((w) => ({ window: clip(w, range), finished: w.end <= options.now }))
+    .filter((w): w is { window: Interval; finished: boolean } => w.window !== null);
+  const windows = clipped.map((w) => w.window);
   const actual = union(outageIntervals(records, options.now))
     .map((a) => clip(a, range))
     .filter((a): a is Interval => a !== null);
@@ -222,6 +244,71 @@ export function planVsFact(
       executedWindows: executed.length,
       averageStartDeviationMs: average(executed.map((m) => m.startDeviationMs as number)),
       averageEndDeviationMs: average(executed.map((m) => m.endDeviationMs as number)),
+      outcomes: planOutcomes(matches.filter((_, index) => clipped[index]?.finished)),
+    },
+  };
+}
+
+/** Sort finished windows by how they went: no outage, back early, back late, or as planned. */
+export function planOutcomes(finished: readonly PlanFactMatch[]): PlanOutcomes {
+  const early: number[] = [];
+  const late: number[] = [];
+  let asPlanned = 0;
+  let noOutage = 0;
+  for (const m of finished) {
+    if (m.endDeviationMs === null) noOutage += 1;
+    else if (m.endDeviationMs < -PLAN_ON_TIME_MS) early.push(-m.endDeviationMs);
+    else if (m.endDeviationMs > PLAN_ON_TIME_MS) late.push(m.endDeviationMs);
+    else asPlanned += 1;
+  }
+  const mean = (values: number[]) =>
+    values.length ? values.reduce((sum, v) => sum + v, 0) / values.length : null;
+  return {
+    asPlanned,
+    returnedEarly: early.length,
+    returnedLate: late.length,
+    noOutage,
+    averageEarlyMs: mean(early),
+    averageLateMs: mean(late),
+  };
+}
+
+// ───────────────────────── one day: so far and expected ─────────────────────────
+
+export type LightSplit = { onMs: number; offMs: number };
+
+export type DayTotals = {
+  /** From the start of the day to now (or the whole day once it is over), by actual outages. */
+  past: LightSplit;
+  /**
+   * The whole day: the past as it was plus the plan for the rest. Null when no plan applies to
+   * the day (emergency shutdowns, no schedule yet) — then there is nothing to expect.
+   */
+  expected: LightSplit | null;
+};
+
+/**
+ * Light and darkness of one day so far, and what the day is expected to bring when the rest of it
+ * goes by the plan. `plannedOff` is the day's planned outage windows, or null if no plan applies.
+ */
+export function dayTotals(
+  day: Interval,
+  now: number,
+  records: readonly OutageRecord[],
+  plannedOff: readonly Interval[] | null,
+): DayTotals {
+  const pastEnd = Math.min(Math.max(now, day.start), day.end);
+  const pastRange = { start: day.start, end: pastEnd };
+  const pastOff = pastEnd > day.start ? overlapMs(outageIntervals(records, now), [pastRange]) : 0;
+  const past = { onMs: pastEnd - day.start - pastOff, offMs: pastOff };
+  if (plannedOff === null) return { past, expected: null };
+  const rest = { start: pastEnd, end: day.end };
+  const restOff = rest.end > rest.start ? overlapMs(union(plannedOff), [rest]) : 0;
+  return {
+    past,
+    expected: {
+      onMs: past.onMs + (rest.end - rest.start - restOff),
+      offMs: past.offMs + restOff,
     },
   };
 }
@@ -368,6 +455,16 @@ export type VoltageSample = { t: number; voltage: number };
 /** EN 50160: 230 V ± 10 %. */
 export const VOLTAGE_LOW = 207;
 export const VOLTAGE_HIGH = 253;
+/**
+ * A reading at or below this means no power at all (the plug reports ~0 V during an outage):
+ * that is the outage statistics' business, not the quality of the voltage.
+ */
+export const VOLTAGE_NO_POWER_MAX = 50;
+
+/** Readings of the voltage while there was power. */
+function withPower(samples: readonly VoltageSample[]): VoltageSample[] {
+  return samples.filter((s) => s.voltage > VOLTAGE_NO_POWER_MAX);
+}
 
 export type VoltageStats = {
   count: number;
@@ -386,7 +483,7 @@ export function voltageSummary(
 ): VoltageStats {
   const low = limits.low ?? VOLTAGE_LOW;
   const high = limits.high ?? VOLTAGE_HIGH;
-  const values = samples.map((s) => s.voltage);
+  const values = withPower(samples).map((s) => s.voltage);
   const below = values.filter((v) => v < low).length;
   const above = values.filter((v) => v > high).length;
   return {
@@ -408,7 +505,7 @@ export function voltageRollup(
   samples: readonly VoltageSample[],
   options: { range: Interval; tz: string; granularity: "hour" | Granularity },
 ): VoltageBucket[] {
-  const inRange = samples
+  const inRange = withPower(samples)
     .filter((s) => s.t >= options.range.start && s.t < options.range.end)
     .sort((a, b) => a.t - b.t);
   const buckets: Bucket[] =
