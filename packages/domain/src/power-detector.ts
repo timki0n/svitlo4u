@@ -77,8 +77,12 @@ export type DetectorState = {
   since: number | null;
   /** Start of the light-on period before the current/last outage (restored on a false alarm). */
   onSinceBeforeOutage: number | null;
-  /** Outage not yet confirmed by the ESP uptime (reset = real, continued = false alarm). */
-  unverifiedOutage: { start: number } | null;
+  /**
+   * Outage not yet confirmed by the ESP uptime (reset = real, continued = false alarm).
+   * `decidedAt`/`byTimeout`: when it was declared and whether only because the plug did not answer
+   * (a plug message right after that is a late answer → false alarm). Absent in older saved states.
+   */
+  unverifiedOutage: { start: number; decidedAt?: number; byTimeout?: boolean } | null;
   lastEsp: EspSample | null;
   /** Latest instant power was known to be present (ESP packet or plug message). */
   lastPowerEvidence: number | null;
@@ -271,7 +275,7 @@ function turnOff(s: DetectorState, now: number, reason: PowerReason): DetectorSt
     power: "off",
     onSinceBeforeOutage: s.power === "on" ? s.since : s.onSinceBeforeOutage,
     since: at,
-    unverifiedOutage: { start: at },
+    unverifiedOutage: { start: at, decidedAt: now, byTimeout: reason === "probe-timeout" },
     probe: null,
     plugConfirmedSilence: false,
   };
@@ -318,8 +322,17 @@ function onEsp(s: DetectorState, sample: EspSample, config: DetectorConfig): Det
       next = { ...next, power: "on", since: s.onSinceBeforeOutage ?? s.since };
       return { state: next, effects };
     }
-    const at = rebooted === true ? Math.max(s.since ?? Number.NEGATIVE_INFINITY, bootAt) : sample.t;
-    effects.push(powerEffect("on", at, sample.t, rebooted === true ? "esp-reboot" : "esp-packet"));
+    // No earlier packet to compare with (state taken over from the legacy bot): an ESP that booted
+    // after the outage began still proves power came back at its boot moment.
+    const bootedDuringOutage =
+      rebooted === null &&
+      last === null &&
+      sample.up !== null &&
+      s.since !== null &&
+      bootAt >= s.since;
+    const fromBoot = rebooted === true || bootedDuringOutage;
+    const at = fromBoot ? Math.max(s.since ?? Number.NEGATIVE_INFINITY, bootAt) : sample.t;
+    effects.push(powerEffect("on", at, sample.t, fromBoot ? "esp-reboot" : "esp-packet"));
     next = { ...next, power: "on", since: at };
     return { state: next, effects };
   }
@@ -426,8 +439,11 @@ function onPlug(
       ? { state: base, effects: [] }
       : turnOff(base, now, "probe-no-voltage");
   }
+  const espSilent = now - silenceAnchor(s) >= config.suspectAfterMs;
   if (!present) {
-    // A stray 0 V reading without a suspicion is not enough on its own.
+    // No voltage while the ESP is silent too: the power is gone (even if the plug vouched for it
+    // a moment ago). A stray 0 V reading while the ESP keeps talking is not enough on its own.
+    if (espSilent && s.power === "on") return turnOff(base, now, "probe-no-voltage");
     return {
       state: { ...base, probe: pending?.purpose === "keepalive" ? null : pending },
       effects: [],
@@ -436,7 +452,6 @@ function onPlug(
 
   // The plug is alive → power is present. While the ESP is silent this is a confirmed check:
   // re-check after reprobeIntervalMs instead of treating the old silence as a fresh suspicion.
-  const espSilent = now - silenceAnchor(s) >= config.suspectAfterMs;
   const withEvidence: DetectorState = {
     ...base,
     lastPowerEvidence: Math.max(s.lastPowerEvidence ?? now, now),
@@ -448,6 +463,23 @@ function onPlug(
       : s.lastSuspectProbeAt,
   };
   if (s.power === "off") {
+    const outage = s.unverifiedOutage;
+    if (
+      outage?.byTimeout &&
+      outage.decidedAt !== undefined &&
+      now - outage.decidedAt <= config.probeTimeoutMs
+    ) {
+      // The plug answered just after we gave up waiting: the power never went away.
+      return {
+        state: {
+          ...withEvidence,
+          power: "on",
+          since: s.onSinceBeforeOutage ?? s.since,
+          unverifiedOutage: null,
+        },
+        effects: [{ type: "false-alarm", outageStartedAt: outage.start, detectedAt: now }],
+      };
+    }
     return {
       state: { ...withEvidence, power: "on", since: now },
       effects: [powerEffect("on", now, now, "plug")],

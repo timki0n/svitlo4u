@@ -93,10 +93,26 @@ Undelivered messages are retried for 30 minutes (5 s → 3 min backoff) and surv
 the admin chat hears about chats that reject messages, Yasno failures, zigbee2mqtt going offline,
 rejected heartbeats and core restarts (with the downtime).
 
+### Core: sites and history
+
+```bash
+mkdir -p config data            # data must belong to uid 1000 (the image runs as `node`)
+cp ../config/sites.example.yaml config/sites.yaml   # edit: devices, telegram; secrets go to .env
+```
+
+Import the old bot's history once (a copy of its database; `--adopt-open` continues an outage that
+is going on right now, so its start is not lost):
+
+```bash
+mkdir -p /tmp/legacy && cp /opt/svitlo/svitlo_web/data/svitlo.db* /tmp/legacy/
+docker compose run --rm -v /tmp/legacy:/legacy core node packages/storage/src/cli/import-legacy.ts   --db /app/data/svitlo4u.db --site 4u --name "ЖК 4U" --group 12.1   --legacy /legacy/svitlo.db --format svitlo --adopt-open
+```
+
+UDP 5005 must be free: the old bot listens there.
+
 ## Run / update
 
 ```bash
-docker login ghcr.io            # only while the package is private
 docker compose pull && docker compose up -d
 docker compose ps
 curl -s http://127.0.0.1:8090/health

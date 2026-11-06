@@ -2,7 +2,7 @@
  * Import a legacy database into the svitlo4u database.
  *
  *   node packages/storage/src/cli/import-legacy.ts --db data/svitlo4u.db \
- *     --site 4u --name "ЖК 4U" --group 12.1 --legacy /tmp/svitlo.db --format svitlo
+ *     --site 4u --name "ЖК 4U" --group 12.1 --legacy /tmp/svitlo.db --format svitlo [--adopt-open]
  *
  * Creates the site row if missing (region 25 / DSO 902 / Europe/Kyiv unless given).
  * Pass a copy of the legacy file, not the live one.
@@ -24,6 +24,8 @@ const { values } = parseArgs({
     tz: { type: "string", default: KYIV_TZ },
     legacy: { type: "string" },
     format: { type: "string" },
+    /** Power is off right now: continue the legacy ongoing outage (fresh database only). */
+    "adopt-open": { type: "boolean", default: false },
   },
 });
 
@@ -57,6 +59,7 @@ try {
     siteId,
     path: values.legacy as string,
     format: values.format as LegacyFormat,
+    adoptOpen: values["adopt-open"] === true,
   });
   console.log(JSON.stringify({ site: siteId, ...report }, null, 2));
 } finally {

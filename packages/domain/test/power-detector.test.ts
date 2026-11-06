@@ -149,8 +149,8 @@ describe("power detector — ESP + Zigbee plug", () => {
       inputs: [
         ...espPackets(s(0), s(60), UP0),
         ...plugReports(s(1), s(60)),
-        { type: "plug", t: s(70), voltage: 231 },
-        ...espPackets(s(75), s(100), UP0 + 75),
+        { type: "plug", t: s(75), voltage: 231 },
+        ...espPackets(s(80), s(100), UP0 + 80),
       ],
       plug: dead,
     });
@@ -158,11 +158,64 @@ describe("power detector — ESP + Zigbee plug", () => {
       { probe: 65 },
       { probe: 67 },
       { off: 60, detected: 69, reason: "probe-timeout" },
-      { on: 70, detected: 70, reason: "plug" },
-      // Uptime proves the false alarm; the plug message at 70 s already vouched for power in the gap.
-      { falseAlarm: 60, detected: 75 },
-      { gap: [60, 75], by: "zigbee" },
+      { on: 75, detected: 75, reason: "plug" },
+      // Uptime proves the false alarm; the plug message at 75 s already vouched for power in the gap.
+      { falseAlarm: 60, detected: 80 },
+      { gap: [60, 80], by: "zigbee" },
     ]);
+  });
+
+  it("the plug speaks just after the reads gave up → false alarm, not a new 'power on'", () => {
+    // Seen live: the plug ignored two reads but sent a report 0.1 s after the decision.
+    const { effects } = simulate({
+      start: T0,
+      inputs: [
+        ...espPackets(s(0), s(60), UP0),
+        ...plugReports(s(1), s(60)),
+        { type: "plug", t: s(69.1), voltage: 231 },
+        ...espPackets(s(80), s(100), UP0 + 80),
+      ],
+      plug: dead,
+    });
+    expect(readable(effects)).toEqual([
+      { probe: 65 },
+      { probe: 67 },
+      { off: 60, detected: 69, reason: "probe-timeout" },
+      { falseAlarm: 60, detected: 69.1 },
+      { gap: [60, 80], by: "zigbee" },
+    ]);
+  });
+
+  it("0 V from the plug while the ESP is silent → off at once, even after the plug vouched for power", () => {
+    // Seen live: the plug confirmed the power during the ESP silence, then the power went: 0 V.
+    const { effects } = simulate({
+      start: T0,
+      inputs: [
+        ...espPackets(s(0), s(60), UP0),
+        ...plugReports(s(1), s(60)),
+        { type: "plug", t: s(72), voltage: 0 },
+        ...espPackets(s(100), s(110), 4),
+      ],
+      plug: { answer: (t) => (t < s(70) ? 230 : null), latencyMs: 300 },
+    });
+    expect(readable(effects)).toEqual([
+      { probe: 65 },
+      { off: 65.3, detected: 72, reason: "probe-no-voltage" },
+      { on: 96, detected: 100, reason: "esp-reboot" },
+    ]);
+  });
+
+  it("a stray 0 V while the ESP keeps talking changes nothing", () => {
+    const { effects } = simulate({
+      start: T0,
+      inputs: [
+        ...espPackets(s(0), s(60), UP0),
+        ...plugReports(s(1), s(60)),
+        { type: "plug", t: s(30), voltage: 0 },
+      ],
+      plug: alive,
+    });
+    expect(readable(effects)).toEqual([]);
   });
 
   it("ESP silent for minutes while the plug keeps confirming → re-check every 30 s, off when the plug goes quiet", () => {
@@ -265,6 +318,37 @@ describe("power detector — firmware reset reason (v2)", () => {
       inputs: [{ type: "esp", t: s(601), up: 30, boot: "b3", resetReason: "wdt" }],
     });
     expect(effects).toEqual([]);
+  });
+});
+
+describe("power detector — outage taken over from the legacy bot (no earlier ESP packet)", () => {
+  const adopted = {
+    power: "off" as const,
+    since: s(-3 * 3600),
+    onSinceBeforeOutage: null,
+    unverifiedOutage: null,
+    lastEsp: null,
+    lastPowerEvidence: null,
+  };
+
+  it("an ESP that booted after the outage began → power back at its boot moment", () => {
+    const { effects } = simulate({
+      config: { zigbee: false },
+      start: s(0),
+      persisted: adopted,
+      inputs: [{ type: "esp", t: s(100), up: 6 }],
+    });
+    expect(readable(effects)).toEqual([{ on: 94, detected: 100, reason: "esp-reboot" }]);
+  });
+
+  it("an ESP up since before the outage cannot date the return → the packet time", () => {
+    const { effects } = simulate({
+      config: { zigbee: false },
+      start: s(0),
+      persisted: adopted,
+      inputs: [{ type: "esp", t: s(100), up: 4 * 3600 }],
+    });
+    expect(readable(effects)).toEqual([{ on: 100, detected: 100, reason: "esp-packet" }]);
   });
 });
 

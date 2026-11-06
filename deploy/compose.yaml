@@ -10,14 +10,21 @@ services:
   core:
     image: ghcr.io/timki0n/svitlo4u-core:${CORE_TAG:-latest}
     restart: unless-stopped
+    # Secrets named in config/sites.yaml (secretEnv / botTokenEnv), PUBLIC_URL, MQTT_CORE_PASSWORD.
+    env_file: .env
     environment:
       TZ: Europe/Kyiv
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      APP_VERSION: ${CORE_TAG:-latest}
+      MQTT_URL: mqtt://mosquitto:1883
     ports:
       # API/health only on localhost; the public entry point is the Cloudflare tunnel.
       - "127.0.0.1:${CORE_HTTP_PORT:-8090}:8080"
+      # ESP heartbeats from the LAN.
+      - "${HEARTBEAT_UDP_PORT:-5005}:5005/udp"
     volumes:
-      - ./data:/app/data
+      - ./data:/app/data # owned by uid 1000 (the image's `node` user)
+      - ./config:/app/config:ro
     depends_on:
       - mosquitto
     logging: *logging

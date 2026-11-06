@@ -18,6 +18,8 @@ export type LegacyFormat = "svitlo" | "light_bot";
 
 export type ImportReport = {
   outages: { imported: number; existing: number; open: number };
+  /** Start of the ongoing outage taken over as the detector's state (adoptOpen), or null. */
+  adoptedOpenStart: number | null;
   schedules: { imported: number; unchanged: number };
   subscribers: { imported: number; existing: number };
 };
@@ -33,16 +35,29 @@ type LegacySubscriber = { chat_id: number; thread_id: number; created_at: number
 
 export function importLegacyDatabase(
   store: Store,
-  options: { siteId: string; path: string; format: LegacyFormat; now?: number },
+  options: {
+    siteId: string;
+    path: string;
+    format: LegacyFormat;
+    now?: number;
+    /**
+     * Switch-over while power is off: take the legacy ongoing outage as the current state
+     * (only when the site has no detector state yet), so its start is not lost.
+     */
+    adoptOpen?: boolean;
+  },
 ): ImportReport {
   if (!store.sites.get(options.siteId)) throw new Error(`site ${options.siteId} does not exist`);
   const legacy = new Database(options.path, { readonly: true, fileMustExist: true });
   const now = options.now ?? Date.now();
   const report: ImportReport = {
     outages: { imported: 0, existing: 0, open: 0 },
+    adoptedOpenStart: null,
     schedules: { imported: 0, unchanged: 0 },
     subscribers: { imported: 0, existing: 0 },
   };
+  let openStart: number | null = null;
+  let lastEnd: number | null = null;
   try {
     store.db.transaction((tx) => {
       for (const row of legacy
@@ -50,8 +65,10 @@ export function importLegacyDatabase(
         .all() as LegacyOutage[]) {
         if (row.end_ts === null) {
           report.outages.open++;
+          openStart = Math.round(row.start_ts * 1000);
           continue;
         }
+        lastEnd = Math.max(lastEnd ?? 0, Math.round(row.end_ts * 1000));
         const result = tx
           .insert(outages)
           .values({
@@ -68,6 +85,36 @@ export function importLegacyDatabase(
         else report.outages.existing++;
       }
     });
+
+    if (options.adoptOpen && openStart !== null && !store.detector.load(options.siteId)) {
+      const start = openStart;
+      store.db.transaction((tx) => {
+        tx.insert(outages)
+          .values({
+            siteId: options.siteId,
+            start,
+            end: null,
+            source: "legacy",
+            createdAt: now,
+            updatedAt: now,
+          })
+          .onConflictDoNothing()
+          .run();
+      });
+      store.detector.save(
+        options.siteId,
+        {
+          power: "off",
+          since: start,
+          onSinceBeforeOutage: lastEnd !== null && lastEnd <= start ? lastEnd : null,
+          unverifiedOutage: null,
+          lastEsp: null,
+          lastPowerEvidence: null,
+        },
+        now,
+      );
+      report.adoptedOpenStart = start;
+    }
 
     const schedules = legacy
       .prepare(

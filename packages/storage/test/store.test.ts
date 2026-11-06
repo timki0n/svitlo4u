@@ -330,6 +330,7 @@ describe("legacy import", () => {
     const first = importLegacyDatabase(store, { siteId: SITE, path, format: "svitlo", now: T0 });
     expect(first).toEqual({
       outages: { imported: 1, existing: 0, open: 1 },
+      adoptedOpenStart: null,
       schedules: { imported: 1, unchanged: 0 },
       subscribers: { imported: 0, existing: 0 },
     });
@@ -344,6 +345,42 @@ describe("legacy import", () => {
       end: 720,
       type: "Definite",
     });
+  });
+
+  it("switch-over while power is off: --adopt-open continues the legacy outage", () => {
+    const { path, legacy } = legacyDb("svitlo.db", false);
+    const ins = legacy.prepare(
+      "INSERT INTO outages (start_ts, end_ts, created_at, updated_at) VALUES (?, ?, 0, 0)",
+    );
+    ins.run(T0 / 1000 - 7200, T0 / 1000 - 3600);
+    ins.run(T0 / 1000, null); // still going on
+    legacy.close();
+
+    const report = importLegacyDatabase(store, {
+      siteId: SITE,
+      path,
+      format: "svitlo",
+      now: T0 + 60_000,
+      adoptOpen: true,
+    });
+    expect(report.adoptedOpenStart).toBe(T0);
+    expect(store.outages.open(SITE)).toMatchObject({ start: T0, end: null });
+    expect(store.detector.load(SITE)).toEqual({
+      power: "off",
+      since: T0,
+      onSinceBeforeOutage: T0 - 3_600_000,
+      unverifiedOutage: null,
+      lastEsp: null,
+      lastPowerEvidence: null,
+    });
+    // The detector already has a state: a second run never overrides it.
+    const again = importLegacyDatabase(store, {
+      siteId: SITE,
+      path,
+      format: "svitlo",
+      adoptOpen: true,
+    });
+    expect(again.adoptedOpenStart).toBeNull();
   });
 
   it("light_bot.db: hour slots, dates with offsets, subscribers", () => {

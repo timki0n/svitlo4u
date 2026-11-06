@@ -7,7 +7,8 @@ export function buildServer(config: CoreConfig): FastifyInstance {
   });
   const startedAt = Date.now();
 
-  app.get("/health", async (_request, reply) => {
+  // Docker polls this every 15 s: keep it out of the request log.
+  app.get("/health", { logLevel: "warn" }, async (_request, reply) => {
     reply.header("cache-control", "no-store");
     return {
       status: "ok",
