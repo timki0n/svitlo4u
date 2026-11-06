@@ -4,6 +4,7 @@
  */
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { KYIV_TZ } from "@svitlo/domain";
 import { closeDatabase, createStore, openDatabase, type Store } from "@svitlo/storage";
 import type { FastifyInstance } from "fastify";
 import type { Transformer } from "grammy";
@@ -29,6 +30,7 @@ import type { CoreConfig } from "./config.ts";
 import { type Bus, EventBus } from "./runtime/bus.ts";
 import { type Clock, SystemClock } from "./runtime/clock.ts";
 import { buildServer } from "./server.ts";
+import { BackupService, loadBackupConfig } from "./services/backup.ts";
 import { PowerService } from "./services/power.ts";
 import { ReminderService } from "./services/reminders.ts";
 import { ScheduleService } from "./services/schedule.ts";
@@ -48,6 +50,8 @@ export type CoreDeps = {
   telegram?: { transformer: Transformer; botInfo: UserFromGetMe; paceMs?: number };
   /** Validate every API response against the contract (default: on under Vitest). */
   strictApi?: boolean;
+  /** Replace the network of the backup uploads (tests). */
+  backupFetch?: (request: Request) => Promise<Response>;
 };
 
 export type Core = {
@@ -64,6 +68,7 @@ export type Core = {
   telegram: TelegramChannel;
   notifier: Notifier;
   sse: SseHub;
+  backup: BackupService | null;
   stop: () => Promise<void>;
 };
 
@@ -104,6 +109,7 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
   // Channels subscribe before any service starts, so no event is missed.
   const senders = new Map<string, ChannelSender>();
   const pollers: YasnoPoller[] = [];
+  let backup: BackupService | null = null;
   const sse = new SseHub({ bus, state, clock });
   let notifier: Notifier | null = null;
   const outbox = new Outbox({
@@ -150,6 +156,7 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
     version: config.version,
     pollers: () => pollers,
     sseClients: () => sse.count,
+    backup: () => backup?.status ?? null,
     log,
   });
   notifier = notifierInstance;
@@ -276,6 +283,27 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
     ),
   );
 
+  // Nightly backup to S3-compatible storage (Cloudflare R2), when configured.
+  const backupConfig = loadBackupConfig(env, sites[0]?.tz ?? KYIV_TZ);
+  if (backupConfig && config.dbPath !== ":memory:") {
+    backup = new BackupService({
+      db,
+      config: backupConfig,
+      clock,
+      log,
+      onResult: (status, result) => notifierInstance.onBackup(status, result),
+      ...(deps.backupFetch ? { fetch: deps.backupFetch } : {}),
+    });
+    log.info(
+      {
+        bucket: backupConfig.bucket,
+        at: backupConfig.time,
+        next: new Date(backup.nextRunAt(clock.now())),
+      },
+      "backups enabled",
+    );
+  }
+
   for (const service of power.values()) service.start();
   for (const service of reminders) service.start();
   for (const poller of pollers) poller.start();
@@ -284,6 +312,7 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
   if (deps.listen ?? true) await app.listen({ host: config.host, port: config.port });
   outbox.start();
   telegram.start();
+  backup?.start();
   notifierInstance.coreStarted(previousRunAt);
 
   return {
@@ -300,7 +329,9 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
     telegram,
     notifier: notifierInstance,
     sse,
+    backup,
     stop: async () => {
+      backup?.stop();
       for (const poller of pollers) poller.stop();
       await udp?.close();
       for (const service of reminders) service.stop();

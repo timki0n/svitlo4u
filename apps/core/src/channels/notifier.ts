@@ -7,6 +7,7 @@ import type { OutboxItem, Store } from "@svitlo/storage";
 import type { YasnoPoller } from "../adapters/yasno.ts";
 import type { Bus, CoreEvents } from "../runtime/bus.ts";
 import type { Clock, Timer } from "../runtime/clock.ts";
+import type { BackupResult, BackupStatus } from "../services/backup.ts";
 import type { SiteStateStore } from "../services/state.ts";
 import type { SiteConfig } from "../sites-config.ts";
 import {
@@ -39,8 +40,12 @@ export type NotifierDeps = {
   version: string;
   pollers: () => readonly YasnoPoller[];
   sseClients: () => number;
+  /** Null when backups are not configured. */
+  backup?: () => BackupStatus | null;
   log: { info: (obj: object, msg: string) => void };
 };
+
+export const BACKUP_ALERT_AFTER = 3;
 
 export class Notifier {
   private readonly deps: NotifierDeps;
@@ -50,6 +55,7 @@ export class Notifier {
   private zigbeeTimer: Timer | null = null;
   private zigbeeAlerted = false;
   private yasnoAlerted = false;
+  private backupAlerted = false;
   private readonly rejectAlerts = new Map<string, number>();
 
   constructor(deps: NotifierDeps) {
@@ -161,6 +167,24 @@ export class Notifier {
     this.deps.telegram.alert(null, lines.join("\n"), { silent: down < 10 * 60_000 });
   }
 
+  /** Backup results: alert after a few failures in a row (night outages take the internet too). */
+  readonly onBackup = (status: BackupStatus, result: BackupResult | null): void => {
+    if (!result) {
+      if (status.failuresInRow === BACKUP_ALERT_AFTER) {
+        this.backupAlerted = true;
+        this.deps.telegram.alert(
+          null,
+          `⚠️ Бекап БД не вдався ${status.failuresInRow} рази поспіль: ${escapeHtml((status.lastError?.error ?? "?").slice(0, 300))}`,
+        );
+      }
+      return;
+    }
+    if (this.backupAlerted) {
+      this.backupAlerted = false;
+      this.deps.telegram.alert(null, "✅ Бекап БД знову працює.", { silent: true });
+    }
+  };
+
   /** Delivery gave up: tell the admin (never about alerts themselves — no loops). */
   readonly onUndelivered = (item: OutboxItem, error: string): void => {
     if (item.kind === "alert") return;
@@ -234,8 +258,23 @@ export class Notifier {
       `📅 Yasno: ${formatAge(lastYasno, now)}${yasnoFailures > 0 ? ` · помилок поспіль: ${yasnoFailures}` : ""}`,
       `📬 Черга: ${outbox.pending} в очікуванні · за добу ${outbox.sent} надіслано, ${outbox.failed} не доставлено`,
       `🔭 SSE: ${this.deps.sseClients()} ${plural(this.deps.sseClients(), "клієнт", "клієнти", "клієнтів")}`,
+      this.backupLine(now),
       `🧪 Telegram: ${site.telegram?.shadow ? "shadow (лише адмін-чат)" : "live"}`,
     ].join("\n");
+  }
+
+  private backupLine(now: number): string {
+    const status = this.deps.backup?.() ?? null;
+    if (!status) return "💾 Бекап: не налаштовано";
+    const failures = status.failuresInRow > 0 ? ` · помилок поспіль: ${status.failuresInRow}` : "";
+    if (status.lastOk) {
+      const kb = Math.max(1, Math.round(status.lastOk.gzBytes / 1024));
+      return `💾 Бекап: ${formatAge(status.lastOk.at, now)} (${kb} КБ)${failures}`;
+    }
+    if (status.lastError) {
+      return `💾 Бекап: помилка — ${escapeHtml(status.lastError.error.slice(0, 200))}${failures}`;
+    }
+    return "💾 Бекап: ще не було з моменту запуску";
   }
 
   private stats(siteId: string): string {

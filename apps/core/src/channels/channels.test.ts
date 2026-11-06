@@ -410,6 +410,36 @@ describe("Telegram commands (webhook)", () => {
     ]);
   });
 
+  it("/sub in a group: only its admins, and a topic subscribes just that topic", async () => {
+    const { core: c, tg } = await start(LIVE_CHATS);
+    const forum = { id: -1005, type: "supergroup" };
+    const inTopic = { message_thread_id: 12, is_topic_message: true };
+    await postUpdate(c, message(forum, "/sub", inTopic)); // Ann is a regular member
+    await vi.waitFor(() => expect(tg.sentTo(-1005)).toHaveLength(1));
+    expect(tg.sentTo(-1005)[0]?.payload).toMatchObject({
+      text: "🔒 Підписати групу чи топік на сповіщення може лише адміністратор групи.",
+      message_thread_id: 12,
+    });
+    expect(c.store.telegram.list("4u")).toEqual([]);
+
+    tg.respondWith((call) =>
+      call.method === "getChatMember"
+        ? { ok: true, result: { status: "administrator", user: { id: 8 } } }
+        : undefined,
+    );
+    await postUpdate(
+      c,
+      message(forum, "/sub", { ...inTopic, from: { id: 8, is_bot: false, first_name: "Admin" } }),
+    );
+    await vi.waitFor(() => expect(c.store.telegram.list("4u")).toHaveLength(1));
+    expect(c.store.telegram.list("4u")[0]).toMatchObject({ chatId: -1005, threadId: 12 });
+
+    // Announcements now reach that topic.
+    c.bus.emit("power.changed", powerEvent("off"));
+    await flush(c);
+    expect(tg.sentTo(-1005).at(-1)?.payload).toMatchObject({ message_thread_id: 12 });
+  });
+
   it("deletes commands in blocked chats and non-admin messages in silent topics", async () => {
     const { core: c, tg } = await start(LIVE_CHATS);
     await postUpdate(c, message({ id: -1003, type: "supergroup" }, "/status"));
@@ -515,6 +545,26 @@ describe("admin alerts", () => {
       "✅ Yasno знову відповідає (після 4 помилок).",
     ]);
     expect(alerts.filter((t) => t.includes("heartbeat"))).toHaveLength(2);
+  });
+
+  it("backup: alert after 3 failures in a row, then once when it works again", async () => {
+    const { core: c, tg } = await start(LIVE_CHATS);
+    const failed = (n: number) => ({
+      lastOk: null,
+      lastError: { at: T0, error: "upload failed: 403 AccessDenied" },
+      failuresInRow: n,
+    });
+    for (const n of [1, 2, 3, 4]) c.notifier.onBackup(failed(n), null);
+    c.notifier.onBackup(
+      { lastOk: { at: T0, gzBytes: 50_000, key: "k" }, lastError: null, failuresInRow: 0 },
+      { keys: ["k"], bytes: 200_000, gzBytes: 50_000, ms: 300, counts: {} },
+    );
+    await flush(c);
+    const alerts = tg.sentTo(ADMIN).map((m) => String(m.payload.text));
+    expect(alerts.filter((t) => t.includes("Бекап"))).toEqual([
+      "⚠️ Бекап БД не вдався 3 рази поспіль: upload failed: 403 AccessDenied",
+      "✅ Бекап БД знову працює.",
+    ]);
   });
 
   it("tells how long the core was down", async () => {

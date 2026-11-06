@@ -31,6 +31,7 @@ import {
 import {
   escapeHtml,
   latencyFooter,
+  SUB_ADMINS_ONLY_TEXT,
   shadowHeader,
   startText,
   statusText,
@@ -424,7 +425,18 @@ export class TelegramChannel {
 
     bot.command("sub", async (ctx) => {
       const chatId = ctx.chat.id;
-      const threadId = ctx.message?.is_topic_message ? (ctx.message.message_thread_id ?? 0) : 0;
+      const msg = ctx.message;
+      // In a group /sub (un)subscribes everyone there: only the group's admins may do it.
+      if (ctx.chat.type !== "private" && !isAdminChat(ctx)) {
+        const admin =
+          msg?.sender_chat?.id === chatId ||
+          (msg?.from !== undefined && (await siteBot.isChatAdmin(ctx, chatId, msg.from.id)));
+        if (!admin) {
+          await reply(ctx, SUB_ADMINS_ONLY_TEXT);
+          return;
+        }
+      }
+      const threadId = msg?.is_topic_message ? (msg.message_thread_id ?? 0) : 0;
       const subscribed = store.telegram.toggle(site.id, chatId, threadId, clock.now());
       await reply(ctx, subscribeText(subscribed));
       this.alert(

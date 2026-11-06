@@ -139,6 +139,9 @@ export function subscribeText(subscribed: boolean): string {
     : "🔕 Ви відписались від сповіщень.\nЩе раз /sub — щоб підписатись знову.";
 }
 
+export const SUB_ADMINS_ONLY_TEXT =
+  "🔒 Підписати групу чи топік на сповіщення може лише адміністратор групи.";
+
 export function shadowHeader(siteId: string, targets: number): string {
   return `🧪 <b>shadow</b> · ${escapeHtml(siteId)} → ${targets} ${plural(targets, "чат", "чати", "чатів")}`;
 }

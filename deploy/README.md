@@ -110,6 +110,28 @@ docker compose run --rm -v /tmp/legacy:/legacy core node packages/storage/src/cl
 
 UDP 5005 must be free: the old bot listens there.
 
+### Backups (Cloudflare R2)
+
+Every night at `BACKUP_TIME` (03:30 Kyiv) the core makes a consistent copy of the database
+(`VACUUM INTO`), checks its integrity, gzips it and uploads it to
+`<prefix>daily/svitlo4u-YYYY-MM-DD.db.gz`; on the 1st of a month also to
+`<prefix>monthly/svitlo4u-YYYY-MM.db.gz`. A failed run is retried every 30 minutes; after three
+failures in a row the admin chat gets an alert. `/health` shows the last backup.
+
+1. Cloudflare dashboard → R2 Object Storage → **Create bucket**, e.g. `svitlo4u-backups`
+   (location: Automatic, storage class: Standard).
+2. Bucket → Settings → **Object lifecycle rules** → add:
+   - prefix `svitlo4u/daily/` → delete objects 30 days after upload;
+   - prefix `svitlo4u/monthly/` → delete after 365 days (or keep).
+3. R2 → **Manage API tokens** → Create **Account API token** → permission _Object Read & Write_,
+   _Apply to specific buckets only_ → the backup bucket. Copy the Access Key ID, the Secret Access
+   Key and the S3 endpoint `https://<account id>.r2.cloudflarestorage.com` (shown once).
+4. Put them into `.env` (`BACKUP_S3_*`, `BACKUP_PREFIX=svitlo4u/`), then `docker compose up -d core`.
+5. Check right away: `docker compose exec core node apps/core/src/cli/backup.ts`.
+
+Restore: download an object, `gunzip` it, stop `core`, replace `data/svitlo4u.db` (remove
+`svitlo4u.db-wal` / `-shm`), start `core`.
+
 ## Run / update
 
 ```bash
