@@ -36,8 +36,14 @@ export type CoreEvents = {
   "schedule.notification": { siteId: string; notification: ScheduleNotification };
   "reminder.due": { siteId: string; event: ReminderEvent; power: "on" | "off" | "unknown" };
   "voltage.sample": { siteId: string; t: number; voltage: number };
-  /** Low or high voltage confirmed: average of the check (V), when it began. */
-  "voltage.alert": { siteId: string; kind: "low" | "high"; voltage: number; since: number };
+  /** Low or high voltage confirmed: average of the check (V), when it began; critical = very low. */
+  "voltage.alert": {
+    siteId: string;
+    kind: "low" | "high";
+    critical: boolean;
+    voltage: number;
+    since: number;
+  };
   /** Back to normal for 2 minutes: their average (V). */
   "voltage.stabilized": {
     siteId: string;

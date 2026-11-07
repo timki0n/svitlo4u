@@ -215,7 +215,13 @@ for (const [kind, voltage, stable, minutes, name] of [
   ["high", 251, 236, 6, "Висока"],
 ] as const) {
   await label(`${name} напруга (підтверджено за хвилину)`);
-  core.bus.emit("voltage.alert", { siteId: "4u", kind, voltage, since: Date.now() - 45_000 });
+  core.bus.emit("voltage.alert", {
+    siteId: "4u",
+    kind,
+    critical: false,
+    voltage,
+    since: Date.now() - 45_000,
+  });
   await settle();
 
   await label("Напругу стабілізовано (2 хв у нормі)");

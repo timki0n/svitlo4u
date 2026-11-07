@@ -349,9 +349,14 @@ function onEsp(s: DetectorState, sample: EspSample, config: DetectorConfig): Det
     if (sample.resetReason && NON_POWER_RESETS.has(sample.resetReason)) {
       return { state: next, effects };
     }
+    // Power came back (the plug said so) after the ESP's last packet: this boot is the end of
+    // that known outage, not another one.
+    if (s.since !== null && s.since > gapStart) return { state: next, effects };
     if (gapIncludesDowntime) {
-      // The mains went down while the core was not running.
-      const offAt = s.lastPowerEvidence ?? gapStart;
+      // The mains went down while the core was not running. Evidence newer than the boot (the
+      // plug after the restart) says nothing about when it went down: the last packet does.
+      const evidence = s.lastPowerEvidence ?? gapStart;
+      const offAt = evidence <= bootAt ? evidence : Math.min(gapStart, bootAt);
       effects.push(powerEffect("off", offAt, sample.t, "downtime", true));
       effects.push(powerEffect("on", bootAt, sample.t, "esp-reboot"));
       next = { ...next, since: bootAt, onSinceBeforeOutage: s.since, unverifiedOutage: null };

@@ -20,7 +20,9 @@ function setup() {
   });
   const events: string[] = [];
   bus.on("voltage.alert", (e) => {
-    events.push(`${e.kind} ${e.voltage} since ${(e.since - T0) / 1000}`);
+    events.push(
+      `${e.critical ? "critical " : ""}${e.kind} ${e.voltage} since ${(e.since - T0) / 1000}`,
+    );
   });
   bus.on("voltage.stabilized", (e) => {
     events.push(`stabilized after ${e.kind}: ${e.voltage} at ${(e.at - T0) / 1000}`);
@@ -129,6 +131,65 @@ describe("voltage watch", () => {
       [165, 236],
     ]);
     expect(events).toEqual(["high 249 since 0", "stabilized after high: 236 at 165"]);
+  });
+
+  it("below 170 V: a second, critical alert once three readings in a row fall that far", () => {
+    // 2026-11-07 06:05: 189 V, then 104–170 V for half an hour with no word about it.
+    const { events, readings } = setup();
+    readings([
+      [0, 189],
+      [15, 188],
+      [30, 187],
+      [45, 160], // one reading is not enough
+      [60, 182],
+      [75, 109],
+      [90, 104],
+      [105, 111],
+      [120, 120],
+      [135, 140],
+    ]);
+    expect(events).toEqual(["low 188 since 0", "critical low 108 since 0"]);
+  });
+
+  it("critical straight away when the check itself is below 170 V", () => {
+    const { events, readings } = setup();
+    readings([
+      [0, 150],
+      [15, 140],
+      [30, 145],
+      [45, 120],
+      [60, 110],
+      [75, 100],
+    ]);
+    expect(events).toEqual(["critical low 145 since 0"]);
+  });
+
+  it("quiet for 2 minutes after the power returns, watched again afterwards", () => {
+    const { bus, monitor, events, readings } = setup();
+    bus.emit("power.changed", {
+      siteId: "4u",
+      state: "on",
+      at: s(0),
+      detectedAt: s(0),
+      reason: "plug",
+      approximate: false,
+      previous: "off",
+      previousSince: s(-3600),
+    });
+    // 2026-11-07 07:13: 181 V at the return, 232 V two minutes later.
+    readings([
+      [1, 181],
+      [11, 181],
+      [60, 216],
+      [100, 229],
+    ]);
+    expect(monitor.state).toBe("idle");
+    readings([
+      [121, 185],
+      [136, 184],
+      [151, 183],
+    ]);
+    expect(events).toEqual(["low 184 since 121"]);
   });
 
   it("an outage ends the episode silently; 0 V is the outage detector's business", () => {

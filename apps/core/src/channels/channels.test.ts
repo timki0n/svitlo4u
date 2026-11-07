@@ -253,7 +253,13 @@ describe("Telegram channel", () => {
 
   it("announces low and high voltage and when it stabilized", async () => {
     const { core: c, tg } = await start(LIVE_CHATS);
-    c.bus.emit("voltage.alert", { siteId: "4u", kind: "low", voltage: 189, since: T0 });
+    c.bus.emit("voltage.alert", {
+      siteId: "4u",
+      kind: "low",
+      critical: false,
+      voltage: 189,
+      since: T0,
+    });
     c.bus.emit("voltage.stabilized", {
       siteId: "4u",
       kind: "low",
@@ -261,7 +267,20 @@ describe("Telegram channel", () => {
       since: T0,
       at: T0 + 14 * 60_000,
     });
-    c.bus.emit("voltage.alert", { siteId: "4u", kind: "high", voltage: 251, since: T0 });
+    c.bus.emit("voltage.alert", {
+      siteId: "4u",
+      kind: "high",
+      critical: false,
+      voltage: 251,
+      since: T0,
+    });
+    c.bus.emit("voltage.alert", {
+      siteId: "4u",
+      kind: "low",
+      critical: true,
+      voltage: 104,
+      since: T0,
+    });
     c.bus.emit("voltage.stabilized", {
       siteId: "4u",
       kind: "high",
@@ -274,6 +293,7 @@ describe("Telegram channel", () => {
       "⚠️ Низька напруга: 189 В.\nБережіть техніку.",
       "✅ Напругу стабілізовано: 206 В (середня за 2 хв).\nНизька напруга трималася 14 хв.",
       "⚠️ Висока напруга: 251 В.\nБережіть техніку.",
+      "🚨 Критично низька напруга: 104 В.\nВимкніть чутливу техніку.",
       "✅ Напругу стабілізовано: 236 В (середня за 2 хв).\nВисока напруга трималася 6 хв.",
     ]);
   });

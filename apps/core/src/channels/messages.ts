@@ -66,7 +66,8 @@ function lateLine(
 
 const VOLTAGE_KIND = { low: "Низька", high: "Висока" } as const;
 
-export function voltageAlertText(kind: "low" | "high", voltage: number): string {
+export function voltageAlertText(kind: "low" | "high", voltage: number, critical = false): string {
+  if (critical) return `🚨 Критично низька напруга: ${voltage} В.\nВимкніть чутливу техніку.`;
   return `⚠️ ${VOLTAGE_KIND[kind]} напруга: ${voltage} В.\nБережіть техніку.`;
 }
 

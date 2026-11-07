@@ -14,7 +14,7 @@ import {
   type ScheduleStatus,
   type VoltageSample,
 } from "@svitlo/domain";
-import { and, asc, desc, eq, gt, gte, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
 import type { Db } from "./db.ts";
 import {
   detectorState,
@@ -278,6 +278,22 @@ export function createStore(db: Db) {
           .orderBy(desc(scheduleSnapshots.fetchedAt))
           .get();
         return row ? { day: rowToDay(row), fetchedAt: row.fetchedAt } : null;
+      },
+      /** The latest published version of `date` (a schedule with or without outages). */
+      lastPublished(siteId: string, date: string): DaySchedule | null {
+        const row = db
+          .select()
+          .from(scheduleSnapshots)
+          .where(
+            and(
+              eq(scheduleSnapshots.siteId, siteId),
+              eq(scheduleSnapshots.date, date),
+              inArray(scheduleSnapshots.status, ["ScheduleApplies", "NoOutages"]),
+            ),
+          )
+          .orderBy(desc(scheduleSnapshots.fetchedAt))
+          .get();
+        return row ? rowToDay(row) : null;
       },
       /** Every stored version (for schedule-change analytics). */
       versions(siteId: string, fromDate: string, toDate: string): ScheduleSnapshot[] {

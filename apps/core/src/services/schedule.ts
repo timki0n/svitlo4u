@@ -83,6 +83,7 @@ export class ScheduleService {
       tz: site.tz,
       linkUrl: site.linkUrl,
       lastFixed: (date: string) => lastFixedSchedule(store, site, date)?.outages ?? null,
+      lastPublished: (date: string) => store.schedules.lastPublished(site.id, date),
     };
 
     // Baselines come from the DB before this update is stored.

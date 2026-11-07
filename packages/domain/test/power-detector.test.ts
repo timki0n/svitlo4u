@@ -448,6 +448,42 @@ describe("power detector — restarts of the core", () => {
     ]);
   });
 
+  it("restart during an outage: the plug brings the power back, then the ESP boots → one 'on'", () => {
+    // 2026-11-07 05:18: the core restarted at night while the power was off; the plug spoke first,
+    // the ESP's fresh boot then looked like "an outage while the core was down".
+    const { state } = simulate({
+      start: T0,
+      inputs: espPackets(s(0), s(60), UP0),
+      plug: dead,
+      until: s(100),
+    });
+    expect(state.power).toBe("off");
+    const { effects, state: after } = simulate({
+      start: s(900),
+      persisted: persistDetector(state),
+      inputs: [...plugReports(s(1000), s(1100)), ...espPackets(s(1007), s(1100), 4)],
+      plug: alive,
+    });
+    expect(readable(effects).filter((e) => !("probe" in e))).toEqual([
+      { on: 1000, detected: 1000, reason: "plug" },
+    ]);
+    expect(after.power).toBe("on");
+  });
+
+  it("an outage during the downtime never ends before it starts, even after a plug report", () => {
+    const { effects } = simulate({
+      start: s(600),
+      persisted: { ...persistedOn(), lastPowerEvidence: s(60) },
+      inputs: [...plugReports(s(601), s(640)), ...espPackets(s(605), s(640), 30)],
+      plug: alive,
+    });
+    const power = readable(effects).filter((e) => "reason" in e);
+    expect(power).toEqual([
+      { off: 60, detected: 605, reason: "downtime", approximate: true },
+      { on: 575, detected: 605, reason: "esp-reboot" },
+    ]);
+  });
+
   it("restart while an outage was open → the next ESP boot closes it", () => {
     const { state } = simulate({
       config: { zigbee: false },

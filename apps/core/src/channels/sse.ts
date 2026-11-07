@@ -68,7 +68,12 @@ export class SseHub {
         this.send(e.siteId, "voltage", { t: e.t, voltage: e.voltage }),
       ),
       bus.on("voltage.alert", (e) =>
-        this.send(e.siteId, "voltage-alert", { kind: e.kind, voltage: e.voltage, since: e.since }),
+        this.send(e.siteId, "voltage-alert", {
+          kind: e.kind,
+          critical: e.critical,
+          voltage: e.voltage,
+          since: e.since,
+        }),
       ),
       bus.on("voltage.stabilized", (e) =>
         this.send(e.siteId, "voltage-stabilized", {

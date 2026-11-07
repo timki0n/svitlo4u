@@ -164,9 +164,9 @@ describe("golden: production schedule monitors", () => {
     "tomorrow:waiting-to-no-outages": [null, "tomorrow_published"],
     "tomorrow:waiting-to-applies-empty": [null, "tomorrow_published"],
     "tomorrow:applies-slots-changed": [null, "tomorrow_changed"],
-    "tomorrow:waiting-to-emergency": [null, "tomorrow_emergency"],
+    "tomorrow:waiting-to-emergency": [null, null],
     "tomorrow:emergency-to-applies": [null, "tomorrow_published"],
-    "tomorrow:applies-waiting-applies": [null, null, "tomorrow_published"],
+    "tomorrow:applies-waiting-applies": [null, null, "tomorrow_changed"],
     "tomorrow:rollover-published": [null, "tomorrow_published"],
   };
 
@@ -186,9 +186,10 @@ describe("golden: production schedule monitors", () => {
         return result.notification?.kind ?? null;
       });
       expect(kinds).toEqual(expectedKinds[id]);
-      // Where legacy already notified, the text is the same.
+      // Where legacy already notified, we do too (a comeback that differs is a change).
       scenario.iterations.forEach((iteration, i) => {
-        if (iteration.telegram.length > 0) expect(kinds[i]).toBe("tomorrow_published");
+        if (iteration.telegram.length > 0)
+          expect(kinds[i]).toMatch(/^tomorrow_(published|changed)$/);
       });
     },
   );

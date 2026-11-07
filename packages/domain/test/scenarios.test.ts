@@ -232,16 +232,59 @@ describe("R8: tomorrow monitor edge cases", () => {
     ]);
   });
 
+  const B: [number, number, string][] = [
+    [0, 600, "NotPlanned"],
+    [600, 720, "Definite"],
+    [720, 1440, "NotPlanned"],
+  ];
+
   it("withdrawn schedule is silent, the same one coming back is not news", () => {
     expect(
       run(day("ScheduleApplies", A), day("WaitingForSchedule"), day("ScheduleApplies", A)),
+    ).toEqual([null, null, null]);
+  });
+
+  it("emergency for tomorrow is never announced; after it only a real change is news", () => {
+    // 2026-11-07: emergency at 06:53, the same schedule back at 07:45.
+    expect(
+      run(
+        day("ScheduleApplies", A),
+        day("EmergencyShutdowns"),
+        day("EmergencyShutdowns"),
+        day("ScheduleApplies", A),
+      ),
+    ).toEqual([null, null, null, null]);
+    expect(
+      run(day("ScheduleApplies", A), day("EmergencyShutdowns"), day("ScheduleApplies", B)),
+    ).toEqual([null, null, "tomorrow_changed"]);
+    expect(
+      run(day("WaitingForSchedule"), day("EmergencyShutdowns"), day("ScheduleApplies", A)),
     ).toEqual([null, null, "tomorrow_published"]);
   });
 
-  it("emergency is announced once", () => {
-    expect(
-      run(day("ScheduleApplies", A), day("EmergencyShutdowns"), day("EmergencyShutdowns")),
-    ).toEqual([null, "tomorrow_emergency", null]);
+  it("after a restart the stored published version still counts", () => {
+    let state: TrackedDay | null = null;
+    const poll = (snapshot: DaySchedule) => {
+      const result = pollTomorrow(
+        {
+          tz,
+          linkUrl: LEGACY_LINK,
+          mode: "all-changes",
+          lastPublished: () => day("ScheduleApplies", A),
+        },
+        state,
+        snapshot,
+        "2026-11-11",
+      );
+      state = result.state;
+      return result.notification?.kind ?? null;
+    };
+    // Baseline from the stored emergency version; the published one before it comes from the DB.
+    expect([
+      poll(day("EmergencyShutdowns")),
+      poll(day("ScheduleApplies", A)),
+      poll(day("ScheduleApplies", B)),
+    ]).toEqual([null, null, "tomorrow_changed"]);
   });
 
   it("texts", () => {
@@ -268,9 +311,6 @@ describe("R8: tomorrow monitor edge cases", () => {
       `🔔 ${link("Графік на завтра")} змінено!\n\n📅 Розклад на 11.11.2026\n\n1. 10:00 – 12:00 (2 год.)`,
     );
     expect(changed?.web.title).toBe("🔔 Графік на завтра змінено!");
-    const emergency = poll(day("EmergencyShutdowns"));
-    expect(emergency?.telegramText).toBe(
-      `🔔 На завтра оголошено екстрені відключення!\n\n📅 Розклад на 11.11.2026\n🚨 ${link("Графік")} не діє. Діють екстрені відключення.`,
-    );
+    expect(poll(day("EmergencyShutdowns"))).toBeNull();
   });
 });

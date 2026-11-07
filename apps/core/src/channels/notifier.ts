@@ -93,7 +93,8 @@ export class Notifier {
         deps.images.render(e.siteId, day).then(announce, () => announce(null));
       }),
       bus.on("voltage.alert", (e) => {
-        deps.telegram.announce(e.siteId, "voltage", voltageAlertText(e.kind, e.voltage), {
+        const text = voltageAlertText(e.kind, e.voltage, e.critical);
+        deps.telegram.announce(e.siteId, "voltage", text, {
           eventAt: e.since,
           detectedAt: deps.clock.now(),
         });

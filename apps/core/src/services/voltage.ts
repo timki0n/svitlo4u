@@ -8,6 +8,10 @@
  * voltage has stayed back inside the normal band (with a small margin against flapping) for a
  * whole `recoverWindowMs`, "stabilized" follows with the average of that window. A power outage
  * ends the episode silently — that is the outage detector's news.
+ *
+ * Below `critical` the low alert is critical: straight away when the check itself confirms it,
+ * or as a second alert of the episode once `minConfirmSamples` readings in a row fall that far.
+ * For `afterPowerOnMs` after the power returns the voltage settles and is not watched.
  */
 import type { Bus } from "../runtime/bus.ts";
 import type { Clock, Timer } from "../runtime/clock.ts";
@@ -17,6 +21,8 @@ export type VoltageKind = "low" | "high";
 export type VoltageWatchConfig = {
   /** Below this the voltage is low (V). */
   low: number;
+  /** Below this low voltage is critical (V). */
+  critical: number;
   /** From this up the voltage is high (V). */
   high: number;
   /** Back to normal needs this far inside the band (V), against flapping at the edge. */
@@ -27,10 +33,13 @@ export type VoltageWatchConfig = {
   minConfirmSamples: number;
   recoverWindowMs: number;
   readEveryMs: number;
+  /** No alerts this long after the power came back (the voltage settles first). */
+  afterPowerOnMs: number;
 };
 
 export const DEFAULT_VOLTAGE_WATCH: VoltageWatchConfig = {
   low: 190,
+  critical: 170,
   high: 245,
   margin: 3,
   noVoltageMax: 50,
@@ -38,6 +47,7 @@ export const DEFAULT_VOLTAGE_WATCH: VoltageWatchConfig = {
   minConfirmSamples: 3,
   recoverWindowMs: 2 * 60_000,
   readEveryMs: 15_000,
+  afterPowerOnMs: 2 * 60_000,
 };
 
 type Sample = { t: number; v: number };
@@ -52,6 +62,10 @@ export class VoltageMonitor {
   private phase: "idle" | "confirming" | "alerted" = "idle";
   private kind: VoltageKind = "low";
   private samples: Sample[] = [];
+  /** Alerted low: the current run of readings below `critical`. */
+  private criticalRun: Sample[] = [];
+  private criticalSent = false;
+  private quietUntil = Number.NEGATIVE_INFINITY;
   private startedAt = 0;
   private readTimer: Timer | null = null;
   private deadline: Timer | null = null;
@@ -74,7 +88,9 @@ export class VoltageMonitor {
         if (e.siteId === this.siteId) this.onSample(e.t, e.voltage);
       }),
       deps.bus.on("power.changed", (e) => {
-        if (e.siteId === this.siteId && e.state === "off") this.reset();
+        if (e.siteId !== this.siteId) return;
+        this.reset();
+        if (e.state === "on") this.quietUntil = this.clock.now() + this.config.afterPowerOnMs;
       }),
     );
   }
@@ -102,6 +118,7 @@ export class VoltageMonitor {
 
   private onSample(t: number, v: number): void {
     if (v <= this.config.noVoltageMax) return;
+    if (t < this.quietUntil) return;
     if (this.phase === "idle") {
       const kind = this.abnormal(v);
       if (!kind) return;
@@ -129,6 +146,13 @@ export class VoltageMonitor {
       }
       return;
     }
+    if (this.kind === "low" && !this.criticalSent) {
+      this.criticalRun = v < this.config.critical ? [...this.criticalRun, { t, v }] : [];
+      if (this.criticalRun.length >= this.config.minConfirmSamples) {
+        this.criticalSent = true;
+        this.emitAlert(average(this.criticalRun), true);
+      }
+    }
     // Alerted: `samples` is the current run of stable readings; anything else starts it over.
     if (!this.stable(v)) {
       this.samples = [];
@@ -149,16 +173,28 @@ export class VoltageMonitor {
   }
 
   private alert(): void {
+    const voltage = average(this.samples);
+    const recent = this.samples.slice(-this.config.minConfirmSamples);
+    const critical =
+      this.kind === "low" &&
+      (voltage < this.config.critical || recent.every((s) => s.v < this.config.critical));
+    this.criticalSent = critical;
+    this.emitAlert(critical ? average(recent) : voltage, critical);
+    this.phase = "alerted";
+    this.samples = []; // the recovery is measured afresh
+    this.criticalRun = [];
+    this.clock.clearTimer(this.deadline);
+    this.deadline = null;
+  }
+
+  private emitAlert(voltage: number, critical: boolean): void {
     this.bus.emit("voltage.alert", {
       siteId: this.siteId,
       kind: this.kind,
-      voltage: Math.round(average(this.samples)),
+      critical,
+      voltage: Math.round(voltage),
       since: this.startedAt,
     });
-    this.phase = "alerted";
-    this.samples = []; // the recovery is measured afresh
-    this.clock.clearTimer(this.deadline);
-    this.deadline = null;
   }
 
   private scheduleRead(): void {
@@ -173,6 +209,8 @@ export class VoltageMonitor {
   private reset(): void {
     this.phase = "idle";
     this.samples = [];
+    this.criticalRun = [];
+    this.criticalSent = false;
     this.clock.clearTimer(this.readTimer);
     this.clock.clearTimer(this.deadline);
     this.readTimer = null;

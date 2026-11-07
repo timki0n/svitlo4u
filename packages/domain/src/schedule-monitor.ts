@@ -20,13 +20,13 @@ export type TrackedDay = {
   /** Raw status + every slot (incl. NotPlanned): any difference is a change. */
   signature: string;
   withoutOutages: boolean;
+  /** Tomorrow: the last published schedule seen for this date (to tell news from a comeback). */
+  published?: PublishedRef | null;
 };
 
-export type ScheduleNotificationKind =
-  | "today_updated"
-  | "tomorrow_published"
-  | "tomorrow_changed"
-  | "tomorrow_emergency";
+type PublishedRef = { signature: string; withoutOutages: boolean };
+
+export type ScheduleNotificationKind = "today_updated" | "tomorrow_published" | "tomorrow_changed";
 
 export type ScheduleNotification = {
   kind: ScheduleNotificationKind;
@@ -73,7 +73,14 @@ function notification(
 /** R15: outages of the schedule published for a date before emergency shutdowns; absent → legacy texts. */
 export type MonitorTextContext = TextContext & {
   lastFixed?: (date: string) => TimedSlot[] | null;
+  /** The latest stored published version of a date (after a restart: was tomorrow out already?). */
+  lastPublished?: (date: string) => DaySchedule | null;
 };
+
+function publishedRef(day: DaySchedule | null | undefined): PublishedRef | null {
+  if (!day || !isPublishedSchedule(day.status)) return null;
+  return { signature: daySignature(day), withoutOutages: isScheduleWithoutOutages(day) };
+}
 
 function dayBody(ctx: MonitorTextContext, info: DayInfo): string {
   const lastFixed =
@@ -109,7 +116,12 @@ export function pollToday(
   };
 }
 
-/** One poll of tomorrow's schedule. Mode "published-only" is legacy, "all-changes" is R8. */
+/**
+ * One poll of tomorrow's schedule. Mode "published-only" is legacy; "all-changes" (R8) announces a
+ * schedule that appeared and one that really changed against the last published version —
+ * never emergency shutdowns (only today's are news, as a change of today) nor a withdrawn
+ * schedule coming back unchanged.
+ */
 export function pollTomorrow(
   ctx: MonitorTextContext & { mode: TomorrowMonitorMode },
   previous: TrackedDay | null,
@@ -117,7 +129,7 @@ export function pollTomorrow(
   fallbackDate: string,
 ): PollResult {
   const info = dayInfo(day, fallbackDate, ctx.tz);
-  const next = track(day, info.date);
+  const tracked = track(day, info.date);
   const body = () => dayBody(ctx, info);
   const published = () =>
     notification(
@@ -126,28 +138,37 @@ export function pollTomorrow(
       "🔔 З'явився графік на завтра!",
       body(),
     );
-  const emergency = () =>
+  const changed = () =>
     notification(
-      "tomorrow_emergency",
-      "🔔 На завтра оголошено екстрені відключення!",
-      "🔔 На завтра оголошено екстрені відключення!",
+      "tomorrow_changed",
+      `🔔 ${scheduleLink(ctx, "Графік на завтра")} змінено!`,
+      "🔔 Графік на завтра змінено!",
       body(),
     );
+  const sameDate = previous !== null && previous.date === tracked.date;
+  // The last published version before this poll: carried along, or from the DB for a new date.
+  const before = sameDate
+    ? (previous.published ?? null)
+    : publishedRef(ctx.lastPublished?.(tracked.date));
+  const next: TrackedDay = { ...tracked, published: publishedRef(day) ?? before };
 
   if (!previous) return { state: next, persist: true, notification: null };
 
-  if (previous.date !== next.date) {
+  if (!sameDate) {
     // Midnight: a new "tomorrow". Legacy never announced it, even when already published.
-    let result: ScheduleNotification | null = null;
-    if (ctx.mode === "all-changes") {
-      if (next.status === "EmergencyShutdowns") result = emergency();
-      else if (isPublishedSchedule(next.status)) result = published();
-    }
+    const result =
+      ctx.mode === "all-changes" && isPublishedSchedule(next.status) && before === null
+        ? published()
+        : null;
     return { state: next, persist: true, notification: result };
   }
 
   if (previous.signature === next.signature)
-    return { state: previous, persist: false, notification: null };
+    return {
+      state: { ...previous, published: next.published },
+      persist: false,
+      notification: null,
+    };
 
   if (ctx.mode === "published-only") {
     const appeared = previous.status === "WaitingForSchedule" && isPublishedSchedule(next.status);
@@ -155,21 +176,10 @@ export function pollTomorrow(
   }
 
   let result: ScheduleNotification | null = null;
-  if (next.status === "EmergencyShutdowns" && previous.status !== "EmergencyShutdowns") {
-    result = emergency();
-  } else if (!isPublishedSchedule(previous.status) && isPublishedSchedule(next.status)) {
-    result = published();
-  } else if (
-    isPublishedSchedule(previous.status) &&
-    isPublishedSchedule(next.status) &&
-    !(previous.withoutOutages && next.withoutOutages)
-  ) {
-    result = notification(
-      "tomorrow_changed",
-      `🔔 ${scheduleLink(ctx, "Графік на завтра")} змінено!`,
-      "🔔 Графік на завтра змінено!",
-      body(),
-    );
+  if (isPublishedSchedule(next.status)) {
+    if (before === null) result = published();
+    else if (before.signature !== next.signature && !(before.withoutOutages && next.withoutOutages))
+      result = changed();
   }
   return { state: next, persist: true, notification: result };
 }

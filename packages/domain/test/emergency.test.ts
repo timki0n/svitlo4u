@@ -6,6 +6,7 @@ import {
   formatDayMessage,
   KYIV_TZ,
   parseDay,
+  pollToday,
   pollTomorrow,
   timedOutageSlots,
 } from "../src/index.ts";
@@ -51,27 +52,41 @@ describe("emergency day over its own published schedule", () => {
     );
   });
 
-  it("the 'emergency tomorrow' notification carries it too", () => {
-    const previous = {
-      date: "2026-11-07",
-      status: "ScheduleApplies" as const,
-      rawStatus: "ScheduleApplies",
-      signature: "published",
-      withoutOutages: false,
+  it("emergency is news of the day itself only, as a change of today with that schedule", () => {
+    const ctx = {
+      ...text,
+      lastFixed: (date: string) =>
+        date === "2026-11-07" ? timedOutageSlots(published07, date, KYIV_TZ) : null,
     };
-    const result = pollTomorrow(
-      {
-        ...text,
-        mode: "all-changes",
-        lastFixed: (date) =>
-          date === "2026-11-07" ? timedOutageSlots(published07, date, KYIV_TZ) : null,
-      },
-      previous,
+    // Announced for tomorrow: nothing.
+    const tomorrow = pollTomorrow(
+      { ...ctx, mode: "all-changes" },
+      pollTomorrow({ ...ctx, mode: "all-changes" }, null, published07, "2026-11-07").state,
       day("2026-11-07", "EmergencyShutdowns"),
       "2026-11-07",
     );
-    expect(result.notification?.telegramText).toContain(
-      "Діють екстрені відключення.\n\nОстанній згаданий графік:\n1. 08:00 – 12:00",
+    expect(tomorrow.notification).toBeNull();
+
+    // Midnight: the day starts with them — still nothing (no messages at midnight).
+    const yesterday = pollToday(ctx, null, day("2026-11-06", "ScheduleApplies"), "2026-11-06");
+    const midnight = pollToday(
+      ctx,
+      yesterday.state,
+      day("2026-11-07", "EmergencyShutdowns"),
+      "2026-11-07",
+    );
+    expect(midnight.notification).toBeNull();
+
+    // Declared during the day: a change of today, with the schedule they replaced.
+    const morning = pollToday(
+      ctx,
+      pollToday(ctx, null, published07, "2026-11-07").state,
+      day("2026-11-07", "EmergencyShutdowns"),
+      "2026-11-07",
+    );
+    expect(morning.notification?.kind).toBe("today_updated");
+    expect(morning.notification?.telegramText).toContain(
+      `📅 Розклад на 07.11.2026\n${EMERGENCY}\n\nОстанній згаданий графік:\n1. 08:00 – 12:00 (4 год.)`,
     );
   });
 });
