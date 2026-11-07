@@ -244,6 +244,40 @@ describe("ScheduleService", () => {
       events.map((e) => (e.payload as CoreEvents["schedule.notification"]).notification?.kind),
     ).toEqual(["today_updated"]);
   });
+
+  describe("at midnight today is compared with the version stored as tomorrow", () => {
+    const B: [number, number, string][] = [
+      [0, 360, "NotPlanned"],
+      [360, 810, "Definite"],
+      [810, 1440, "NotPlanned"],
+    ];
+    const kinds = () =>
+      events.map((e) => (e.payload as CoreEvents["schedule.notification"]).notification?.kind);
+    const night = (atMidnight: [number, number, string][]) => {
+      clock.advanceTo(at("2026-11-10", "23:15"));
+      const schedules = new ScheduleService({ sites: [site], store, bus, clock, state });
+      schedules.onYasnoUpdate(
+        update(day("2026-11-10", "ScheduleApplies", A), day("2026-11-11", "ScheduleApplies", B)),
+      );
+      clock.advanceTo(at("2026-11-11", "00:00") + 2_000);
+      schedules.onYasnoUpdate(
+        update(
+          day("2026-11-11", "ScheduleApplies", atMidnight),
+          day("2026-11-12", "WaitingForSchedule"),
+        ),
+      );
+    };
+
+    it("the day as announced the evening before: silent", () => {
+      night(B);
+      expect(kinds()).toEqual([]);
+    });
+
+    it("the provider adds 00:00–01:00 right at 00:00 (2026-11-08): a change of today", () => {
+      night([[0, 60, "Definite"], [60, 360, "NotPlanned"], ...B.slice(1)]);
+      expect(kinds()).toEqual(["today_updated"]);
+    });
+  });
 });
 
 describe("ReminderService", () => {

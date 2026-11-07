@@ -75,6 +75,8 @@ export type MonitorTextContext = TextContext & {
   lastFixed?: (date: string) => TimedSlot[] | null;
   /** The latest stored published version of a date (after a restart: was tomorrow out already?). */
   lastPublished?: (date: string) => DaySchedule | null;
+  /** The latest stored version of a date, any status (at midnight: how today looked as tomorrow). */
+  lastKnown?: (date: string) => DaySchedule | null;
 };
 
 function publishedRef(day: DaySchedule | null | undefined): PublishedRef | null {
@@ -88,7 +90,11 @@ function dayBody(ctx: MonitorTextContext, info: DayInfo): string {
   return formatDayMessage(ctx, info, lastFixed);
 }
 
-/** One poll of today's schedule. Midnight rollover and the first poll only set the baseline. */
+/**
+ * One poll of today's schedule. The first poll only sets the baseline. At midnight the new day is
+ * compared with its last version seen as tomorrow: only a real change is news (the provider may
+ * change the day right at 00:00), and with no such version the rollover only sets the baseline.
+ */
 export function pollToday(
   ctx: MonitorTextContext,
   previous: TrackedDay | null,
@@ -97,11 +103,16 @@ export function pollToday(
 ): PollResult {
   const info = dayInfo(day, fallbackDate, ctx.tz);
   const next = track(day, info.date);
-  if (!previous || previous.date !== next.date)
-    return { state: next, persist: true, notification: null };
-  if (previous.signature === next.signature)
-    return { state: previous, persist: false, notification: null };
-  if (previous.withoutOutages && next.withoutOutages) {
+  if (!previous) return { state: next, persist: true, notification: null };
+  const rollover = previous.date !== next.date;
+  const known = rollover ? ctx.lastKnown?.(next.date) : null;
+  const before = rollover ? (known ? track(known, next.date) : null) : previous;
+  if (!before) return { state: next, persist: true, notification: null };
+  if (before.signature === next.signature)
+    return rollover
+      ? { state: next, persist: true, notification: null }
+      : { state: previous, persist: false, notification: null };
+  if (before.withoutOutages && next.withoutOutages) {
     return { state: next, persist: true, notification: null };
   }
   return {

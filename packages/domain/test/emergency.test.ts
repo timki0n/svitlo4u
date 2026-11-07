@@ -67,7 +67,7 @@ describe("emergency day over its own published schedule", () => {
     );
     expect(tomorrow.notification).toBeNull();
 
-    // Midnight: the day starts with them — still nothing (no messages at midnight).
+    // Midnight with no stored version of the day: only the baseline, nothing to compare.
     const yesterday = pollToday(ctx, null, day("2026-11-06", "ScheduleApplies"), "2026-11-06");
     const midnight = pollToday(
       ctx,
