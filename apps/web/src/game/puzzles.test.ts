@@ -1,15 +1,24 @@
 import { describe, expect, it } from "vitest";
 import { GAMES, windowGame } from "./games.ts";
 import {
+  beamMinFlips,
   beamPuzzle,
   chainPowered,
   chainPuzzle,
+  chainTaps,
+  chargeFirstFit,
   chargePuzzle,
-  crossingEdges,
+  chargeSolutions,
+  crossingCount,
   fusePuzzle,
+  MAX_CHARGE_SOLUTIONS,
+  MIN_BEAM_FLIPS,
+  MIN_CHAIN_TAPS,
+  MIN_SLIDE_MOVES,
+  MIN_UNTANGLE_CROSSINGS,
   petsPuzzle,
+  slideMinMoves,
   slidePuzzle,
-  slideSolvable,
   type Tier,
   tierOf,
   traceBeam,
@@ -18,9 +27,9 @@ import {
 import { rngOf } from "./rng.ts";
 
 const TIERS: Tier[] = [0, 1, 2];
-/** Many windows of a few outages: every generator, every tier. */
+/** Windows of many outages: every generator, every tier, many seeds. */
 const keys = (count: number) =>
-  Array.from({ length: count }, (_, i) => `o179400${i % 7}000000:${2 + (i % 26)}-${1 + (i % 8)}`);
+  Array.from({ length: count }, (_, i) => `o17940${i}:${2 + (i % 26)}-${1 + (i % 8)}`);
 
 describe("window games", () => {
   it("the same window of the same outage is the same game; floors set the tier", () => {
@@ -35,31 +44,65 @@ describe("window games", () => {
     expect(ids.size).toBe(GAMES.length);
   });
 
-  it("Ланцюг: deterministic, scrambled, and its solution powers every tile", () => {
-    for (const k of keys(60))
+  it("every generator gives the same puzzle for the same key", () => {
+    for (const make of [
+      chainPuzzle,
+      beamPuzzle,
+      untanglePuzzle,
+      fusePuzzle,
+      petsPuzzle,
+      chargePuzzle,
+    ])
+      for (const t of TIERS) expect(make(rngOf(`k${t}`), t)).toEqual(make(rngOf(`k${t}`), t));
+    expect(slidePuzzle(rngOf("k"), 1)).toEqual(slidePuzzle(rngOf("k"), 1));
+  });
+});
+
+describe("difficulty: no puzzle is a tap or two away", () => {
+  it(`Ланцюг: at least ${MIN_CHAIN_TAPS.join(" / ")} quarter turns; the solution lights everything`, () => {
+    for (const k of keys(150))
       for (const t of TIERS) {
         const p = chainPuzzle(rngOf(k), t);
-        expect(chainPuzzle(rngOf(k), t)).toEqual(p);
+        expect(chainTaps(p)).toBeGreaterThanOrEqual(MIN_CHAIN_TAPS[t]);
         expect(chainPowered(p.n, p.source, p.solution).every(Boolean)).toBe(true);
         expect(chainPowered(p.n, p.source, p.tiles).every(Boolean)).toBe(false);
       }
   });
 
-  it("Промінь: the solution mirrors take the beam to the panel, the start does not", () => {
-    for (const k of keys(60))
+  it(`Промінь: at least ${MIN_BEAM_FLIPS.join(" / ")} mirrors to turn, counting any shortcut`, () => {
+    for (const k of keys(150))
       for (const t of TIERS) {
         const p = beamPuzzle(rngOf(k), t);
-        expect(traceBeam(p, p.solution).hit).toBe(true);
-        expect(traceBeam(p, p.mirrors).hit).toBe(false);
+        expect(beamMinFlips(p)).toBeGreaterThanOrEqual(MIN_BEAM_FLIPS[t]);
+        expect(traceBeam(p, new Map([...p.mirrors, ...p.solution])).hit).toBe(true);
       }
   });
 
-  it("Розплутай дроти: starts tangled, a layout without crossings exists", () => {
-    for (const k of keys(40))
+  it(`Розплутай дроти: at least ${MIN_UNTANGLE_CROSSINGS.join(" / ")} crossings; a clean layout exists`, () => {
+    for (const k of keys(150))
       for (const t of TIERS) {
         const p = untanglePuzzle(rngOf(k), t);
-        expect(crossingEdges(p.edges, p.solved).size).toBe(0);
-        expect(crossingEdges(p.edges, p.start).size).toBeGreaterThan(0);
+        expect(crossingCount(p.edges, p.start)).toBeGreaterThanOrEqual(MIN_UNTANGLE_CROSSINGS[t]);
+        expect(crossingCount(p.edges, p.solved)).toBe(0);
+      }
+  });
+
+  it(`Винеси генератор: at least ${MIN_SLIDE_MOVES.join(" / ")} moves, and a way out`, () => {
+    for (const k of keys(20))
+      for (const t of TIERS) {
+        const moves = slideMinMoves(slidePuzzle(rngOf(k), t));
+        expect(moves).toBeGreaterThanOrEqual(MIN_SLIDE_MOVES[t]);
+      }
+  });
+
+  it(`Розклади заряд: at most ${MAX_CHARGE_SOLUTIONS.join(" / ")} ways; plugging in order fails above the easy floors`, () => {
+    for (const k of keys(150))
+      for (const t of TIERS) {
+        const p = chargePuzzle(rngOf(k), t);
+        const ways = chargeSolutions(p);
+        expect(ways).toBeGreaterThanOrEqual(1);
+        expect(ways).toBeLessThanOrEqual(MAX_CHARGE_SOLUTIONS[t]);
+        if (t > 0) expect(chargeFirstFit(p)).toBe(false);
       }
   });
 
@@ -86,34 +129,6 @@ describe("window games", () => {
         const all = p.waves.flat();
         expect(all.filter((s) => s.kind === p.target).length).toBeGreaterThanOrEqual(p.need);
         expect(all.some((s) => s.kind !== p.target)).toBe(true);
-      }
-  });
-
-  it("Винеси генератор: blocked at the start, a way out exists", () => {
-    for (const k of keys(12))
-      for (const t of TIERS) {
-        const p = slidePuzzle(rngOf(k), t);
-        expect(p.blocks[0]?.c).toBeLessThan(p.n - 2);
-        expect(slideSolvable(p)).toBe(true);
-      }
-  });
-
-  it("Розклади заряд: the intended split fits every bank in charge and ports", () => {
-    for (const k of keys(60))
-      for (const t of TIERS) {
-        const p = chargePuzzle(rngOf(k), t);
-        p.banks.forEach((bank, b) => {
-          const mine = p.devices.filter((_, i) => p.home[i] === b);
-          expect(mine.reduce((s, d) => s + d.need, 0)).toBeLessThanOrEqual(bank.cap);
-          expect(mine.length).toBeLessThanOrEqual(bank.ports.length);
-          expect(mine.filter((d) => d.usbC).length).toBeLessThanOrEqual(
-            bank.ports.filter((port) => port === "C").length,
-          );
-        });
-        if (t === 2) {
-          const total = p.banks.reduce((s, b) => s + b.cap, 0);
-          expect(p.devices.reduce((s, d) => s + d.need, 0)).toBe(total);
-        }
       }
   });
 });

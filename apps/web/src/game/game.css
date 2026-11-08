@@ -475,12 +475,12 @@
 
 .g-side {
   position: absolute;
-  top: 10px;
+  top: 18px;
   right: 0;
   bottom: 10px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 20px;
   overflow: hidden;
   pointer-events: none;
 }

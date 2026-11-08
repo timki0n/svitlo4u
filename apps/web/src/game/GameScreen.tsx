@@ -214,7 +214,7 @@ function Facade({
           playing={playing}
           selected={selected}
           onSelect={onSelect}
-          inset={selected ? 0 : SIDE_WIDTH}
+          inset={selected ? 0 : SIDE_WIDTH + SIDE_GAP}
         />
         {!selected && <SidePanel state={state} lit={lit.size} />}
       </div>
@@ -230,7 +230,9 @@ function Facade({
 }
 
 /** Room on the right of the whole facade for the progress. */
-const SIDE_WIDTH = 116;
+const SIDE_WIDTH = 112;
+/** Air between the building and the panel. */
+const SIDE_GAP = 22;
 
 const percent = (part: number) =>
   `${((part / GAME_WINDOWS) * 100).toLocaleString("uk-UA", { maximumFractionDigits: 1 })}%`;
@@ -295,7 +297,7 @@ function Ring({ part }: { part: number }) {
           />
         )}
       </svg>
-      <span className="g-ring-pct">{Math.round(share * 100)}%</span>
+      <span className="g-ring-pct">{percent(part)}</span>
     </div>
   );
 }

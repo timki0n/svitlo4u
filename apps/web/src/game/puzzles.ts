@@ -9,6 +9,19 @@ import { type Rng, ri, shuffle } from "./rng.ts";
 export type Tier = GameTier;
 export const tierOf = gameTier;
 
+/**
+ * Floors of difficulty, per tier (2–9, 10–18, 19–27): no puzzle may be solved in fewer moves.
+ * Generators retry until they reach them; tests check them on many keys.
+ */
+export const MIN_CHAIN_TAPS = [8, 14, 24] as const;
+export const MIN_BEAM_FLIPS = [3, 4, 5] as const;
+export const MIN_UNTANGLE_CROSSINGS = [5, 8, 12] as const;
+export const MIN_SLIDE_MOVES = [4, 7, 9] as const;
+/** How far above the floor a slide puzzle may go. */
+const SLIDE_SPREAD = [2, 3, 5] as const;
+/** At most this many ways to plug everything in (fewer = more thinking). */
+export const MAX_CHARGE_SOLUTIONS = [3, 2, 1] as const;
+
 // ── «Ланцюг»: turn tiles until the current reaches every bulb ───────────────────────────────
 
 export const N = 1;
@@ -76,17 +89,33 @@ export function chainPuzzle(rng: Rng, tier: Tier): ChainPuzzle {
     seen[next] = true;
     stack.push(next);
   }
-  const tiles = solution.map((v) => {
-    let turns = ri(rng, 4);
-    let t = v;
-    while (turns-- > 0) t = rotate(t);
-    return t;
-  });
-  if (chainPowered(n, source, tiles).every(Boolean)) {
-    const i = tiles.findIndex((v) => v !== 15 && v !== 5 && v !== 10);
-    if (i >= 0) tiles[i] = rotate(tiles[i] as number);
+  const scramble = () =>
+    solution.map((v) => {
+      let turns = ri(rng, 4);
+      let t = v;
+      while (turns-- > 0) t = rotate(t);
+      return t;
+    });
+  let tiles = scramble();
+  for (let tries = 0; tries < 60; tries++) {
+    const p = { n, source, solution, tiles };
+    if (chainTaps(p) >= MIN_CHAIN_TAPS[tier] && !chainPowered(n, source, tiles).every(Boolean))
+      break;
+    tiles = scramble();
   }
   return { n, source, solution, tiles };
+}
+
+/** Taps (quarter turns) that bring every tile to its place. */
+export function chainTaps(p: ChainPuzzle): number {
+  return p.tiles.reduce((sum, tile, i) => {
+    let v = tile;
+    for (let r = 0; r < 4; r++) {
+      if (v === p.solution[i]) return sum + r;
+      v = rotate(v);
+    }
+    return sum;
+  }, 0);
 }
 
 // ── «Промінь»: turn mirrors so the torch beam hits the solar panel ──────────────────────────
@@ -137,10 +166,29 @@ export function traceBeam(
   return { points, hit: false };
 }
 
+/**
+ * A path with MIN_BEAM_FLIPS turns from the torch to the panel; every mirror on it starts wrong,
+ * decoys stand off the path. Rebuilt whole while any shorter way to the panel exists.
+ */
 export function beamPuzzle(rng: Rng, tier: Tier): BeamPuzzle {
+  const want = MIN_BEAM_FLIPS[tier];
+  let best: { p: BeamPuzzle; flips: number } | null = null;
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const p = beamAttempt(rng, tier);
+    if (!p) continue;
+    const flips = beamMinFlips(p, want);
+    if (flips >= want) return p;
+    if (!best || flips > best.flips) best = { p, flips };
+  }
+  if (best) return best.p;
   const n = [5, 6, 7][tier] as number;
-  const turnsNeeded = [2, 3, 4][tier] as number;
-  const decoys = [2, 4, 6][tier] as number;
+  return { n, row: 0, target: n - 1, mirrors: new Map([[1, "/"]]), solution: new Map() };
+}
+
+function beamAttempt(rng: Rng, tier: Tier): BeamPuzzle | null {
+  const n = [5, 6, 7][tier] as number;
+  const turnsNeeded = MIN_BEAM_FLIPS[tier];
+  const decoys = [3, 5, 7][tier] as number;
   const inGrid = (a: number, b: number) => a >= 0 && b >= 0 && a < n && b < n;
   let row = 0;
   let target = -1;
@@ -194,10 +242,7 @@ export function beamPuzzle(rng: Rng, tier: Tier): BeamPuzzle {
       len++;
     }
   }
-  if (target < 0) {
-    solution = new Map();
-    target = row * n + n - 1;
-  }
+  if (target < 0) return null;
   const onPath = new Set<number>();
   {
     let x = -1;
@@ -214,17 +259,41 @@ export function beamPuzzle(rng: Rng, tier: Tier): BeamPuzzle {
       if (m) d = reflect(m, d);
     }
   }
-  const mirrors = new Map<number, Mirror>();
-  for (const c of solution.keys()) mirrors.set(c, rng() < 0.5 ? "/" : "\\");
   const free = [...Array(n * n).keys()].filter(
     (c) => c !== target && !solution.has(c) && !onPath.has(c),
   );
-  for (const c of shuffle(rng, free).slice(0, decoys)) mirrors.set(c, rng() < 0.5 ? "/" : "\\");
+  const decoyCells = shuffle(rng, free).slice(0, decoys);
+  const flip = (m: Mirror | undefined): Mirror => (m === "/" ? "\\" : "/");
   const p = { n, row, target };
-  // A start that already hits the panel (through the decoys too) is shuffled again.
-  for (let tries = 0; tries < 50 && traceBeam(p, mirrors).hit; tries++)
-    for (const c of mirrors.keys()) mirrors.set(c, rng() < 0.5 ? "/" : "\\");
+  const mirrors = new Map<number, Mirror>();
+  for (const [c, m] of solution) mirrors.set(c, flip(m));
+  for (const c of decoyCells) mirrors.set(c, rng() < 0.5 ? "/" : "\\");
   return { ...p, mirrors, solution };
+}
+
+/** Fewest mirror turns that bring the beam to the panel, counted up to `cap`. */
+export function beamMinFlips(
+  p: Pick<BeamPuzzle, "n" | "row" | "target" | "mirrors">,
+  cap = Number.POSITIVE_INFINITY,
+): number {
+  const cells = [...p.mirrors.keys()];
+  const limit = Math.min(cap, cells.length + 1);
+  const mirrors = new Map(p.mirrors);
+  const turn = (c: number) => mirrors.set(c, mirrors.get(c) === "/" ? "\\" : "/");
+  // try every set of `size` mirrors, smallest sets first
+  const tryChoose = (size: number, from: number): boolean => {
+    if (size === 0) return traceBeam(p, mirrors).hit;
+    for (let i = from; i <= cells.length - size; i++) {
+      const c = cells[i] as number;
+      turn(c);
+      const hit = tryChoose(size - 1, i + 1);
+      turn(c);
+      if (hit) return true;
+    }
+    return false;
+  };
+  for (let size = 0; size < limit; size++) if (tryChoose(size, 0)) return size;
+  return limit;
 }
 
 // ── «Розплутай дроти»: drag junction boxes until no wire crosses another ────────────────────
@@ -260,18 +329,50 @@ export function untanglePuzzle(rng: Rng, tier: Tier): UntanglePuzzle {
     x: 50 + ((i % cols) * 200) / (cols - 1),
     y: 50 + (Math.floor(i / cols) * 200) / (rows - 1),
   }));
-  const order = shuffle(rng, [...Array(count).keys()]);
-  const start = new Array<Point>(count);
-  order.forEach((node, i) => {
-    const a = (2 * Math.PI * i) / count - Math.PI / 2;
-    start[node] = { x: 150 + 118 * Math.cos(a), y: 150 + 118 * Math.sin(a) };
-  });
-  if (crossingEdges(edges, start).size === 0) {
-    const a = order[0] as number;
-    const b = order[Math.floor(count / 2)] as number;
-    [start[a], start[b]] = [start[b] as Point, start[a] as Point];
+  // boxes round a circle in a shuffled order; the most tangled of a few orders is kept
+  let start: Point[] = [];
+  let most = -1;
+  for (let tries = 0; tries < 40 && most < MIN_UNTANGLE_CROSSINGS[tier]; tries++) {
+    const order = shuffle(rng, [...Array(count).keys()]);
+    const layout = new Array<Point>(count);
+    order.forEach((node, i) => {
+      const a = (2 * Math.PI * i) / count - Math.PI / 2;
+      layout[node] = { x: 150 + 118 * Math.cos(a), y: 150 + 118 * Math.sin(a) };
+    });
+    const crossings = crossingCount(edges, layout);
+    if (crossings > most) {
+      most = crossings;
+      start = layout;
+    }
   }
   return { size, edges, start, solved };
+}
+
+/** Pairs of wires that cross. */
+export function crossingCount(edges: readonly [number, number][], pos: readonly Point[]): number {
+  let count = 0;
+  forEachCrossing(edges, pos, () => {
+    count++;
+  });
+  return count;
+}
+
+function forEachCrossing(
+  edges: readonly [number, number][],
+  pos: readonly Point[],
+  visit: (i: number, j: number) => void,
+): void {
+  const o = (p: Point, q: Point, r: Point) =>
+    Math.sign((q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x));
+  for (let i = 0; i < edges.length; i++) {
+    for (let j = i + 1; j < edges.length; j++) {
+      const [a, b] = edges[i] as [number, number];
+      const [c, d] = edges[j] as [number, number];
+      if (a === c || a === d || b === c || b === d) continue;
+      const [A, B, C, D] = [pos[a], pos[b], pos[c], pos[d]] as [Point, Point, Point, Point];
+      if (o(A, B, C) !== o(A, B, D) && o(C, D, A) !== o(C, D, B)) visit(i, j);
+    }
+  }
 }
 
 /** Indices of edges that cross another edge (shared ends do not count). */
@@ -279,21 +380,11 @@ export function crossingEdges(
   edges: readonly [number, number][],
   pos: readonly Point[],
 ): Set<number> {
-  const o = (p: Point, q: Point, r: Point) =>
-    Math.sign((q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x));
   const bad = new Set<number>();
-  for (let i = 0; i < edges.length; i++) {
-    for (let j = i + 1; j < edges.length; j++) {
-      const [a, b] = edges[i] as [number, number];
-      const [c, d] = edges[j] as [number, number];
-      if (a === c || a === d || b === c || b === d) continue;
-      const [A, B, C, D] = [pos[a], pos[b], pos[c], pos[d]] as [Point, Point, Point, Point];
-      if (o(A, B, C) !== o(A, B, D) && o(C, D, A) !== o(C, D, B)) {
-        bad.add(i);
-        bad.add(j);
-      }
-    }
-  }
+  forEachCrossing(edges, pos, (i, j) => {
+    bad.add(i);
+    bad.add(j);
+  });
   return bad;
 }
 
@@ -389,70 +480,155 @@ export function slideFits(
   return true;
 }
 
+/**
+ * A random layout with the generator at the exit, then every arrangement its boxes can reach and
+ * how many moves each is from freeing the generator (a move slides one box any distance). The
+ * puzzle is an arrangement at least MIN_SLIDE_MOVES away — the farthest one on the top tier.
+ */
 export function slidePuzzle(rng: Rng, tier: Tier): SlidePuzzle {
   const n = 6;
   const row = 2;
-  const boxes = [6, 8, 10][tier] as number;
-  const scramble = [150, 300, 600][tier] as number;
-  let blocks: Block[] = [];
-  for (let attempt = 0; attempt < 100; attempt++) {
-    blocks = [{ r: row, c: n - 2, len: 2, h: true, gen: true }];
-    for (let tries = 0; blocks.length < boxes + 1 && tries < 400; tries++) {
-      const h = rng() < 0.5;
-      const len = rng() < 0.7 ? 2 : 3;
-      const r = ri(rng, h ? n : n - len + 1);
-      const c = ri(rng, h ? n - len + 1 : n);
-      if (h && r === row) continue;
-      const b = { r, c, len, h, gen: false };
-      if (slideFits(n, slideGrid(n, blocks), b, r, c)) blocks.push(b);
+  const boxes = [9, 11, 12][tier] as number;
+  const want = MIN_SLIDE_MOVES[tier];
+  let best: { blocks: Block[]; moves: number } | null = null;
+  for (let attempt = 0; attempt < 60; attempt++) {
+    const layout = slideLayout(rng, n, row, boxes);
+    const space = slideSpace(n, layout, 12_000);
+    if (!space) continue;
+    const far = Math.max(...space.dist);
+    const pickAt = (d: number) => {
+      const at = space.states.filter((_, i) => space.dist[i] === d);
+      return at[ri(rng, at.length)] as number[];
+    };
+    if (far >= want) {
+      // not much above the floor: easy floors stay easy, the top ones as hard as allowed
+      const top = Math.min(far, want + SLIDE_SPREAD[tier]);
+      const d = tier === 2 ? top : want + ri(rng, top - want + 1);
+      return { n, row, blocks: slidePlace(layout, pickAt(d)) };
     }
-    const gen = blocks[0] as Block;
-    for (let i = 0; i < scramble || (gen.c > 1 && i < scramble * 4); i++) {
-      const bi = ri(rng, blocks.length);
-      const b = blocks[bi] as Block;
-      const d = rng() < 0.5 ? -1 : 1;
-      const r = b.r + (b.h ? 0 : d);
-      const c = b.c + (b.h ? d : 0);
-      if (slideFits(n, slideGrid(n, blocks, bi), b, r, c)) {
-        b.r = r;
-        b.c = c;
-      }
-    }
-    const g = slideGrid(n, blocks, 0);
-    let blocked = false;
-    for (let c = gen.c + 2; c < n; c++) if ((g[row * n + c] as number) >= 0) blocked = true;
-    if (gen.c <= 2 && blocked) break;
+    if (far > 0 && (!best || far > best.moves))
+      best = { blocks: slidePlace(layout, pickAt(far)), moves: far };
   }
-  return { n, row, blocks };
+  return { n, row, blocks: best?.blocks ?? slideLayout(rng, n, row, boxes) };
 }
 
-/** Breadth-first search for a way out (tests; the puzzle is built by legal moves, so it has one). */
-export function slideSolvable(p: SlidePuzzle, limit = 200_000): boolean {
-  const key = (bs: readonly Block[]) => bs.map((b) => `${b.r},${b.c}`).join(";");
-  const seen = new Set([key(p.blocks)]);
-  let frontier = [p.blocks.map((b) => ({ ...b }))];
-  while (frontier.length > 0 && seen.size < limit) {
-    const next: Block[][] = [];
-    for (const bs of frontier) {
-      if ((bs[0] as Block).c === p.n - 2) return true;
-      bs.forEach((b, i) => {
-        const g = slideGrid(p.n, bs, i);
-        for (const d of [-1, 1]) {
-          const r = b.r + (b.h ? 0 : d);
-          const c = b.c + (b.h ? d : 0);
-          if (!slideFits(p.n, g, b, r, c)) continue;
-          const moved = bs.map((x, j) => (j === i ? { ...x, r, c } : x));
-          const k = key(moved);
-          if (!seen.has(k)) {
-            seen.add(k);
-            next.push(moved);
-          }
+function slideLayout(rng: Rng, n: number, row: number, boxes: number): Block[] {
+  const blocks: Block[] = [{ r: row, c: n - 2, len: 2, h: true, gen: true }];
+  for (let tries = 0; blocks.length < boxes + 1 && tries < 500; tries++) {
+    const h = rng() < 0.5;
+    const len = rng() < 0.75 ? 2 : 3;
+    const r = ri(rng, h ? n : n - len + 1);
+    const c = ri(rng, h ? n - len + 1 : n);
+    if (h && r === row) continue; // a box across the exit row could never let the generator out
+    const b = { r, c, len, h, gen: false };
+    if (slideFits(n, slideGrid(n, blocks), b, r, c)) blocks.push(b);
+  }
+  return blocks;
+}
+
+/** Blocks of a layout moved to the given positions (column of a horizontal box, row of a vertical). */
+function slidePlace(layout: readonly Block[], pos: readonly number[]): Block[] {
+  return layout.map((b, i) =>
+    b.h ? { ...b, c: pos[i] as number } : { ...b, r: pos[i] as number },
+  );
+}
+
+/** Calls `visit` with every arrangement one move away. */
+function slideMoves(
+  n: number,
+  layout: readonly Block[],
+  pos: readonly number[],
+  grid: Int8Array,
+  visit: (next: number[]) => void,
+): void {
+  grid.fill(-1);
+  layout.forEach((b, i) => {
+    const p = pos[i] as number;
+    for (let j = 0; j < b.len; j++) grid[(b.h ? b.r : p + j) * n + (b.h ? p + j : b.c)] = i;
+  });
+  layout.forEach((b, i) => {
+    for (const dir of [-1, 1]) {
+      for (let p = (pos[i] as number) + dir; ; p += dir) {
+        const lead = dir < 0 ? p : p + b.len - 1;
+        if (lead < 0 || lead >= n) break;
+        if ((grid[(b.h ? b.r : lead) * n + (b.h ? lead : b.c)] as number) >= 0) break;
+        const next = pos.slice();
+        next[i] = p;
+        visit(next);
+      }
+    }
+  });
+}
+
+/** Every arrangement reachable from a layout and its distance to a freed generator; null if huge. */
+function slideSpace(
+  n: number,
+  layout: readonly Block[],
+  cap: number,
+): { states: number[][]; dist: number[] } | null {
+  const k = layout.length;
+  const key = (pos: readonly number[]) => {
+    let x = 0;
+    for (let i = k - 1; i >= 0; i--) x = x * n + (pos[i] as number);
+    return x;
+  };
+  const grid = new Int8Array(n * n);
+  const index = new Map<number, number>();
+  const states: number[][] = [];
+  const add = (pos: number[]) => {
+    const e = key(pos);
+    if (index.has(e)) return;
+    index.set(e, states.length);
+    states.push(pos);
+  };
+  add(layout.map((b) => (b.h ? b.c : b.r)));
+  for (let i = 0; i < states.length; i++) {
+    if (states.length > cap) return null;
+    slideMoves(n, layout, states[i] as number[], grid, add);
+  }
+  const dist = new Array<number>(states.length).fill(-1);
+  const queue: number[] = [];
+  states.forEach((pos, i) => {
+    if (pos[0] === n - 2) {
+      dist[i] = 0;
+      queue.push(i);
+    }
+  });
+  for (let q = 0; q < queue.length; q++) {
+    const i = queue[q] as number;
+    slideMoves(n, layout, states[i] as number[], grid, (next) => {
+      const j = index.get(key(next));
+      if (j !== undefined && dist[j] === -1) {
+        dist[j] = (dist[i] as number) + 1;
+        queue.push(j);
+      }
+    });
+  }
+  return { states, dist };
+}
+
+/** Fewest moves that free the generator (-1: none within `limit` arrangements). */
+export function slideMinMoves(p: SlidePuzzle, limit = 200_000): number {
+  const grid = new Int8Array(p.n * p.n);
+  const k = p.blocks.length;
+  const key = (pos: readonly number[]) => pos.join(",");
+  let frontier = [p.blocks.map((b) => (b.h ? b.c : b.r))];
+  const seen = new Set([key(frontier[0] as number[])]);
+  for (let depth = 0; frontier.length > 0 && seen.size < limit; depth++) {
+    const next: number[][] = [];
+    for (const pos of frontier) {
+      if (pos[0] === p.n - 2) return depth;
+      slideMoves(p.n, p.blocks, pos, grid, (q) => {
+        const e = key(q);
+        if (!seen.has(e) && q.length === k) {
+          seen.add(e);
+          next.push(q);
         }
       });
     }
     frontier = next;
   }
-  return false;
+  return -1;
 }
 
 // ── «Розклади заряд»: drag cables from devices to power banks ───────────────────────────────
@@ -482,11 +658,83 @@ const DEVICES: [DeviceKind, string, number, number, boolean][] = [
   ["camera", "Камера", 2, 4, false],
 ];
 
+/**
+ * Devices split among the banks, each bank sized to its share (a little slack only on the first
+ * tier). Kept only when there are few ways to plug everything in, and above the first tier only
+ * when plugging each device into the first bank that takes it, in the order shown, fails.
+ */
 export function chargePuzzle(rng: Rng, tier: Tier): ChargePuzzle {
+  let best: { p: ChargePuzzle; score: number } | null = null;
+  for (let attempt = 0; attempt < 150; attempt++) {
+    const p = chargeAttempt(rng, tier);
+    const ways = chargeSolutions(p);
+    const naive = chargeFirstFit(p);
+    if (ways <= MAX_CHARGE_SOLUTIONS[tier] && (tier === 0 || !naive)) return p;
+    const score = ways + (naive ? 100 : 0);
+    if (!best || score < best.score) best = { p, score };
+  }
+  return (best as { p: ChargePuzzle }).p;
+}
+
+function bankTakes(
+  bank: ChargeBank,
+  load: { need: number; all: number; c: number },
+  d: ChargeDevice,
+): boolean {
+  const cPorts = bank.ports.filter((x) => x === "C").length;
+  return (
+    load.need + d.need <= bank.cap && load.all < bank.ports.length && (!d.usbC || load.c < cPorts)
+  );
+}
+
+/** Ways to plug every device in (energy and ports; a C device needs a C port). */
+export function chargeSolutions(p: ChargePuzzle, stopAt = 1000): number {
+  const load = p.banks.map(() => ({ need: 0, all: 0, c: 0 }));
+  let count = 0;
+  const go = (i: number) => {
+    if (count >= stopAt) return;
+    const d = p.devices[i];
+    if (!d) {
+      count++;
+      return;
+    }
+    p.banks.forEach((bank, b) => {
+      const l = load[b] as { need: number; all: number; c: number };
+      if (!bankTakes(bank, l, d)) return;
+      l.need += d.need;
+      l.all++;
+      if (d.usbC) l.c++;
+      go(i + 1);
+      l.need -= d.need;
+      l.all--;
+      if (d.usbC) l.c--;
+    });
+  };
+  go(0);
+  return count;
+}
+
+/** Does plugging each device, in the order shown, into the first bank that takes it work? */
+export function chargeFirstFit(p: ChargePuzzle): boolean {
+  const load = p.banks.map(() => ({ need: 0, all: 0, c: 0 }));
+  return p.devices.every((d) => {
+    const b = p.banks.findIndex((bank, k) =>
+      bankTakes(bank, load[k] as { need: number; all: number; c: number }, d),
+    );
+    if (b < 0) return false;
+    const l = load[b] as { need: number; all: number; c: number };
+    l.need += d.need;
+    l.all++;
+    if (d.usbC) l.c++;
+    return true;
+  });
+}
+
+function chargeAttempt(rng: Rng, tier: Tier): ChargePuzzle {
   const banksCount = [2, 3, 3][tier] as number;
   const count = [4, 6, 7][tier] as number;
-  const slack = [2, 1, 0][tier] as number;
-  const extra = [1, 1, 0][tier] as number;
+  const slack = [1, 0, 0][tier] as number;
+  const extra = [1, 0, 0][tier] as number;
   const maxPorts = banksCount === 3 ? 4 : 6;
   const devices = shuffle(rng, DEVICES)
     .slice(0, count)
