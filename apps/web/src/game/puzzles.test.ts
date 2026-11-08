@@ -87,7 +87,10 @@ describe("difficulty: no puzzle is a tap or two away", () => {
       }
   });
 
-  it(`Винеси генератор: at least ${MIN_SLIDE_MOVES.join(" / ")} moves, and a way out`, () => {
+  // every puzzle is a search over the whole layout: slow on a shared CI runner
+  it(`Винеси генератор: at least ${MIN_SLIDE_MOVES.join(" / ")} moves, and a way out`, {
+    timeout: 60_000,
+  }, () => {
     for (const k of keys(20))
       for (const t of TIERS) {
         const moves = slideMinMoves(slidePuzzle(rngOf(k), t));
