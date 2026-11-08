@@ -15,6 +15,7 @@ import {
   chargePuzzle,
   chargeSolutions,
   crossingCount,
+  FUSE_HITS,
   fusePuzzle,
   MAX_CHARGE_SOLUTIONS,
   MAX_PACK_SOLUTIONS,
@@ -124,10 +125,14 @@ describe("difficulty: no puzzle is a tap or two away", () => {
       }
   });
 
-  it("Запобіжник: three zones inside the gauge, narrower up the floors", () => {
+  it(`Запобіжник: ${FUSE_HITS.join(" / ")} zones in a row inside the gauge, narrower up the floors`, () => {
     for (const t of TIERS) {
       const p = fusePuzzle(rngOf("x"), t);
-      expect(p.zones).toHaveLength(3);
+      expect(p.zones).toHaveLength(FUSE_HITS[t]);
+      // every next zone of the run is narrower
+      const widths = p.zones.map(([a, b]) => b - a);
+      for (let i = 1; i < widths.length; i++)
+        expect(widths[i] as number).toBeLessThan(widths[i - 1] as number);
       for (const [a, b] of p.zones) {
         expect(a).toBeGreaterThanOrEqual(0);
         expect(b).toBeLessThanOrEqual(1);

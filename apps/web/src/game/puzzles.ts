@@ -469,18 +469,23 @@ export function crossingEdges(
   return bad;
 }
 
-// ── «Запобіжник»: stop the swinging needle in the zone three times ──────────────────────────
+// ── «Запобіжник»: stop the swinging needle in its zone, every time in a row ─────────────────
+
+/** Hits in a row it takes, per tier: a miss burns the fuse and the run starts over. */
+export const FUSE_HITS = [3, 4, 5] as const;
+/** The needle swings this much faster after every hit. */
+export const FUSE_SPEEDUP = 0.15;
 
 export type FusePuzzle = { zones: [number, number][]; speed: number; phase: number };
 
 export function fusePuzzle(rng: Rng, tier: Tier): FusePuzzle {
-  const base = [0.22, 0.16, 0.11][tier] as number;
-  const zones = [0, 1, 2].map((i): [number, number] => {
-    const w = base * (1 - i * 0.15);
+  const base = [0.2, 0.15, 0.11][tier] as number;
+  const zones = [...Array(FUSE_HITS[tier]).keys()].map((i): [number, number] => {
+    const w = base * (1 - i * 0.08); // each one narrower
     const c = w / 2 + rng() * (1 - w);
     return [c - w / 2, c + w / 2];
   });
-  return { zones, speed: [1.7, 2.2, 2.8][tier] as number, phase: rng() * Math.PI * 2 };
+  return { zones, speed: [1.6, 2.0, 2.5][tier] as number, phase: rng() * Math.PI * 2 };
 }
 
 // ── «Кіт чи пес»: tap only the chosen animal in the windows ─────────────────────────────────

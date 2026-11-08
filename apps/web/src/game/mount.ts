@@ -16,6 +16,7 @@ import {
   crossingEdges,
   DIRS,
   degree,
+  FUSE_SPEEDUP,
   type FusePuzzle,
   type Mirror,
   type PackPuzzle,
@@ -342,13 +343,14 @@ export function mountFuse(root: HTMLElement, p: FusePuzzle, ctx: GameCtx): Clean
     const [x2, y2] = pt(v2, r);
     return `M${x1},${y1} A${r},${r} 0 0 1 ${x2},${y2}`;
   };
-  const svg = svgRoot(root, W, H, "g-tap");
-  svgEl(
+  const svg = svgRoot(root, W, H, "g-tap g-fuse");
+  const track = svgEl(
     "path",
     { d: arc(0, 1, R), style: `fill:none;stroke:${TILE};stroke-width:18;stroke-linecap:round` },
     svg,
   );
   const zone = svgEl("path", { d: "", style: `fill:none;stroke:${LIGHT};stroke-width:18` }, svg);
+  const sparks = svgEl("g", {}, svg);
   const needle = svgEl(
     "line",
     {
@@ -361,38 +363,101 @@ export function mountFuse(root: HTMLElement, p: FusePuzzle, ctx: GameCtx): Clean
     svg,
   );
   svgEl("circle", { cx, cy, r: 8, style: `fill:${TEXT}` }, svg);
+  // the run so far: one light per hit, all out (red) when the fuse burns
+  const pips = document.createElement("div");
+  pips.className = "g-pips";
+  pips.setAttribute("aria-hidden", "true");
+  for (let i = 0; i < need; i++) pips.appendChild(document.createElement("span"));
+  root.appendChild(pips);
   const button = document.createElement("button");
   button.type = "button";
   button.className = "g-btn g-btn-main";
   button.textContent = "Вставити запобіжник";
   root.appendChild(button);
+
+  const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
   let hits = 0;
-  let misses = 0;
+  let attempt = 1;
   let phase = p.phase;
   let last = performance.now();
   let v = 0;
   let alive = true;
-  const show = (flash?: "ok" | "miss") => {
+  /** The fuse has just burnt: the needle stands still until the run starts over. */
+  let burnt = false;
+  let restart = 0;
+  const show = (note?: string) => {
     ctx.say(
-      `Встав, коли стрілка в помаранчевій зоні · ${hits} з ${need} · промахів: ${misses}${flash === "ok" ? " · є!" : ""}`,
-      flash === "miss" ? "мимо" : undefined,
+      `Встав запобіжник, коли стрілка в помаранчевій зоні — ${need} рази поспіль, без жодного промаху · ${hits} з ${need}${attempt > 1 ? ` · спроба ${attempt}` : ""}${note ? ` · ${note}` : ""}`,
     );
     const z = p.zones[hits];
     zone.setAttribute("d", z ? arc(z[0], z[1], R) : "");
+    pips.childNodes.forEach((pip, i) => {
+      (pip as HTMLElement).toggleAttribute("data-on", i < hits);
+    });
+  };
+  /** A miss: the fuse burns — red, a shake, sparks where the needle stood, a buzz — and over. */
+  const blow = () => {
+    burnt = true;
+    button.disabled = true;
+    navigator.vibrate?.([70, 40, 160]);
+    track.setAttribute("style", `fill:none;stroke:${BAD};stroke-width:18;stroke-linecap:round`);
+    zone.setAttribute("style", `fill:none;stroke:${BAD};stroke-width:18;opacity:0.5`);
+    needle.setAttribute("style", `stroke:${BAD};stroke-width:4;stroke-linecap:round`);
+    const [sx, sy] = pt(v, R);
+    for (let i = 0; i < 9; i++) {
+      const a = (i / 9) * Math.PI * 2 + 0.3;
+      const r0 = 6 + (i % 3) * 2;
+      const r1 = 16 + (i % 2) * 8;
+      svgEl(
+        "line",
+        {
+          x1: sx + Math.cos(a) * r0,
+          y1: sy + Math.sin(a) * r0,
+          x2: sx + Math.cos(a) * r1,
+          y2: sy + Math.sin(a) * r1,
+          class: "g-spark",
+          style: `stroke:${i % 2 ? LIGHT : BAD};stroke-width:2.5;stroke-linecap:round`,
+        },
+        sparks,
+      );
+    }
+    pips.setAttribute("data-blown", "");
+    if (!reducedMotion) svg.classList.add("g-blown");
+    ctx.say(
+      `${hits ? `Було ${hits} з ${need} поспіль. ` : ""}Тепер усе з початку`,
+      "Запобіжник згорів!",
+    );
+    restart = window.setTimeout(() => {
+      burnt = false;
+      button.disabled = false;
+      hits = 0;
+      attempt++;
+      track.setAttribute("style", `fill:none;stroke:${TILE};stroke-width:18;stroke-linecap:round`);
+      zone.setAttribute("style", `fill:none;stroke:${LIGHT};stroke-width:18`);
+      needle.setAttribute("style", `stroke:${TEXT};stroke-width:4;stroke-linecap:round`);
+      sparks.replaceChildren();
+      pips.removeAttribute("data-blown");
+      svg.classList.remove("g-blown");
+      last = performance.now();
+      show();
+    }, 1300);
   };
   const tap = () => {
-    if (!alive) return;
+    if (!alive || burnt) return;
     const [a, b] = p.zones[hits] as [number, number];
-    const ok = v >= a && v <= b;
-    if (ok) hits++;
-    else misses++;
+    if (v < a || v > b) {
+      blow();
+      return;
+    }
+    hits++;
+    navigator.vibrate?.(15);
     if (hits >= need) {
       alive = false;
       show();
-      ctx.done(misses ? `промахів: ${misses}` : "без жодного промаху");
+      ctx.done(attempt === 1 ? "з першої спроби" : `зі спроби ${attempt}`);
       return;
     }
-    show(ok ? "ok" : "miss");
+    show("є!");
   };
   button.addEventListener("click", tap);
   svg.addEventListener("click", tap);
@@ -400,17 +465,20 @@ export function mountFuse(root: HTMLElement, p: FusePuzzle, ctx: GameCtx): Clean
     if (!alive) return;
     const dt = (now - last) / 1000;
     last = now;
-    phase += dt * p.speed * (1 + hits * 0.25);
-    v = (1 - Math.cos(phase)) / 2;
-    const [x, y] = pt(v, R - 14);
-    needle.setAttribute("x2", String(x));
-    needle.setAttribute("y2", String(y));
+    if (!burnt) {
+      phase += dt * p.speed * (1 + hits * FUSE_SPEEDUP);
+      v = (1 - Math.cos(phase)) / 2;
+      const [x, y] = pt(v, R - 14);
+      needle.setAttribute("x2", String(x));
+      needle.setAttribute("y2", String(y));
+    }
     requestAnimationFrame(tick);
   };
   show();
   requestAnimationFrame(tick);
   return () => {
     alive = false;
+    window.clearTimeout(restart);
   };
 }
 
