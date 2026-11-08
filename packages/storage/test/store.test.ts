@@ -297,6 +297,37 @@ describe("voltage, heartbeat, outbox, reminders, subscribers", () => {
     expect(store.telegram.toggle(SITE, -200, 5)).toBe(false);
     expect(store.telegram.isReadOnly(SITE, -200, 5)).toBe(false);
   });
+
+  it("a cleared facade is empty for everyone, the points stay, the windows can be lit again", () => {
+    const S = min(0);
+    const solve = (userId: number, floor: number, col: number, points: number, at: number) =>
+      store.game.addSolve({
+        siteId: SITE,
+        session: S,
+        floor,
+        col,
+        userId,
+        points,
+        durationMs: 5000,
+        solvedAt: at,
+      });
+    solve(1, 14, 9, 30, min(1));
+    solve(2, 14, 9, 20, min(2));
+    solve(2, 3, 1, 15, min(3));
+    expect(store.game.clearFacade(SITE, S)).toBe(3);
+    expect(store.game.solves(SITE, S)).toEqual([]);
+    const points = (rows: { userId: number; points: number }[]) =>
+      Object.fromEntries(rows.map((r) => [r.userId, r.points]));
+    expect(points(store.game.totals(SITE, { session: S }))).toEqual({ 1: 30, 2: 35 });
+    expect(points(store.game.totals(SITE, { since: min(0) }))).toEqual({ 1: 30, 2: 35 });
+    expect(points(store.game.totals(SITE))).toEqual({ 1: 30, 2: 35 });
+    // the same window again, by the same player: a new light and new points
+    expect(solve(1, 14, 9, 30, min(4))).toBe(true);
+    expect(store.game.solves(SITE, S)).toHaveLength(1);
+    expect(points(store.game.totals(SITE, { session: S }))).toEqual({ 1: 60, 2: 35 });
+    // another session's totals know nothing of it
+    expect(store.game.totals(SITE, { session: min(60) })).toEqual([]);
+  });
 });
 
 describe("legacy import", () => {

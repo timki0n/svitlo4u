@@ -22,6 +22,13 @@
       "when": 1794149218186,
       "tag": "0002_game",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1794160000000,
+      "tag": "0003_game_all_sides",
+      "breakpoints": true
     }
   ]
 }

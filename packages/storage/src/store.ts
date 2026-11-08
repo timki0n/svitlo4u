@@ -641,10 +641,24 @@ export function createStore(db: Db) {
           .orderBy(asc(gameSolves.solvedAt))
           .all();
       },
+      /**
+       * Empty the facade of a session for everyone, keeping the points: its solves move under the
+       * negative session, which the facade never reads but its totals still count; the windows can
+       * be lit again. Returns how many solves moved.
+       */
+      clearFacade(siteId: string, session: number): number {
+        return db
+          .update(gameSolves)
+          .set({ session: -session })
+          .where(and(eq(gameSolves.siteId, siteId), eq(gameSolves.session, session)))
+          .run().changes;
+      },
       /** Points and windows per player, best first: of one session, since an instant, or ever. */
       totals(siteId: string, filter: { session?: number; since?: number } = {}) {
         const where = [eq(gameSolves.siteId, siteId)];
-        if (filter.session !== undefined) where.push(eq(gameSolves.session, filter.session));
+        // a session's points include its solves cleared from the facade (clearFacade)
+        if (filter.session !== undefined)
+          where.push(inArray(gameSolves.session, [filter.session, -filter.session]));
         if (filter.since !== undefined) where.push(gte(gameSolves.solvedAt, filter.since));
         return db
           .select({

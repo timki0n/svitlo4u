@@ -7,19 +7,20 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  GAME_FLOORS,
   GAME_WINDOWS,
   gamePoints,
   gameSessionKey,
+  isGameWindow,
 } from "../../../../packages/domain/src/game.ts";
 import { hhmm } from "../format.ts";
 import type { Live } from "../live.ts";
-import type { FacadeScene, FacadeWindow } from "../scene3d.ts";
+import type { FacadeLit, FacadeScene, FacadeWindow } from "../scene3d.ts";
 import { inMiniApp } from "../telegram.ts";
 import { Icon } from "../ui.tsx";
 import { GameApiError, type GameState, gameApi, type SolveResult } from "./api.ts";
 import { TIER_LABEL, type WindowGame, windowGame } from "./games.ts";
 import { Avatar, Bolt, playerName, RatingScreen } from "./Rating.tsx";
+import { rngOf } from "./rng.ts";
 import "./game.css";
 
 /** The facade is re-read this often while it is on screen. */
@@ -35,9 +36,7 @@ function route(): Route {
   const m = /^#\/game\/(\d+)-(\d+)$/.exec(hash);
   const floor = Number(m?.[1]);
   const col = Number(m?.[2]);
-  return m && floor >= GAME_FLOORS.first && floor <= GAME_FLOORS.last && col >= 1 && col <= 8
-    ? { kind: "play", win: { floor, col } }
-    : { kind: "facade" };
+  return m && isGameWindow(floor, col) ? { kind: "play", win: { floor, col } } : { kind: "facade" };
 }
 
 const keyOf = (w: { floor: number; col: number }) => `${w.floor}-${w.col}`;
@@ -206,7 +205,18 @@ function Facade({
   onSelect: (w: FacadeWindow | null) => void;
   offline: boolean;
 }) {
-  const lit = useMemo(() => new Set(state.windows.map(keyOf)), [state.windows]);
+  const lit = useMemo(
+    () =>
+      new Map<string, FacadeLit>(
+        state.windows.map((w) => {
+          // who lives behind a window solved twice: a cat or a dog, its own for every outage
+          const rng = rngOf(`${session}:${keyOf(w)}:pet`);
+          const pet = rng() < 0.5 ? "cat" : "dog";
+          return [keyOf(w), { solves: w.solvers.length, pet, place: rng() }];
+        }),
+      ),
+    [state.windows, session],
+  );
   const playing = useMemo(() => new Set(state.playing.map(keyOf)), [state.playing]);
   const s = state.session;
   const label = s
@@ -334,7 +344,7 @@ function FacadeFigure({
   onSelect,
   inset,
 }: {
-  lit: ReadonlySet<string>;
+  lit: ReadonlyMap<string, FacadeLit>;
   playing: ReadonlySet<string>;
   selected: FacadeWindow | null;
   onSelect: (w: FacadeWindow) => void;
@@ -414,8 +424,8 @@ function WindowCard({
     return (
       <section className="card g-sheet">
         <p className="muted">
-          Торкнися вікна на фасаді й пройди міні-гру: вікно засвітиться для всіх, а ти отримаєш{" "}
-          <Bolt size={13} />. Хто засвітить першим — отримає в півтора раза більше.
+          Крути будинок пальцем, торкнися вікна й пройди міні-гру: вікно засвітиться для всіх, а ти
+          отримаєш <Bolt size={13} />. Хто засвітить першим — отримає в півтора раза більше.
         </p>
       </section>
     );

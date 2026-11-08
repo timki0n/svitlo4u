@@ -4,9 +4,14 @@
  */
 import { addDays, localDate, localMidnight } from "./time.ts";
 
-/** Residential storeys of the back facade (the ground floor is shops) and windows per storey. */
+/**
+ * Residential storeys of the tower (the ground floor is shops) and the windows of a storey, numbered
+ * round the tower going right as seen from outside: 1–10 the street side, 11–12 an end, 13–20 the
+ * yard side (its open galleries have no windows), 21–22 the other end. The game shows the tower
+ * alone (no annex), so every one of them can be played.
+ */
 export const GAME_FLOORS = { first: 2, last: 27 } as const;
-export const GAME_COLS = 8;
+export const GAME_COLS = 22;
 export const GAME_WINDOWS = (GAME_FLOORS.last - GAME_FLOORS.first + 1) * GAME_COLS;
 
 export type GameTier = 0 | 1 | 2;
