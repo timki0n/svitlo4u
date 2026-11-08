@@ -1,14 +1,18 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Guard } from "./Guard.tsx";
 import { HistoryScreen } from "./History.tsx";
 import { useLive } from "./live.ts";
 import { NowScreen } from "./Now.tsx";
 import { RenderSchedule } from "./Render.tsx";
 import { ScheduleScreen } from "./Schedule.tsx";
-import { Nav, type Tab } from "./ui.tsx";
+import { Header, Nav, type Tab } from "./ui.tsx";
+
+/** The game (its puzzles and the facade) loads only when opened. */
+const GameScreen = lazy(() => import("./game/GameScreen.tsx"));
 
 function tabFromHash(): Tab {
   const hash = location.hash.replace(/^#\/?/, "");
+  if (hash === "game" || hash.startsWith("game/")) return "game";
   return hash === "schedule" || hash === "history" ? hash : "now";
 }
 
@@ -53,6 +57,20 @@ function Site() {
         {tab === "now" && <NowScreen live={live} />}
         {tab === "schedule" && <ScheduleScreen live={live} />}
         {tab === "history" && <HistoryScreen site={live.site} now={live.now} />}
+        {tab === "game" && (
+          <Suspense
+            fallback={
+              <main className="screen">
+                <Header>
+                  <span className="label">Гра</span>
+                </Header>
+                <p className="muted">Завантаження…</p>
+              </main>
+            }
+          >
+            <GameScreen live={live} />
+          </Suspense>
+        )}
       </Guard>
       <Nav tab={tab} />
     </div>

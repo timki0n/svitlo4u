@@ -21,6 +21,7 @@ import {
 } from "./adapters/heartbeat.ts";
 import { type MqttLike, type PlugAdapter, startPlugAdapter } from "./adapters/plug.ts";
 import { YasnoPoller } from "./adapters/yasno.ts";
+import { registerGame } from "./api/game.ts";
 import { RateLimiter, registerApiGuards } from "./api/rate-limit.ts";
 import { registerApi } from "./api/routes.ts";
 import { Notifier } from "./channels/notifier.ts";
@@ -32,6 +33,7 @@ import { type Bus, EventBus } from "./runtime/bus.ts";
 import { type Clock, SystemClock } from "./runtime/clock.ts";
 import { buildServer } from "./server.ts";
 import { BackupService, loadBackupConfig } from "./services/backup.ts";
+import { GameService } from "./services/game.ts";
 import { ChromiumScheduleImages, type ScheduleImages } from "./services/images.ts";
 import { PowerService } from "./services/power.ts";
 import { ReminderService } from "./services/reminders.ts";
@@ -61,6 +63,8 @@ export type CoreDeps = {
   backupFetch?: (request: Request) => Promise<Response>;
   /** Replace the schedule pictures (tests); null turns them off. */
   images?: ScheduleImages | null;
+  /** Replace the Bot API calls for the game's avatars (tests). */
+  gameFetch?: (url: string) => Promise<Response>;
 };
 
 export type Core = {
@@ -199,6 +203,15 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
     clock,
     strict: deps.strictApi ?? Boolean(process.env.VITEST),
   });
+  const game = new GameService({
+    sites,
+    store,
+    clock,
+    avatarDir: config.dbPath === ":memory:" ? null : join(dirname(config.dbPath), "avatars"),
+    ...(deps.gameFetch ? { fetch: deps.gameFetch } : {}),
+    log,
+  });
+  registerGame(app, game, clock);
   telegram.registerRoutes(app);
   sse.registerRoutes(app);
 

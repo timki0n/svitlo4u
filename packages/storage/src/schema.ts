@@ -202,3 +202,45 @@ export const telegramSubscribers = sqliteTable(
   },
   (t) => [primaryKey({ columns: [t.siteId, t.chatId, t.threadId] })],
 );
+
+/** Players of the window game: a Telegram user as their Mini App last introduced them. */
+export const gamePlayers = sqliteTable(
+  "game_players",
+  {
+    siteId: text("site_id")
+      .notNull()
+      .references(() => sites.id),
+    userId: integer("user_id").notNull(),
+    firstName: text("first_name").notNull(),
+    lastName: text("last_name"),
+    username: text("username"),
+    /** Profile photo saved by the core (file name); null = none or not fetched yet. */
+    avatar: text("avatar"),
+    avatarCheckedAt: integer("avatar_checked_at"),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.siteId, t.userId] })],
+);
+
+/** Windows solved: one row per player and window of a session (a session = an outage). */
+export const gameSolves = sqliteTable(
+  "game_solves",
+  {
+    siteId: text("site_id")
+      .notNull()
+      .references(() => sites.id),
+    /** Start of the outage the session belongs to. */
+    session: integer("session").notNull(),
+    floor: integer("floor").notNull(),
+    col: integer("col").notNull(),
+    userId: integer("user_id").notNull(),
+    points: integer("points").notNull(),
+    durationMs: integer("duration_ms").notNull(),
+    solvedAt: integer("solved_at").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.siteId, t.session, t.floor, t.col, t.userId] }),
+    index("game_solves_by_time").on(t.siteId, t.solvedAt),
+  ],
+);

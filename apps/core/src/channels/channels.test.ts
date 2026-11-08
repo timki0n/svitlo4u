@@ -587,6 +587,8 @@ describe("Telegram commands (webhook)", () => {
     // /feed off undoes both.
     await postUpdate(c, message(forum, "/feed off", { ...inTopic, ...owner }));
     await vi.waitFor(() => expect(c.store.telegram.list("4u")).toEqual([]));
+    // the command and the notice (deleted by a timer: wait for it, not for the event loop)
+    await vi.waitFor(() => expect(deletedIds()).toHaveLength(6));
     await postUpdate(c, message(forum, "free again", inTopic));
     await flush(c);
     expect(deletedIds()).toHaveLength(6);

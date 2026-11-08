@@ -18,6 +18,8 @@ import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, or, sql } from "
 import type { Db } from "./db.ts";
 import {
   detectorState,
+  gamePlayers,
+  gameSolves,
   heartbeatMinutes,
   notificationOutbox,
   outages,
@@ -198,6 +200,23 @@ export function createStore(db: Db) {
             .select()
             .from(outages)
             .where(and(eq(outages.siteId, siteId), isNull(outages.end)))
+            .orderBy(desc(outages.start))
+            .get() ?? null
+        );
+      },
+      /** The latest real outage that has begun by `now` (ongoing or over). */
+      latest(siteId: string, now: number) {
+        return (
+          db
+            .select({ start: outages.start, end: outages.end })
+            .from(outages)
+            .where(
+              and(
+                eq(outages.siteId, siteId),
+                lte(outages.start, now),
+                eq(outages.falseAlarm, false),
+              ),
+            )
             .orderBy(desc(outages.start))
             .get() ?? null
         );
@@ -560,6 +579,85 @@ export function createStore(db: Db) {
           .where(eq(pushSubscriptions.siteId, siteId))
           .all()
           .map((row) => ({ ...row, preferences: JSON.parse(row.preferencesJson) as unknown }));
+      },
+    },
+
+    game: {
+      upsertPlayer(
+        siteId: string,
+        user: {
+          userId: number;
+          firstName: string;
+          lastName: string | null;
+          username: string | null;
+        },
+        now = Date.now(),
+      ): void {
+        db.insert(gamePlayers)
+          .values({ siteId, ...user, createdAt: now, updatedAt: now })
+          .onConflictDoUpdate({
+            target: [gamePlayers.siteId, gamePlayers.userId],
+            set: {
+              firstName: user.firstName,
+              lastName: user.lastName,
+              username: user.username,
+              updatedAt: now,
+            },
+          })
+          .run();
+      },
+      player(siteId: string, userId: number) {
+        return (
+          db
+            .select()
+            .from(gamePlayers)
+            .where(and(eq(gamePlayers.siteId, siteId), eq(gamePlayers.userId, userId)))
+            .get() ?? null
+        );
+      },
+      players(siteId: string, userIds: readonly number[]) {
+        if (userIds.length === 0) return [];
+        return db
+          .select()
+          .from(gamePlayers)
+          .where(and(eq(gamePlayers.siteId, siteId), inArray(gamePlayers.userId, [...userIds])))
+          .all();
+      },
+      setAvatar(siteId: string, userId: number, avatar: string | null, now = Date.now()): void {
+        db.update(gamePlayers)
+          .set({ avatar, avatarCheckedAt: now })
+          .where(and(eq(gamePlayers.siteId, siteId), eq(gamePlayers.userId, userId)))
+          .run();
+      },
+      /** Record a solved window; false when this player already solved it in the session. */
+      addSolve(row: typeof gameSolves.$inferInsert): boolean {
+        return db.insert(gameSolves).values(row).onConflictDoNothing().run().changes > 0;
+      },
+      solves(siteId: string, session: number) {
+        return db
+          .select()
+          .from(gameSolves)
+          .where(and(eq(gameSolves.siteId, siteId), eq(gameSolves.session, session)))
+          .orderBy(asc(gameSolves.solvedAt))
+          .all();
+      },
+      /** Points and windows per player, best first: of one session, since an instant, or ever. */
+      totals(siteId: string, filter: { session?: number; since?: number } = {}) {
+        const where = [eq(gameSolves.siteId, siteId)];
+        if (filter.session !== undefined) where.push(eq(gameSolves.session, filter.session));
+        if (filter.since !== undefined) where.push(gte(gameSolves.solvedAt, filter.since));
+        return db
+          .select({
+            userId: gameSolves.userId,
+            points: sql<number>`sum(${gameSolves.points})`,
+            windows: sql<number>`count(*)`,
+            last: sql<number>`max(${gameSolves.solvedAt})`,
+          })
+          .from(gameSolves)
+          .where(and(...where))
+          .groupBy(gameSolves.userId)
+          .orderBy(desc(sql`sum(${gameSolves.points})`), asc(sql`max(${gameSolves.solvedAt})`))
+          .all();
       },
     },
 

@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { duration, hhmm, percents } from "./format.ts";
 import type { Connection } from "./live.ts";
+import { inMiniApp } from "./telegram.ts";
 
 export const SUPPORT_URL = "https://send.monobank.ua/jar/A1DjHMA1sm";
 
@@ -13,6 +14,16 @@ const ICONS = {
     </>
   ),
   history: <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />,
+  game: (
+    <>
+      <rect x="4" y="2.5" width="16" height="19" rx="2" />
+      <path d="M8 6.5h2.5M13.5 6.5H16M8 10.5h2.5M13.5 10.5H16M8 14.5h2.5M10.5 21.5v-3h3v3" />
+    </>
+  ),
+  back: <path d="M15 18l-6-6 6-6" />,
+  trophy: (
+    <path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0V4zM7 6H4a3 3 0 0 0 3 4M17 6h3a3 3 0 0 1-3 4" />
+  ),
   heart: (
     <path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L12 21l7.8-7.5 1-1.1a5.5 5.5 0 0 0 0-7.8z" />
   ),
@@ -77,13 +88,14 @@ export function Header({ children }: { children: ReactNode }) {
   );
 }
 
-export type Tab = "now" | "schedule" | "history";
+export type Tab = "now" | "schedule" | "history" | "game";
 
 export function Nav({ tab }: { tab: Tab }) {
   const items: [Tab, string, string][] = [
     ["now", "#/", "Зараз"],
     ["schedule", "#/schedule", "Графік"],
     ["history", "#/history", "Історія"],
+    ...(inMiniApp() ? ([["game", "#/game", "Гра"]] as [Tab, string, string][]) : []),
   ];
   return (
     <nav className="nav" aria-label="Розділи">

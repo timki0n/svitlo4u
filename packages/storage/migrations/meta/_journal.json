@@ -15,6 +15,13 @@
       "when": 1794003803340,
       "tag": "0001_telegram_read_only",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1794149218186,
+      "tag": "0002_game",
+      "breakpoints": true
     }
   ]
 }

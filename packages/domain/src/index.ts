@@ -37,6 +37,17 @@ export {
   type TomorrowMonitorMode,
 } from "./behavior.ts";
 export {
+  GAME_COLS,
+  GAME_FLOORS,
+  GAME_WINDOWS,
+  type GameTier,
+  gamePoints,
+  gameSessionKey,
+  gameTier,
+  gameWeekStart,
+  isGameWindow,
+} from "./game.ts";
+export {
   type Bucket,
   calendarBuckets,
   clip,

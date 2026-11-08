@@ -1,0 +1,66 @@
+/**
+ * The window games and which one a window holds. A window's game, its layout and difficulty come
+ * from «outage + window» alone, so every neighbour meets the same puzzle there.
+ */
+import {
+  type Cleanup,
+  type GameCtx,
+  mountBeam,
+  mountChain,
+  mountCharge,
+  mountFuse,
+  mountPets,
+  mountSlide,
+  mountUntangle,
+} from "./mount.ts";
+import {
+  beamPuzzle,
+  chainPuzzle,
+  chargePuzzle,
+  fusePuzzle,
+  petsPuzzle,
+  slidePuzzle,
+  type Tier,
+  tierOf,
+  untanglePuzzle,
+} from "./puzzles.ts";
+import { type Rng, ri, rngOf } from "./rng.ts";
+
+export type GameDef = {
+  id: string;
+  name: string;
+  start(root: HTMLElement, key: string, tier: Tier, ctx: GameCtx): Cleanup;
+};
+
+function game<P>(
+  id: string,
+  name: string,
+  make: (rng: Rng, tier: Tier) => P,
+  mount: (root: HTMLElement, puzzle: P, ctx: GameCtx) => Cleanup,
+): GameDef {
+  return {
+    id,
+    name,
+    start: (root, key, tier, ctx) => mount(root, make(rngOf(`${key}:${id}`), tier), ctx),
+  };
+}
+
+export const GAMES: readonly GameDef[] = [
+  game("chain", "Ланцюг", chainPuzzle, mountChain),
+  game("beam", "Промінь", beamPuzzle, mountBeam),
+  game("untangle", "Розплутай дроти", untanglePuzzle, mountUntangle),
+  game("fuse", "Запобіжник", fusePuzzle, mountFuse),
+  game("pets", "Кіт чи пес", petsPuzzle, mountPets),
+  game("slide", "Винеси генератор", slidePuzzle, mountSlide),
+  game("charge", "Розклади заряд", chargePuzzle, mountCharge),
+];
+
+export const TIER_LABEL = ["легкий рівень", "середній рівень", "важкий рівень"] as const;
+
+export type WindowGame = { key: string; game: GameDef; tier: Tier };
+
+export function windowGame(outage: string, floor: number, col: number): WindowGame {
+  const key = `${outage}:${floor}-${col}`;
+  const index = ri(rngOf(key), GAMES.length);
+  return { key, game: GAMES[index] as GameDef, tier: tierOf(floor) };
+}

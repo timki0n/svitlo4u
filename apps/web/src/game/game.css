@@ -1,0 +1,569 @@
+/* The window game: the facade and its puzzles, in the site's dark neumorphism. */
+
+.g-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.g-meta b {
+  color: var(--light);
+  font-weight: 700;
+}
+
+.g-facade {
+  position: relative;
+  height: clamp(340px, calc(100dvh - 430px), 620px);
+  margin: 0;
+}
+
+.g-facade canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: pan-y;
+  cursor: pointer;
+  border-radius: 24px;
+}
+
+.g-sheet .muted {
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.g-play {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 48px;
+  border-radius: 16px;
+  background: linear-gradient(145deg, #ffae45, #ff6a0a);
+  box-shadow:
+    0 0 18px rgba(255, 122, 26, 0.45),
+    inset 1px 1px 2px rgba(255, 255, 255, 0.35);
+  color: #1a1208;
+  font-size: 15px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.g-play:active {
+  transform: scale(0.98);
+}
+
+.g-back,
+.g-close {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 15px;
+  background: var(--surface-2);
+  box-shadow: var(--raised-sm);
+  color: var(--text);
+  font:
+    700 13px "Manrope Variable",
+    sans-serif;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.g-close {
+  min-height: 36px;
+  padding: 0 10px;
+}
+
+.g-back:active,
+.g-close:active {
+  box-shadow: var(--inset-sm);
+}
+
+.g-hint {
+  min-height: 40px;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--muted);
+  text-align: center;
+}
+
+.g-warn {
+  color: var(--warn);
+}
+
+.g-board {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.g-svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.g-tap,
+.g-tap * {
+  cursor: pointer;
+}
+
+.g-drag {
+  touch-action: none;
+}
+
+.g-board-well {
+  border-radius: 18px;
+  background: var(--well);
+  box-shadow: var(--inset);
+}
+
+.g-btn {
+  min-height: 44px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 15px;
+  background: var(--surface-2);
+  box-shadow: var(--raised-sm);
+  color: var(--text);
+  font:
+    700 14px "Manrope Variable",
+    sans-serif;
+  cursor: pointer;
+}
+
+.g-btn:active {
+  box-shadow: var(--inset-sm);
+}
+
+.g-btn-main {
+  min-width: 220px;
+}
+
+.g-result-text {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--light);
+  text-align: center;
+}
+
+/* «Кіт чи пес» */
+.g-task {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-radius: 16px;
+  background: var(--well);
+  box-shadow: var(--inset-sm);
+  color: var(--light);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.g-windows {
+  display: grid;
+  grid-template-columns: repeat(4, 62px);
+  gap: 10px;
+  padding: 14px;
+  border-radius: 22px;
+  background: var(--well);
+  box-shadow: var(--inset);
+  touch-action: manipulation;
+}
+
+.g-window {
+  display: grid;
+  place-items: center;
+  height: 62px;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: #17181b;
+  color: #e8dcc8;
+  cursor: pointer;
+}
+
+.g-window[data-on] {
+  background: #4a3218;
+  box-shadow:
+    inset 0 0 16px rgba(255, 154, 61, 0.45),
+    0 0 12px rgba(255, 122, 26, 0.25);
+}
+
+/* «Розклади заряд» */
+.g-charge {
+  position: relative;
+  max-width: 100%;
+  touch-action: none;
+}
+
+.g-cables {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.g-bank {
+  position: absolute;
+  padding: 8px 10px;
+  border-radius: 16px;
+  background: var(--surface-2);
+  box-shadow: var(--raised-sm);
+  outline: 0 solid transparent;
+}
+
+.g-bank[data-ring="ok"] {
+  outline: 2px solid var(--bank);
+}
+
+.g-bank[data-ring="bad"] {
+  outline: 2px solid var(--warn);
+}
+
+.g-bank-name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--bank);
+}
+
+.g-bank-left {
+  margin: 2px 0 5px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.g-bank-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--well);
+  overflow: hidden;
+}
+
+.g-bank-bar > div {
+  height: 100%;
+  background: var(--bank);
+}
+
+.g-port {
+  position: absolute;
+  bottom: 8px;
+  width: 20px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1px solid rgba(242, 239, 234, 0.25);
+  font-size: 11px;
+  line-height: 14px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.g-port[data-used="true"] {
+  border-color: var(--bank);
+  background: var(--bank);
+  color: #1a1208;
+}
+
+.g-device {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  border-radius: 14px;
+  background: var(--surface-2);
+  box-shadow: var(--raised-sm);
+  font-size: 11px;
+  cursor: grab;
+}
+
+.g-device[data-on="true"] {
+  outline: 1.5px solid var(--bank);
+}
+
+.g-muted {
+  color: var(--muted);
+}
+
+/* online: who solved a window, who plays it now, the rating */
+.g-playing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--cool);
+}
+
+.g-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #ffd58a;
+  animation: g-blink 0.85s ease-in-out infinite alternate;
+}
+
+@keyframes g-blink {
+  from {
+    opacity: 0.25;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .g-dot {
+    animation: none;
+  }
+}
+
+.g-solvers {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 168px;
+  overflow-y: auto;
+}
+
+.g-solvers li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.g-solver-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.g-first {
+  padding: 1px 7px;
+  border-radius: 8px;
+  background: rgba(255, 154, 61, 0.16);
+  color: var(--light);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.g-avatar {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 50%;
+  object-fit: cover;
+  color: #1a1208;
+  font-weight: 800;
+  box-shadow: var(--raised-sm);
+}
+
+.g-rating {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.g-rank {
+  display: grid;
+  grid-template-columns: 26px auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 16px;
+}
+
+.g-rank[data-me] {
+  background: var(--well);
+  box-shadow:
+    var(--inset-sm),
+    0 0 0 1.5px rgba(255, 122, 26, 0.55);
+}
+
+.g-place {
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--muted);
+  text-align: center;
+}
+
+.g-rank:nth-child(-n + 3) .g-place {
+  color: var(--light);
+}
+
+.g-who {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.g-who > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.g-who .g-muted {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.g-score {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-size: 12px;
+}
+
+.g-score b {
+  font-size: 16px;
+  color: var(--light);
+}
+
+.g-gap {
+  text-align: center;
+  color: var(--muted);
+}
+
+/* points: a lightning bolt next to the number */
+.g-bolt {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 2px;
+  vertical-align: -0.12em;
+}
+
+/* points: a lightning bolt next to the number */
+.g-bolt {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 2px;
+  vertical-align: -0.12em;
+}
+
+/* the whole facade, moved left, and its progress on the right (no card) */
+.g-stage {
+  position: relative;
+}
+
+.g-side {
+  position: absolute;
+  top: 10px;
+  right: 0;
+  bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.g-ring {
+  position: relative;
+  align-self: center;
+  width: 76px;
+  height: 76px;
+}
+
+.g-ring-track,
+.g-ring-fill {
+  fill: none;
+  stroke-width: 7;
+}
+
+.g-ring-track {
+  stroke: var(--well);
+}
+
+.g-ring-fill {
+  stroke: var(--light);
+  stroke-linecap: round;
+}
+
+.g-ring-pct {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font:
+    600 16px Unbounded,
+    "Manrope Variable",
+    sans-serif;
+  color: var(--light);
+}
+
+.g-people {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.g-people li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.g-face {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+.g-face-dot {
+  position: absolute;
+  right: -2px;
+  bottom: -1px;
+  width: 8px;
+  height: 8px;
+  box-shadow: 0 0 0 2px var(--page);
+}
+
+.g-people-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.g-people li[data-me] .g-people-name {
+  color: var(--light);
+  font-weight: 700;
+}
+
+.g-people-share {
+  color: var(--muted);
+}
