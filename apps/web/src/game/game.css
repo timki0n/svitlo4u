@@ -170,8 +170,9 @@
 
 .g-windows {
   display: grid;
-  grid-template-columns: repeat(4, 62px);
+  grid-template-columns: repeat(4, minmax(0, 62px));
   gap: 10px;
+  max-width: 100%;
   padding: 14px;
   border-radius: 22px;
   background: var(--well);
@@ -182,7 +183,7 @@
 .g-window {
   display: grid;
   place-items: center;
-  height: 62px;
+  aspect-ratio: 1;
   padding: 0;
   border: 0;
   border-radius: 12px;
@@ -199,9 +200,13 @@
 }
 
 /* «Розклади заряд» */
+.g-charge-fit {
+  flex: none;
+}
+
 .g-charge {
   position: relative;
-  max-width: 100%;
+  transform-origin: 0 0;
   touch-action: none;
 }
 

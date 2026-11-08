@@ -47,16 +47,22 @@ function useGame(siteId: string, active: boolean) {
   const api = useMemo(() => gameApi(siteId), [siteId]);
   const [state, setState] = useState<GameState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const loaded = useRef(false);
   const refresh = useCallback(async () => {
     try {
       setState(await api.state());
+      loaded.current = true;
       setError(null);
     } catch (e) {
       setError(e instanceof GameApiError && e.status === 401 ? "auth" : "network");
     }
   }, [api]);
   useEffect(() => {
-    if (!active) return;
+    if (!active) {
+      // a window's screen needs the session too: once, e.g. after a reload on its address
+      if (!loaded.current) void refresh();
+      return;
+    }
     let stopped = false;
     let timer = 0;
     const tick = async () => {

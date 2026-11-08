@@ -600,11 +600,25 @@ export function mountCharge(root: HTMLElement, p: ChargePuzzle, ctx: GameCtx): C
     const r = devBox[i] as { x: number; y: number };
     return [r.x + dw / 2, r.y];
   };
+  // The board is laid out in fixed pixels and scaled down whole to the room there is: on a phone
+  // the card is narrower than W, and cutting the layout would push the banks and devices out of it.
+  const fit = document.createElement("div");
+  fit.className = "g-charge-fit";
+  root.appendChild(fit);
   const wrap = document.createElement("div");
   wrap.className = "g-charge";
   wrap.style.width = `${W}px`;
   wrap.style.height = `${H}px`;
-  root.appendChild(wrap);
+  fit.appendChild(wrap);
+  const scaleToFit = () => {
+    const k = Math.min(1, root.clientWidth / W);
+    fit.style.width = `${W * k}px`;
+    fit.style.height = `${H * k}px`;
+    wrap.style.transform = k < 1 ? `scale(${k})` : "";
+  };
+  const resize = new ResizeObserver(scaleToFit);
+  resize.observe(root);
+  scaleToFit();
   const bankLayer = document.createElement("div");
   const devLayer = document.createElement("div");
   wrap.append(bankLayer, devLayer);
@@ -661,7 +675,7 @@ export function mountCharge(root: HTMLElement, p: ChargePuzzle, ctx: GameCtx): C
             : `${left} з ${bank.cap} Вт·год`;
         const ring = over === b ? (overWhy ? "bad" : "ok") : "";
         return `<div class="g-bank" data-ring="${ring}" style="left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px;--bank:${color}">
-          <div class="g-bank-name">${icon("bank", 16)}Павербанк ${bank.name}</div>
+          <div class="g-bank-name">${icon("bank", 16)}${nb > 2 ? "" : "Павербанк "}${bank.name}</div>
           <div class="g-bank-left">${text}</div>
           <div class="g-bank-bar"><div style="width:${Math.round((left / bank.cap) * 100)}%"></div></div>
           ${bank.ports.map((port, i) => `<span class="g-port" data-used="${taken.has(i)}" style="left:${10 + i * 22}px">${port}</span>`).join("")}
@@ -768,5 +782,5 @@ export function mountCharge(root: HTMLElement, p: ChargePuzzle, ctx: GameCtx): C
     render();
   });
   render();
-  return undefined;
+  return () => resize.disconnect();
 }
