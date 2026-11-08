@@ -27,6 +27,34 @@ let initData: string | null = null;
   }
 })();
 
+/**
+ * A message to the Telegram app around the page (as its web-app script does, without loading it):
+ * through the native bridge on phones and the desktop app, to the parent frame on the web.
+ */
+function tell(event: string, data?: unknown): void {
+  try {
+    const bridge = (
+      window as { TelegramWebviewProxy?: { postEvent(event: string, data?: string): void } }
+    ).TelegramWebviewProxy;
+    if (bridge) bridge.postEvent(event, data === undefined ? undefined : JSON.stringify(data));
+    else if (window.parent !== window)
+      window.parent.postMessage(
+        JSON.stringify({ eventType: event, eventData: data }),
+        "https://web.telegram.org",
+      );
+  } catch {
+    // no Telegram around, or one too old for it: nothing to do
+  }
+}
+
+if (initData) {
+  tell("web_app_ready");
+  tell("web_app_expand"); // the whole height from the start
+  // the pages scroll and the game drags: pulling down must not fold the app away (Bot API 7.7;
+  // older clients ignore it). It still closes from Telegram's own header.
+  tell("web_app_setup_swipe_behavior", { allow_vertical_swipe: false });
+}
+
 /** Signed launch data of the Mini App, null in a plain browser. */
 export const tgInitData = (): string | null => initData;
 export const inMiniApp = (): boolean => initData !== null;
