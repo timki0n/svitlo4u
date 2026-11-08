@@ -572,7 +572,7 @@ function Play({
           {line.text}
           {line.warn && (
             <>
-              {" · "}
+              {line.text && " · "}
               <span className="g-warn">{line.warn}</span>
             </>
           )}
@@ -629,6 +629,31 @@ function Play({
   );
 }
 
+/** Kept free under a board: the card's padding and the page's own, down to the screen's edge. */
+const BOARD_BELOW = 40;
+/** Under the gauge of «Запобіжник»: its lights and its button. */
+const FUSE_CONTROLS = 90;
+
+/**
+ * Fit a tall board into the screen's height, so its bottom (the bag's last items, the fuse's
+ * button) is in reach without scrolling: the room below the board's top goes into --board-room
+ * (the boards that size themselves read it), and an SVG board taller than that is made narrower,
+ * its height following.
+ */
+function fitBoard(root: HTMLElement) {
+  const screen = window.visualViewport?.height ?? window.innerHeight;
+  const top = root.getBoundingClientRect().top + window.scrollY;
+  const room = Math.max(260, Math.floor(screen - top - BOARD_BELOW));
+  root.style.setProperty("--board-room", `${room}px`);
+  for (const svg of root.querySelectorAll<SVGSVGElement>(":scope > svg.g-svg")) {
+    const box = svg.viewBox.baseVal;
+    if (!box?.height) continue;
+    const fits = room - (svg.classList.contains("g-fuse") ? FUSE_CONTROLS : 0);
+    svg.style.width =
+      box.height > fits ? `${Math.max(160, (fits * box.width) / box.height)}px` : "";
+  }
+}
+
 /** One mounted puzzle; a new key starts it over. */
 function Board({
   info,
@@ -650,13 +675,23 @@ function Board({
     const root = host.current;
     if (!root) return;
     root.replaceChildren();
+    fitBoard(root); // before the game mounts: the ones that size themselves read the room
     const started = performance.now();
     const cleanup = info.game.start(root, info.key, info.tier, {
       say: (text, warn) => handlers.current.onSay(text, warn),
       done: (note) =>
         handlers.current.onDone(note, Math.round((performance.now() - started) / 1000)),
     });
+    fitBoard(root);
+    let raf = 0;
+    const refit = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => fitBoard(root));
+    };
+    window.addEventListener("resize", refit);
     return () => {
+      window.removeEventListener("resize", refit);
+      cancelAnimationFrame(raf);
       cleanup?.();
       root.replaceChildren();
     };

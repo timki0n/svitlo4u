@@ -327,6 +327,14 @@ export function mountUntangle(root: HTMLElement, p: UntanglePuzzle, ctx: GameCtx
 
 // ── Запобіжник ──────────────────────────────────────────────────────────────────────────────
 
+/** A hit just off the zone's edge still counts: about the needle's own width on each side. */
+const FUSE_EDGE = 0.015;
+/**
+ * The screen shows the needle a little late, so a tap counts where the needle was a moment ago
+ * too — where the eye saw it when the finger went down.
+ */
+const FUSE_SEEN_MS = 70;
+
 export function mountFuse(root: HTMLElement, p: FusePuzzle, ctx: GameCtx): Cleanup {
   const need = p.zones.length;
   const W = 300;
@@ -387,7 +395,7 @@ export function mountFuse(root: HTMLElement, p: FusePuzzle, ctx: GameCtx): Clean
   let restart = 0;
   const show = (note?: string) => {
     ctx.say(
-      `Встав запобіжник, коли стрілка в помаранчевій зоні — ${need} рази поспіль, без жодного промаху · ${hits} з ${need}${attempt > 1 ? ` · спроба ${attempt}` : ""}${note ? ` · ${note}` : ""}`,
+      `Тапни, коли стрілка в помаранчевій зоні: ${need} ${need >= 5 ? "разів" : "рази"} поспіль, без промаху · ${hits} з ${need}${attempt > 1 ? ` · спроба ${attempt}` : ""}${note ? ` · ${note}` : ""}`,
     );
     const z = p.zones[hits];
     zone.setAttribute("d", z ? arc(z[0], z[1], R) : "");
@@ -424,14 +432,15 @@ export function mountFuse(root: HTMLElement, p: FusePuzzle, ctx: GameCtx): Clean
     pips.setAttribute("data-blown", "");
     if (!reducedMotion) svg.classList.add("g-blown");
     ctx.say(
-      `${hits ? `Було ${hits} з ${need} поспіль. ` : ""}Тепер усе з початку`,
-      "Запобіжник згорів!",
+      "",
+      `Запобіжник згорів! ${hits ? `Було ${hits} з ${need} поспіль — усе` : "Усе"} з початку`,
     );
     restart = window.setTimeout(() => {
       burnt = false;
       button.disabled = false;
       hits = 0;
       attempt++;
+      seen.length = 0;
       track.setAttribute("style", `fill:none;stroke:${TILE};stroke-width:18;stroke-linecap:round`);
       zone.setAttribute("style", `fill:none;stroke:${LIGHT};stroke-width:18`);
       needle.setAttribute("style", `stroke:${TEXT};stroke-width:4;stroke-linecap:round`);
@@ -442,13 +451,18 @@ export function mountFuse(root: HTMLElement, p: FusePuzzle, ctx: GameCtx): Clean
       show();
     }, 1300);
   };
+  /** Where the needle stood lately (time, place): a tap is judged by what was on screen. */
+  const seen: { t: number; v: number }[] = [];
   const tap = () => {
     if (!alive || burnt) return;
     const [a, b] = p.zones[hits] as [number, number];
-    if (v < a || v > b) {
+    const inside = (x: number) => x >= a - FUSE_EDGE && x <= b + FUSE_EDGE;
+    const now = performance.now();
+    if (!inside(v) && !seen.some((s) => now - s.t <= FUSE_SEEN_MS && inside(s.v))) {
       blow();
       return;
     }
+    seen.length = 0; // the next zone is judged afresh
     hits++;
     navigator.vibrate?.(15);
     if (hits >= need) {
@@ -459,8 +473,16 @@ export function mountFuse(root: HTMLElement, p: FusePuzzle, ctx: GameCtx): Clean
     }
     show("є!");
   };
-  button.addEventListener("click", tap);
-  svg.addEventListener("click", tap);
+  // the finger coming down anywhere on the board inserts it — at once, not when it lifts, and
+  // no need to reach for the button; the button still works from the keyboard
+  const press = (e: PointerEvent) => {
+    if (e.button === 0) tap();
+  };
+  const key = (e: MouseEvent) => {
+    if (e.detail === 0) tap();
+  };
+  root.addEventListener("pointerdown", press);
+  button.addEventListener("click", key);
   const tick = (now: number) => {
     if (!alive) return;
     const dt = (now - last) / 1000;
@@ -468,6 +490,8 @@ export function mountFuse(root: HTMLElement, p: FusePuzzle, ctx: GameCtx): Clean
     if (!burnt) {
       phase += dt * p.speed * (1 + hits * FUSE_SPEEDUP);
       v = (1 - Math.cos(phase)) / 2;
+      seen.push({ t: now, v });
+      if (seen.length > 12) seen.shift();
       const [x, y] = pt(v, R - 14);
       needle.setAttribute("x2", String(x));
       needle.setAttribute("y2", String(y));
@@ -479,6 +503,7 @@ export function mountFuse(root: HTMLElement, p: FusePuzzle, ctx: GameCtx): Clean
   return () => {
     alive = false;
     window.clearTimeout(restart);
+    root.removeEventListener("pointerdown", press);
   };
 }
 
@@ -685,7 +710,9 @@ export function mountCharge(root: HTMLElement, p: ChargePuzzle, ctx: GameCtx): C
   wrap.style.height = `${H}px`;
   fit.appendChild(wrap);
   const scaleToFit = () => {
-    const k = Math.min(1, root.clientWidth / W);
+    // as wide as the card allows, as tall as the screen does (the room the game screen measured)
+    const room = Number.parseFloat(root.style.getPropertyValue("--board-room")) || H;
+    const k = Math.min(1, root.clientWidth / W, room / H);
     fit.style.width = `${W * k}px`;
     fit.style.height = `${H * k}px`;
     wrap.style.transform = k < 1 ? `scale(${k})` : "";
