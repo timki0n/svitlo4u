@@ -142,7 +142,10 @@ function Game({ siteId, tz, where }: { siteId: string; tz: string; where: Route 
   if (!state.session) return <Notice text="Гра почнеться з першим відключенням світла." />;
   const session = gameSessionKey(state.session.start);
   if (where.kind === "play")
-    return <Play api={api} session={session} win={where.win} onScored={refresh} />;
+    return (
+      // a window of its own each time, even when one follows another without the facade between
+      <Play key={keyOf(where.win)} api={api} session={session} win={where.win} onScored={refresh} />
+    );
   return (
     <Facade
       state={state}

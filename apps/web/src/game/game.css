@@ -462,12 +462,151 @@
   color: var(--muted);
 }
 
-/* points: a lightning bolt next to the number */
-.g-bolt {
-  display: inline-flex;
+/* the buildings: one card a facade, the newest first */
+.g-buildings {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.g-building {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 12px 14px;
+  border-radius: 18px;
+  background: var(--well);
+  box-shadow: var(--inset-sm);
+}
+
+.g-building[data-current] {
+  box-shadow:
+    var(--inset-sm),
+    0 0 0 1.5px rgba(255, 122, 26, 0.55);
+}
+
+.g-building-head,
+.g-building-stats {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.g-building-head b,
+.g-building-stats b {
+  font-weight: 800;
+}
+
+.g-building-stats {
+  color: var(--muted);
+}
+
+.g-building-stats b {
+  color: var(--light);
+}
+
+.g-tag {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.g-tag[data-on] {
+  color: var(--light);
+}
+
+.g-meter {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.g-meter > div {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--light);
+}
+
+/* who lit the most first: four faces in a row, the first one larger, ringed in light */
+.g-podium {
+  margin: 4px 0 0;
+  padding: 12px 4px 2px;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: end;
+  gap: 4px;
+  border-top: 1px solid rgba(242, 239, 234, 0.06);
+}
+
+.g-podium li {
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  margin-left: 2px;
-  vertical-align: -0.12em;
+  gap: 4px;
+  min-width: 0;
+}
+
+.g-podium-face {
+  position: relative;
+  display: inline-flex;
+}
+
+.g-podium li:first-child .g-avatar {
+  box-shadow:
+    0 0 0 2px var(--light),
+    0 0 14px rgba(255, 154, 61, 0.35);
+}
+
+.g-podium-rank {
+  position: absolute;
+  right: -5px;
+  bottom: -3px;
+  display: grid;
+  place-items: center;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--surface-2);
+  box-shadow: var(--raised-sm);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.g-podium li:first-child .g-podium-rank {
+  background: var(--light);
+  color: #1a1208;
+}
+
+.g-podium-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.g-podium-share {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.g-podium li:first-child .g-podium-share {
+  color: var(--light);
 }
 
 /* points: a lightning bolt next to the number */

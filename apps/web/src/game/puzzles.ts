@@ -14,13 +14,17 @@ export const tierOf = gameTier;
  * Generators retry until they reach them; tests check them on many keys.
  */
 export const MIN_CHAIN_TAPS = [8, 14, 24] as const;
-export const MIN_BEAM_FLIPS = [3, 4, 5] as const;
+export const MIN_BEAM_FLIPS = [3, 4, 6] as const;
 export const MIN_UNTANGLE_CROSSINGS = [5, 8, 12] as const;
 export const MIN_SLIDE_MOVES = [4, 7, 9] as const;
 /** How far above the floor a slide puzzle may go. */
 const SLIDE_SPREAD = [2, 3, 5] as const;
 /** At most this many ways to plug everything in (fewer = more thinking). */
 export const MAX_CHARGE_SOLUTIONS = [3, 2, 1] as const;
+/** «Тривожна валізка»: at most this many ways to pack the bag full. */
+export const MAX_PACK_SOLUTIONS = [40, 20, 24] as const;
+/** «Батарейки по зарядках»: at least this many pours to sort them. */
+export const MIN_BATTERY_MOVES = [6, 10, 14] as const;
 
 // ── «Ланцюг»: turn tiles until the current reaches every bulb ───────────────────────────────
 
@@ -118,27 +122,37 @@ export function chainTaps(p: ChainPuzzle): number {
   }, 0);
 }
 
-// ── «Промінь»: turn mirrors so the torch beam hits the solar panel ──────────────────────────
+// ── «Промінь»: turn mirrors so the torch beam runs through every solar panel ─────────────────
 
 export type Mirror = "/" | "\\";
 export const reflect = (m: Mirror, [dx, dy]: readonly [number, number]): [number, number] =>
   m === "/" ? [-dy, -dx] : [dy, dx];
+const turned = (m: Mirror): Mirror => (m === "/" ? "\\" : "/");
+
+/** Board side, panels to light at once, turns of the path it is built on, decoy mirrors. */
+const BEAM_N = [6, 7, 8] as const;
+const BEAM_PANELS = [2, 3, 4] as const;
+const BEAM_TURNS = [4, 6, 8] as const;
+const BEAM_DECOYS = [5, 9, 13] as const;
 
 export type BeamPuzzle = {
   n: number;
   /** The torch shines from the left edge along this row. */
   row: number;
-  target: number;
+  /** Solar panels the beam must run through, all at once (it passes them straight). */
+  panels: number[];
   mirrors: Map<number, Mirror>;
-  /** Mirrors on the solution path, as they must stand. */
+  /** The mirrors of the path it was built on, as they must stand. */
   solution: Map<number, Mirror>;
 };
 
 export function traceBeam(
-  p: Pick<BeamPuzzle, "n" | "row" | "target">,
+  p: Pick<BeamPuzzle, "n" | "row" | "panels">,
   mirrors: ReadonlyMap<number, Mirror>,
-): { points: [number, number][]; hit: boolean } {
+): { points: [number, number][]; lit: Set<number>; hit: boolean } {
   const { n } = p;
+  const panels = new Set(p.panels);
+  const lit = new Set<number>();
   let x = -1;
   let y = p.row;
   let d: [number, number] = [1, 0];
@@ -148,152 +162,219 @@ export function traceBeam(
     const ny = y + d[1];
     if (nx < 0 || ny < 0 || nx >= n || ny >= n) {
       points.push([x + 0.5 + d[0] * 0.5, y + 0.5 + d[1] * 0.5]);
-      return { points, hit: false };
+      break;
     }
     x = nx;
     y = ny;
     const cell = y * n + x;
-    if (cell === p.target) {
-      points.push([x + 0.5, y + 0.5]);
-      return { points, hit: true };
-    }
+    if (panels.has(cell)) lit.add(cell);
     const m = mirrors.get(cell);
     if (m) {
       points.push([x + 0.5, y + 0.5]);
       d = reflect(m, d);
     }
   }
-  return { points, hit: false };
+  return { points, lit, hit: lit.size === panels.size };
 }
 
 /**
- * A path with MIN_BEAM_FLIPS turns from the torch to the panel; every mirror on it starts wrong,
- * decoys stand off the path. Rebuilt whole while any shorter way to the panel exists.
+ * A winding path from the torch out of the board with the panels spread along it; its mirrors
+ * start turned wrong (at least MIN_BEAM_FLIPS of them), decoys stand everywhere else. Kept when
+ * no cheaper way lights every panel and when following the beam and
+ * turning each mirror towards the nearest dark panel does not solve it (beamGreedy).
  */
 export function beamPuzzle(rng: Rng, tier: Tier): BeamPuzzle {
-  const want = MIN_BEAM_FLIPS[tier];
-  let best: { p: BeamPuzzle; flips: number } | null = null;
-  for (let attempt = 0; attempt < 40; attempt++) {
+  let best: { p: BeamPuzzle; score: number } | null = null;
+  for (let attempt = 0; attempt < 60; attempt++) {
     const p = beamAttempt(rng, tier);
     if (!p) continue;
-    const flips = beamMinFlips(p, want);
-    if (flips >= want) return p;
-    if (!best || flips > best.flips) best = { p, flips };
+    const built = [...p.solution].filter(([c, m]) => p.mirrors.get(c) !== m).length;
+    const flips = beamMinFlips(p, built + 1);
+    const outwits = !beamGreedy(p);
+    if (flips >= MIN_BEAM_FLIPS[tier] && outwits) return p;
+    const score = flips + (outwits ? 100 : 0);
+    if (!best || score > best.score) best = { p, score };
   }
   if (best) return best.p;
-  const n = [5, 6, 7][tier] as number;
-  return { n, row: 0, target: n - 1, mirrors: new Map([[1, "/"]]), solution: new Map() };
+  const n = BEAM_N[tier];
+  return { n, row: 0, panels: [1], mirrors: new Map(), solution: new Map() };
 }
 
 function beamAttempt(rng: Rng, tier: Tier): BeamPuzzle | null {
-  const n = [5, 6, 7][tier] as number;
-  const turnsNeeded = MIN_BEAM_FLIPS[tier];
-  const decoys = [3, 5, 7][tier] as number;
+  const n = BEAM_N[tier];
   const inGrid = (a: number, b: number) => a >= 0 && b >= 0 && a < n && b < n;
-  let row = 0;
-  let target = -1;
-  let solution = new Map<number, Mirror>();
-  outer: for (let attempt = 0; attempt < 800; attempt++) {
-    row = ri(rng, n);
-    solution = new Map();
+  for (let attempt = 0; attempt < 400; attempt++) {
+    const row = ri(rng, n);
+    const solution = new Map<number, Mirror>();
+    const path: number[] = [];
     const used = new Set<number>();
     let x = 0;
     let y = row;
     let d: [number, number] = [1, 0];
-    let turns = 0;
-    let len = 1;
-    used.add(y * n + x);
+    let done = false;
     for (let guard = 0; guard < n * n; guard++) {
       const here = y * n + x;
-      const nx = x + d[0];
-      const ny = y + d[1];
-      const straight = inGrid(nx, ny) && !used.has(ny * n + nx);
-      const sides: [number, number][] = d[0]
-        ? [
-            [0, 1],
-            [0, -1],
-          ]
-        : [
-            [1, 0],
-            [-1, 0],
-          ];
-      const perp = sides.filter(([a, b]) => inGrid(x + a, y + b) && !used.has((y + b) * n + x + a));
-      const canEnd = turns >= turnsNeeded && len >= Math.max(4, n - 1) && !solution.has(here);
-      if (canEnd && (rng() < 0.35 || (!straight && perp.length === 0))) {
-        target = here;
-        break outer;
-      }
-      if ((!straight || (turns < turnsNeeded && rng() < 0.4)) && perp.length > 0) {
-        const nd = perp[ri(rng, perp.length)] as [number, number];
+      used.add(here);
+      path.push(here);
+      const ax = x + d[0];
+      const ay = y + d[1];
+      const out = !inGrid(ax, ay);
+      const free = out || !used.has(ay * n + ax);
+      const sides = (
+        d[0]
+          ? [
+              [0, 1],
+              [0, -1],
+            ]
+          : [
+              [1, 0],
+              [-1, 0],
+            ]
+      ).filter(
+        ([a, b]) =>
+          inGrid(x + (a as number), y + (b as number)) &&
+          !used.has((y + (b as number)) * n + x + (a as number)),
+      ) as [number, number][];
+      const owed = BEAM_TURNS[tier] - solution.size;
+      const turn = sides.length > 0 && (!free || (out && owed > 0) || (owed > 0 && rng() < 0.42));
+      if (turn) {
+        const nd = sides[ri(rng, sides.length)] as [number, number];
         const slash = reflect("/", d);
         solution.set(here, slash[0] === nd[0] && slash[1] === nd[1] ? "/" : "\\");
         d = nd;
-        turns++;
-        x += d[0];
-        y += d[1];
-        used.add(y * n + x);
-        len++;
-        continue;
+      } else if (!free) {
+        break;
+      } else if (out) {
+        done = owed <= 0 && path.length >= n * 2;
+        break;
       }
-      if (!straight) continue outer;
-      x = nx;
-      y = ny;
-      used.add(y * n + x);
-      len++;
-    }
-  }
-  if (target < 0) return null;
-  const onPath = new Set<number>();
-  {
-    let x = -1;
-    let y = row;
-    let d: [number, number] = [1, 0];
-    for (let g = 0; g < n * n * 2; g++) {
       x += d[0];
       y += d[1];
-      if (!inGrid(x, y)) break;
-      const c = y * n + x;
-      onPath.add(c);
-      if (c === target) break;
-      const m = solution.get(c);
-      if (m) d = reflect(m, d);
     }
+    if (!done) continue;
+    // the panels: straight cells of the path, one in each stretch of it, the last near its end
+    const straight = path.slice(1).filter((c) => !solution.has(c));
+    const k = BEAM_PANELS[tier];
+    if (straight.length < k * 2) continue;
+    const panels: number[] = [];
+    for (let i = 0; i < k; i++) {
+      const from = Math.floor((straight.length * i) / k);
+      const to = Math.floor((straight.length * (i + 1)) / k);
+      panels.push(straight[from + ri(rng, to - from)] as number);
+    }
+    // the path's mirrors start wrong, at least MIN_BEAM_FLIPS of them; decoys fill the rest
+    const mirrors = new Map<number, Mirror>();
+    shuffle(rng, [...solution.keys()]).forEach((c, i) => {
+      const m = solution.get(c) as Mirror;
+      mirrors.set(c, i < MIN_BEAM_FLIPS[tier] || rng() < 0.5 ? turned(m) : m);
+    });
+    const onPath = new Set(path);
+    const off = shuffle(
+      rng,
+      [...Array(n * n).keys()].filter((c) => !onPath.has(c)),
+    );
+    for (const c of off.slice(0, BEAM_DECOYS[tier])) mirrors.set(c, rng() < 0.5 ? "/" : "\\");
+    return { n, row, panels, mirrors, solution };
   }
-  const free = [...Array(n * n).keys()].filter(
-    (c) => c !== target && !solution.has(c) && !onPath.has(c),
-  );
-  const decoyCells = shuffle(rng, free).slice(0, decoys);
-  const flip = (m: Mirror | undefined): Mirror => (m === "/" ? "\\" : "/");
-  const p = { n, row, target };
-  const mirrors = new Map<number, Mirror>();
-  for (const [c, m] of solution) mirrors.set(c, flip(m));
-  for (const c of decoyCells) mirrors.set(c, rng() < 0.5 ? "/" : "\\");
-  return { ...p, mirrors, solution };
+  return null;
 }
 
-/** Fewest mirror turns that bring the beam to the panel, counted up to `cap`. */
+/**
+ * Fewest mirror turns that send the beam through every panel, up to `cap`: follow the beam and,
+ * at each mirror it meets for the first time, try it as it stands and turned.
+ */
 export function beamMinFlips(
-  p: Pick<BeamPuzzle, "n" | "row" | "target" | "mirrors">,
+  p: Pick<BeamPuzzle, "n" | "row" | "panels" | "mirrors">,
   cap = Number.POSITIVE_INFINITY,
 ): number {
-  const cells = [...p.mirrors.keys()];
-  const limit = Math.min(cap, cells.length + 1);
-  const mirrors = new Map(p.mirrors);
-  const turn = (c: number) => mirrors.set(c, mirrors.get(c) === "/" ? "\\" : "/");
-  // try every set of `size` mirrors, smallest sets first
-  const tryChoose = (size: number, from: number): boolean => {
-    if (size === 0) return traceBeam(p, mirrors).hit;
-    for (let i = from; i <= cells.length - size; i++) {
-      const c = cells[i] as number;
-      turn(c);
-      const hit = tryChoose(size - 1, i + 1);
-      turn(c);
-      if (hit) return true;
+  const { n } = p;
+  const bit = new Map(p.panels.map((c, i) => [c, 1 << i]));
+  const all = (1 << p.panels.length) - 1;
+  const chosen = new Map<number, Mirror>();
+  let best = cap;
+  const run = (x0: number, y0: number, dx0: number, dy0: number, lit0: number, cost: number) => {
+    if (cost >= best) return;
+    let x = x0;
+    let y = y0;
+    let dx = dx0;
+    let dy = dy0;
+    let lit = lit0;
+    for (let guard = 0; guard < n * n * 4; guard++) {
+      x += dx;
+      y += dy;
+      if (x < 0 || y < 0 || x >= n || y >= n) {
+        if (lit === all) best = cost;
+        return;
+      }
+      const c = y * n + x;
+      lit |= bit.get(c) ?? 0;
+      const start = p.mirrors.get(c);
+      if (!start) continue;
+      const set = chosen.get(c);
+      if (set) {
+        [dx, dy] = reflect(set, [dx, dy]);
+        continue;
+      }
+      for (const m of [start, turned(start)]) {
+        chosen.set(c, m);
+        const [ndx, ndy] = reflect(m, [dx, dy]);
+        run(x, y, ndx, ndy, lit, cost + (m === start ? 0 : 1));
+        chosen.delete(c);
+      }
+      return;
     }
-    return false;
   };
-  for (let size = 0; size < limit; size++) if (tryChoose(size, 0)) return size;
-  return limit;
+  run(-1, p.row, 1, 0, 0, 0);
+  return best;
+}
+
+/**
+ * The quick idea: follow the beam and, at each mirror met for the first time, send it where it
+ * looks best — into a dark panel straight ahead, else towards the nearest dark panel. True when
+ * that alone lights them all: the board asks for no planning.
+ */
+export function beamGreedy(p: Pick<BeamPuzzle, "n" | "row" | "panels" | "mirrors">): boolean {
+  const { n } = p;
+  const panels = new Set(p.panels);
+  const lit = new Set<number>();
+  const chosen = new Map<number, Mirror>();
+  const inGrid = (a: number, b: number) => a >= 0 && b >= 0 && a < n && b < n;
+  const promise = (x: number, y: number, [dx, dy]: [number, number]) => {
+    if (!inGrid(x + dx, y + dy)) return 1000; // out of the board
+    for (let ax = x + dx, ay = y + dy; inGrid(ax, ay); ax += dx, ay += dy) {
+      const c = ay * n + ax;
+      if (panels.has(c) && !lit.has(c)) return 0;
+      if (p.mirrors.has(c)) break;
+    }
+    let near = 100;
+    for (const c of panels)
+      if (!lit.has(c))
+        near = Math.min(
+          near,
+          Math.abs((c % n) - (x + dx)) + Math.abs(Math.floor(c / n) - (y + dy)),
+        );
+    return 1 + near;
+  };
+  let x = -1;
+  let y = p.row;
+  let d: [number, number] = [1, 0];
+  for (let guard = 0; guard < n * n * 4; guard++) {
+    x += d[0];
+    y += d[1];
+    if (!inGrid(x, y)) break;
+    const c = y * n + x;
+    if (panels.has(c)) lit.add(c);
+    const start = p.mirrors.get(c);
+    if (!start) continue;
+    let m = chosen.get(c);
+    if (!m) {
+      const other = turned(start);
+      m = promise(x, y, reflect(other, d)) < promise(x, y, reflect(start, d)) ? other : start;
+      chosen.set(c, m);
+    }
+    d = reflect(m, d);
+  }
+  return lit.size === panels.size;
 }
 
 // ── «Розплутай дроти»: drag junction boxes until no wire crosses another ────────────────────
@@ -756,4 +837,408 @@ function chargeAttempt(rng: Rng, tier: Tier): ChargePuzzle {
     return { name, cap: mine.reduce((s, d) => s + d.need, 0) + slack, ports: shuffle(rng, ports) };
   });
   return { devices, banks, home };
+}
+
+// ── «Тривожна валізка»: pack the emergency bag full, every item inside ───────────────────────
+
+export type PackKind =
+  | "docs"
+  | "candle"
+  | "torch"
+  | "bank"
+  | "aid"
+  | "water"
+  | "radio"
+  | "food"
+  | "blanket"
+  | "clothes"
+  | "sleep"
+  | "cash"
+  | "thermos"
+  | "book"
+  | "plug";
+/** Items by how many cells they take. */
+const PACK_ITEMS: Record<number, [PackKind, string][]> = {
+  2: [
+    ["docs", "Документи"],
+    ["candle", "Свічки"],
+    ["cash", "Гроші"],
+  ],
+  3: [
+    ["torch", "Ліхтарик"],
+    ["bank", "Павербанк"],
+    ["aid", "Аптечка"],
+    ["plug", "Зарядка"],
+  ],
+  4: [
+    ["water", "Вода"],
+    ["radio", "Радіо"],
+    ["food", "Їжа"],
+    ["thermos", "Термос"],
+    ["book", "Книжка"],
+  ],
+  6: [
+    ["blanket", "Ковдра"],
+    ["clothes", "Одяг"],
+    ["sleep", "Спальник"],
+  ],
+};
+/** The only shapes items come in: plain bars and blocks, and L corners. */
+const PACK_SHAPES = {
+  bar2: [
+    [0, 0],
+    [0, 1],
+  ],
+  bar3: [
+    [0, 0],
+    [0, 1],
+    [0, 2],
+  ],
+  corner3: [
+    [0, 0],
+    [1, 0],
+    [1, 1],
+  ],
+  bar4: [
+    [0, 0],
+    [0, 1],
+    [0, 2],
+    [0, 3],
+  ],
+  block4: [
+    [0, 0],
+    [0, 1],
+    [1, 0],
+    [1, 1],
+  ],
+  l4: [
+    [0, 0],
+    [1, 0],
+    [2, 0],
+    [2, 1],
+  ],
+  j4: [
+    [0, 1],
+    [1, 1],
+    [2, 1],
+    [2, 0],
+  ],
+  block6: [
+    [0, 0],
+    [0, 1],
+    [0, 2],
+    [1, 0],
+    [1, 1],
+    [1, 2],
+  ],
+} as const satisfies Record<string, readonly (readonly [number, number])[]>;
+type PackShape = keyof typeof PACK_SHAPES;
+
+/** Which of the plain shapes an item has, whichever way it is turned; null for any other. */
+export function packShapeOf(cells: readonly (readonly [number, number])[]): PackShape | null {
+  const key = (c: readonly (readonly [number, number])[]) => JSON.stringify(packNormal(c));
+  const mine = new Set(packTurns(cells).map(key));
+  for (const [name, shape] of Object.entries(PACK_SHAPES))
+    if (mine.has(key(shape))) return name as PackShape;
+  return null;
+}
+/** The bag (a box less some corners), the shapes its items may have and how many, per tier. */
+const PACK_SIZES: readonly {
+  w: number;
+  h: number;
+  corners: number;
+  shapes: readonly PackShape[];
+  items: readonly [number, number];
+}[] = [
+  {
+    w: 4,
+    h: 3,
+    corners: 0,
+    shapes: ["bar2", "bar3", "corner3", "block4", "l4", "j4"],
+    items: [4, 4],
+  },
+  {
+    w: 5,
+    h: 4,
+    corners: 2,
+    shapes: ["bar3", "corner3", "bar4", "block4", "l4", "j4"],
+    items: [5, 5],
+  },
+  {
+    w: 6,
+    h: 5,
+    corners: 3,
+    shapes: ["bar3", "corner3", "bar4", "block4", "l4", "j4", "block6"],
+    items: [6, 7],
+  },
+];
+
+export type PackPiece = { kind: PackKind; name: string; cells: [row: number, col: number][] };
+export type PackPuzzle = {
+  w: number;
+  h: number;
+  /** Cells of the bag, r * w + c; the rest of the w × h box is outside it. */
+  bag: number[];
+  /** As they lie next to the bag: turned any way. */
+  pieces: PackPiece[];
+  /** The packing it was cut from: which piece fills each bag cell. */
+  cut: Map<number, number>;
+};
+
+/** Cells of a shape moved to start at row 0, column 0, in reading order. */
+export function packNormal(cells: readonly (readonly [number, number])[]): [number, number][] {
+  const r0 = Math.min(...cells.map(([r]) => r));
+  const c0 = Math.min(...cells.map(([, c]) => c));
+  return cells
+    .map(([r, c]) => [r - r0, c - c0] as [number, number])
+    .sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+}
+
+/** A quarter turn clockwise. */
+export const packTurn = (cells: readonly (readonly [number, number])[]): [number, number][] =>
+  packNormal(cells.map(([r, c]) => [c, -r] as [number, number]));
+
+const shapeKey = (cells: readonly (readonly [number, number])[]) =>
+  cells.map(([r, c]) => `${r}.${c}`).join(" ");
+
+/** The distinct turns of a shape. */
+function packTurns(cells: readonly (readonly [number, number])[]): [number, number][][] {
+  const out: [number, number][][] = [];
+  let s = packNormal(cells);
+  for (let i = 0; i < 4; i++) {
+    if (!out.some((o) => shapeKey(o) === shapeKey(s))) out.push(s);
+    s = packTurn(s);
+  }
+  return out;
+}
+
+/**
+ * The bag filled at random with items of the given shapes, at most `most` of them (the first empty
+ * cell takes a shape that fits, backing off when stuck); the items' cells, or none.
+ */
+function packTile(
+  rng: Rng,
+  w: number,
+  h: number,
+  bag: readonly number[],
+  shapes: readonly PackShape[],
+  most: number,
+): [number, number][][] | null {
+  const inBag = new Set(bag);
+  const turns = shapes.flatMap((name) => packTurns(PACK_SHAPES[name]));
+  const biggest = Math.max(...turns.map((t) => t.length));
+  const order = [...bag].sort((x, y) => x - y);
+  const filled = new Set<number>();
+  const items: [number, number][][] = [];
+  let budget = 4000;
+  const go = (): boolean => {
+    if (budget-- <= 0) return false;
+    const first = order.find((c) => !filled.has(c));
+    if (first === undefined) return true;
+    // what is left cannot be filled with the items still allowed
+    if (order.length - filled.size > (most - items.length) * biggest) return false;
+    const fr = Math.floor(first / w);
+    const fc = first % w;
+    // bigger shapes first more often: fewer, plainer items
+    const tries = turns
+      .map((t) => ({ t, key: t.length + rng() * 3 }))
+      .sort((a, b) => b.key - a.key)
+      .map(({ t }) => t);
+    for (const shape of tries) {
+      const [r0, c0] = shape[0] as [number, number];
+      const cells = shape.map(([r, c]) => [fr + r - r0, fc + c - c0] as [number, number]);
+      if (
+        !cells.every(
+          ([r, c]) =>
+            r >= 0 && r < h && c >= 0 && c < w && inBag.has(r * w + c) && !filled.has(r * w + c),
+        )
+      )
+        continue;
+      for (const [r, c] of cells) filled.add(r * w + c);
+      items.push(cells);
+      if (go()) return true;
+      items.pop();
+      for (const [r, c] of cells) filled.delete(r * w + c);
+    }
+    return false;
+  };
+  return go() ? items : null;
+}
+
+/**
+ * A bag filled with items of simple shapes, each handed over turned at random. Kept when it
+ * packs in at most MAX_PACK_SOLUTIONS ways (alike items swapped count once): a puzzle, not a heap.
+ */
+export function packPuzzle(rng: Rng, tier: Tier): PackPuzzle {
+  const s = PACK_SIZES[tier] as (typeof PACK_SIZES)[number];
+  let best: { p: PackPuzzle; ways: number } | null = null;
+  for (let attempt = 0; attempt < 300; attempt++) {
+    const all = [...Array(s.w * s.h).keys()];
+    const corners = shuffle(rng, [0, s.w - 1, s.w * (s.h - 1), s.w * s.h - 1]).slice(0, s.corners);
+    const bag = all.filter((c) => !corners.includes(c));
+    const tiled = packTile(rng, s.w, s.h, bag, s.shapes, s.items[1]);
+    if (!tiled || tiled.length < s.items[0]) continue;
+    // a name of its own for every item: no more items of a size than names for it
+    const count = new Map<number, number>();
+    for (const cells of tiled) count.set(cells.length, (count.get(cells.length) ?? 0) + 1);
+    if ([...count].some(([size, n]) => n > (PACK_ITEMS[size]?.length ?? 0))) continue;
+    const left = new Map(
+      Object.entries(PACK_ITEMS).map(([size, list]) => [Number(size), shuffle(rng, list)]),
+    );
+    const named = tiled.map((cells) => {
+      const names = left.get(cells.length) as [PackKind, string][];
+      const [kind, name] = names.pop() as [PackKind, string];
+      let shape = packNormal(cells);
+      for (let t = ri(rng, 4); t > 0; t--) shape = packTurn(shape);
+      return { piece: { kind, name, cells: shape }, cells };
+    });
+    const order = shuffle(rng, [...named.keys()]);
+    const pieces = order.map((i) => (named[i] as (typeof named)[number]).piece);
+    const cut = new Map<number, number>();
+    order.forEach((i, at) => {
+      for (const [r, c] of (named[i] as (typeof named)[number]).cells) cut.set(r * s.w + c, at);
+    });
+    const p: PackPuzzle = { w: s.w, h: s.h, bag, pieces, cut };
+    const ways = packSolutions(p, MAX_PACK_SOLUTIONS[tier] + 1);
+    if (ways <= MAX_PACK_SOLUTIONS[tier]) return p;
+    if (!best || ways < best.ways) best = { p, ways };
+  }
+  return (best as { p: PackPuzzle }).p;
+}
+
+/** Ways to pack the bag full, up to `stopAt`; items of the same shape swapped count once. */
+export function packSolutions(p: Pick<PackPuzzle, "w" | "h" | "bag" | "pieces">, stopAt = 1000) {
+  const { w, h } = p;
+  const bag = new Set(p.bag);
+  const turns = p.pieces.map((piece) => packTurns(piece.cells));
+  const shapes = turns.map((t) => t.map(shapeKey).sort()[0]);
+  const order = [...p.bag].sort((a, b) => a - b);
+  const filled = new Set<number>();
+  const used = p.pieces.map(() => false);
+  let count = 0;
+  const go = () => {
+    if (count >= stopAt) return;
+    const first = order.find((c) => !filled.has(c));
+    if (first === undefined) {
+      count++;
+      return;
+    }
+    const fr = Math.floor(first / w);
+    const fc = first % w;
+    for (let i = 0; i < turns.length; i++) {
+      if (used[i]) continue;
+      // an item like one already tried here gives the same packings again
+      if (shapes.findIndex((s, j) => !used[j] && s === shapes[i]) !== i) continue;
+      for (const shape of turns[i] as [number, number][][]) {
+        const [r0, c0] = shape[0] as [number, number];
+        const cells: number[] = [];
+        for (const [r, c] of shape) {
+          const rr = fr + r - r0;
+          const cc = fc + c - c0;
+          const cell = rr * w + cc;
+          if (rr < 0 || rr >= h || cc < 0 || cc >= w || !bag.has(cell) || filled.has(cell)) break;
+          cells.push(cell);
+        }
+        if (cells.length !== shape.length) continue;
+        for (const c of cells) filled.add(c);
+        used[i] = true;
+        go();
+        used[i] = false;
+        for (const c of cells) filled.delete(c);
+      }
+    }
+  };
+  go();
+  return count;
+}
+
+// ── «Батарейки по зарядках»: sort the batteries so each charger holds one kind ──────────────
+
+export const BATTERY_KINDS = ["AA", "AAA", "C", "D", "9V"] as const;
+export const BATTERY_CAP = 4;
+export type BatteryPuzzle = { cap: number; stacks: number[][] };
+
+/** How many batteries go from one charger onto another (the same kind on top, while room). */
+export function batteryPour(stacks: readonly (readonly number[])[], from: number, to: number) {
+  const a = stacks[from] as readonly number[];
+  const b = stacks[to] as readonly number[];
+  if (from === to || a.length === 0 || b.length >= BATTERY_CAP) return 0;
+  const top = a[a.length - 1] as number;
+  if (b.length > 0 && b[b.length - 1] !== top) return 0;
+  let run = 1;
+  while (run < a.length && a[a.length - 1 - run] === top) run++;
+  return Math.min(run, BATTERY_CAP - b.length);
+}
+
+const full = (s: readonly number[]) => s.length === BATTERY_CAP && s.every((k) => k === s[0]);
+
+export const batterySorted = (stacks: readonly (readonly number[])[]): boolean =>
+  stacks.every((s) => s.length === 0 || full(s));
+
+/**
+ * Fewest pours to sort them (breadth first over the chargers' states), −1 when more than `limit`
+ * states had to be seen, Infinity when it cannot be done.
+ */
+export function batteryMinMoves(p: BatteryPuzzle, limit = 150_000): number {
+  const key = (st: number[][]) =>
+    st
+      .map((s) => s.join(""))
+      .sort()
+      .join("|");
+  const seen = new Set([key(p.stacks)]);
+  let level = [p.stacks.map((s) => [...s])];
+  for (let moves = 0; level.length > 0; moves++) {
+    const next: number[][][] = [];
+    for (const st of level) {
+      if (batterySorted(st)) return moves;
+      for (let a = 0; a < st.length; a++) {
+        const from = st[a] as number[];
+        if (from.length === 0 || full(from)) continue;
+        for (let b = 0; b < st.length; b++) {
+          const n = batteryPour(st, a, b);
+          if (n === 0) continue;
+          // the whole charger onto an empty one changes nothing
+          if (n === from.length && (st[b] as number[]).length === 0) continue;
+          const moved = st.map((s) => [...s]);
+          const lift = (moved[a] as number[]).splice(from.length - n, n);
+          (moved[b] as number[]).push(...lift);
+          const k = key(moved);
+          if (seen.has(k)) continue;
+          seen.add(k);
+          if (seen.size > limit) return -1;
+          next.push(moved);
+        }
+      }
+    }
+    level = next;
+  }
+  return Number.POSITIVE_INFINITY;
+}
+
+/**
+ * Kinds of batteries (4 each) mixed over as many chargers, two chargers empty. Kept when the
+ * fewest pours that sort them reach MIN_BATTERY_MOVES.
+ */
+export function batteryPuzzle(rng: Rng, tier: Tier): BatteryPuzzle {
+  const kinds = [3, 4, 5][tier] as number;
+  let best: { p: BatteryPuzzle; moves: number } | null = null;
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const all = shuffle(
+      rng,
+      [...Array(kinds).keys()].flatMap((k) => Array<number>(BATTERY_CAP).fill(k)),
+    );
+    const stacks = [...Array(kinds).keys()].map((i) =>
+      all.slice(i * BATTERY_CAP, (i + 1) * BATTERY_CAP),
+    );
+    if (stacks.some(full)) continue;
+    stacks.push([], []);
+    const p = { cap: BATTERY_CAP, stacks };
+    const moves = batteryMinMoves(p);
+    if (moves === Number.POSITIVE_INFINITY) continue;
+    // too many states to count means plenty of pours
+    const score = moves < 0 ? 99 : moves;
+    if (score >= MIN_BATTERY_MOVES[tier]) return p;
+    if (!best || score > best.moves) best = { p, moves: score };
+  }
+  return (best as { p: BatteryPuzzle }).p;
 }

@@ -3,6 +3,8 @@
  * from the core itself (type-only import, nothing of the core in the bundle).
  */
 import type {
+  GameBuilding,
+  GameBuildings,
   GamePeriod,
   GameRating,
   GameRatingRow,
@@ -11,7 +13,7 @@ import type {
 } from "../../../core/src/services/game.ts";
 import { tgInitData } from "../telegram.ts";
 
-export type { GamePeriod, GameRating, GameRatingRow, GameState };
+export type { GameBuilding, GameBuildings, GamePeriod, GameRating, GameRatingRow, GameState };
 export type SolveResult = Extract<GameSolve, { ok: true }>;
 
 export class GameApiError extends Error {
@@ -57,5 +59,7 @@ export function gameApi(siteId: string) {
       call<GameRating>("GET", `${base}/rating?period=${period}`, {
         ...(signal ? { signal } : {}),
       }),
+    buildings: (signal?: AbortSignal) =>
+      call<GameBuildings>("GET", `${base}/buildings`, { ...(signal ? { signal } : {}) }),
   };
 }

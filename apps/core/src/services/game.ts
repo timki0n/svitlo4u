@@ -11,7 +11,7 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { gamePoints, gameWeekStart, isGameWindow } from "@svitlo/domain";
+import { GAME_WINDOWS, gamePoints, gameWeekStart, isGameWindow } from "@svitlo/domain";
 import type { Store } from "@svitlo/storage";
 import type { MiniAppUser } from "../api/telegram-auth.ts";
 import type { Clock } from "../runtime/clock.ts";
@@ -26,6 +26,8 @@ const AVATAR_TTL_MS = 3 * 86_400_000;
 const JOIN_EVERY_MS = 10 * 60_000;
 const AVATAR_MAX_BYTES = 512_000;
 const RATING_ROWS = 50;
+/** The buildings' rating shows only facades lit beyond this share. */
+export const BUILDING_MIN_SHARE = 0.1;
 
 export type GameDeps = {
   sites: readonly SiteConfig[];
@@ -65,6 +67,27 @@ export type GameRating = {
 export type GameSolve =
   | { ok: true; points: number; first: boolean; already: boolean }
   | { ok: false; error: "no_session" | "start_first" | "too_fast" };
+/** One building: the facade of an outage, as the neighbours lit it. */
+export type GameBuilding = {
+  /** The outage it stood in: its start and end (null while it lasts). */
+  start: number;
+  end: number | null;
+  /** The building of the outage now, still being lit. */
+  current: boolean;
+  /** Windows lit, and how much of the facade that is (0–1). */
+  windows: number;
+  share: number;
+  players: number;
+  solves: number;
+  points: number;
+  /** Who lit the most windows first, best first (up to four), with how many. */
+  top: (GamePlayerView & { id: number; firsts: number })[];
+};
+export type GameBuildings = {
+  /** Buildings lit beyond this share only (0–1). */
+  minShare: number;
+  buildings: GameBuilding[];
+};
 
 type Presence = { session: number; startedAt: number; until: number };
 
@@ -209,6 +232,65 @@ export class GameService {
       rows: shown.map(row),
       me: mine ? row(mine) : null,
     };
+  }
+
+  /**
+   * The buildings lit beyond BUILDING_MIN_SHARE, the newest first. A facade emptied during its
+   * outage (a negative session, see clearFacade) is no building of the history: its points stay
+   * in the players' rating only.
+   */
+  buildings(siteId: string): GameBuildings {
+    const { store } = this.deps;
+    const session = this.session(siteId);
+    const rows = store.game
+      .buildings(siteId)
+      .filter((b) => b.session > 0 && b.windows / GAME_WINDOWS > BUILDING_MIN_SHARE);
+    const ends = new Map(
+      store.outages
+        .startingAt(
+          siteId,
+          rows.map((b) => b.session),
+        )
+        .map((o) => [o.start, o.end]),
+    );
+    const firsts = new Map<number, { userId: number; firsts: number }[]>();
+    for (const f of store.game.firsts(siteId)) {
+      const list = firsts.get(f.session) ?? [];
+      list.push(f);
+      firsts.set(f.session, list);
+    }
+    const tops = new Map(
+      rows.map((b) => [
+        b.session,
+        (firsts.get(b.session) ?? [])
+          .sort((x, y) => y.firsts - x.firsts || x.userId - y.userId)
+          .slice(0, 4),
+      ]),
+    );
+    const views = this.views(
+      siteId,
+      [...tops.values()].flat().map((f) => f.userId),
+    );
+    const buildings = rows
+      .map(
+        (b): GameBuilding => ({
+          start: b.session,
+          end: ends.get(b.session) ?? null,
+          current: b.session === session?.start,
+          windows: b.windows,
+          share: b.windows / GAME_WINDOWS,
+          players: b.players,
+          solves: b.solves,
+          points: b.points,
+          top: (tops.get(b.session) ?? []).map((f) => ({
+            ...(views[f.userId] ?? { name: "Сусід", username: null, avatar: null }),
+            id: f.userId,
+            firsts: f.firsts,
+          })),
+        }),
+      )
+      .sort((x, y) => y.start - x.start);
+    return { minShare: BUILDING_MIN_SHARE, buildings };
   }
 
   /** The saved photo behind a signed avatar link. */

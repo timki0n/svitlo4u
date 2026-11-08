@@ -98,6 +98,12 @@ export function registerGame(app: FastifyInstance, game: GameService, clock: Clo
     return game.rating(p.site.id, p.site.tz, p.user.id, query.data.period);
   });
 
+  app.get("/api/v1/sites/:siteId/game/buildings", async (request, reply) => {
+    const p = player(request, reply);
+    if (!p) return reply;
+    return game.buildings(p.site.id);
+  });
+
   app.get("/api/v1/sites/:siteId/game/avatars/:file", async (request, reply) => {
     const params = AvatarParams.safeParse(request.params);
     const query = AvatarQuery.safeParse(request.query);

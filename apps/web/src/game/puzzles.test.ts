@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { GAMES, windowGame } from "./games.ts";
 import {
+  BATTERY_CAP,
+  batteryMinMoves,
+  batteryPuzzle,
+  batterySorted,
+  beamGreedy,
   beamMinFlips,
   beamPuzzle,
   chainPowered,
@@ -12,10 +17,15 @@ import {
   crossingCount,
   fusePuzzle,
   MAX_CHARGE_SOLUTIONS,
+  MAX_PACK_SOLUTIONS,
+  MIN_BATTERY_MOVES,
   MIN_BEAM_FLIPS,
   MIN_CHAIN_TAPS,
   MIN_SLIDE_MOVES,
   MIN_UNTANGLE_CROSSINGS,
+  packPuzzle,
+  packShapeOf,
+  packSolutions,
   petsPuzzle,
   slideMinMoves,
   slidePuzzle,
@@ -52,6 +62,8 @@ describe("window games", () => {
       fusePuzzle,
       petsPuzzle,
       chargePuzzle,
+      packPuzzle,
+      batteryPuzzle,
     ])
       for (const t of TIERS) expect(make(rngOf(`k${t}`), t)).toEqual(make(rngOf(`k${t}`), t));
     expect(slidePuzzle(rngOf("k"), 1)).toEqual(slidePuzzle(rngOf("k"), 1));
@@ -69,12 +81,15 @@ describe("difficulty: no puzzle is a tap or two away", () => {
       }
   });
 
-  it(`Промінь: at least ${MIN_BEAM_FLIPS.join(" / ")} mirrors to turn, counting any shortcut`, () => {
+  it(`Промінь: every panel at once, at least ${MIN_BEAM_FLIPS.join(" / ")} mirrors to turn; following the beam is not enough`, () => {
     for (const k of keys(150))
       for (const t of TIERS) {
         const p = beamPuzzle(rngOf(k), t);
-        expect(beamMinFlips(p)).toBeGreaterThanOrEqual(MIN_BEAM_FLIPS[t]);
+        expect(p.panels).toHaveLength(t + 2);
+        expect(traceBeam(p, p.mirrors).hit).toBe(false);
         expect(traceBeam(p, new Map([...p.mirrors, ...p.solution])).hit).toBe(true);
+        expect(beamMinFlips(p)).toBeGreaterThanOrEqual(MIN_BEAM_FLIPS[t]);
+        expect(beamGreedy(p)).toBe(false);
       }
   });
 
@@ -132,6 +147,36 @@ describe("difficulty: no puzzle is a tap or two away", () => {
         const all = p.waves.flat();
         expect(all.filter((s) => s.kind === p.target).length).toBeGreaterThanOrEqual(p.need);
         expect(all.some((s) => s.kind !== p.target)).toBe(true);
+      }
+  });
+  it(`Тривожна валізка: plain items, all different, fill the bag exactly, in at most ${MAX_PACK_SOLUTIONS.join(" / ")} ways`, () => {
+    for (const k of keys(100))
+      for (const t of TIERS) {
+        const p = packPuzzle(rngOf(k), t);
+        const cells = p.pieces.reduce((n, piece) => n + piece.cells.length, 0);
+        // plain items only: bars, blocks, L corners
+        for (const piece of p.pieces) expect(packShapeOf(piece.cells)).not.toBeNull();
+        expect(new Set(p.pieces.map((piece) => piece.kind)).size).toBe(p.pieces.length);
+        expect(cells).toBe(p.bag.length);
+        // the cut it was made from is one packing: each item's cells, turned, are its shape
+        expect(new Set(p.cut.keys())).toEqual(new Set(p.bag));
+        const ways = packSolutions(p, MAX_PACK_SOLUTIONS[t] + 1);
+        expect(ways).toBeGreaterThanOrEqual(1);
+        expect(ways).toBeLessThanOrEqual(MAX_PACK_SOLUTIONS[t]);
+      }
+  });
+
+  it(`Батарейки по зарядках: mixed, sortable, at least ${MIN_BATTERY_MOVES.join(" / ")} pours`, () => {
+    for (const k of keys(30))
+      for (const t of TIERS) {
+        const p = batteryPuzzle(rngOf(k), t);
+        expect(p.stacks).toHaveLength(t + 5);
+        expect(p.stacks.flat()).toHaveLength((t + 3) * BATTERY_CAP);
+        expect(batterySorted(p.stacks)).toBe(false);
+        const moves = batteryMinMoves(p);
+        // −1: more states than counted, which means plenty of pours
+        if (moves !== -1) expect(moves).toBeGreaterThanOrEqual(MIN_BATTERY_MOVES[t]);
+        expect(moves).not.toBe(Number.POSITIVE_INFINITY);
       }
   });
 });

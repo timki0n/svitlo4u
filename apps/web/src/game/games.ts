@@ -5,19 +5,23 @@
 import {
   type Cleanup,
   type GameCtx,
+  mountBatteries,
   mountBeam,
   mountChain,
   mountCharge,
   mountFuse,
+  mountPack,
   mountPets,
   mountSlide,
   mountUntangle,
 } from "./mount.ts";
 import {
+  batteryPuzzle,
   beamPuzzle,
   chainPuzzle,
   chargePuzzle,
   fusePuzzle,
+  packPuzzle,
   petsPuzzle,
   slidePuzzle,
   type Tier,
@@ -53,6 +57,8 @@ export const GAMES: readonly GameDef[] = [
   game("pets", "Кіт чи пес", petsPuzzle, mountPets),
   game("slide", "Винеси генератор", slidePuzzle, mountSlide),
   game("charge", "Розклади заряд", chargePuzzle, mountCharge),
+  game("pack", "Тривожна валізка", packPuzzle, mountPack),
+  game("batteries", "Батарейки по зарядках", batteryPuzzle, mountBatteries),
 ];
 
 export const TIER_LABEL = ["легкий рівень", "середній рівень", "важкий рівень"] as const;

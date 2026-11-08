@@ -2,10 +2,14 @@
  * The window games on the page: plain SVG and DOM in the site's colours, driven by touch.
  * Each mount draws one puzzle into `root`, reports through `ctx` and returns its cleanup.
  */
-import { type GameIcon, icon } from "./icons.ts";
+import { type GameIcon, icon, iconPaths } from "./icons.ts";
 import {
+  BATTERY_KINDS,
+  type BatteryPuzzle,
   type BeamPuzzle,
   type Block,
+  batteryPour,
+  batterySorted,
   type ChainPuzzle,
   type ChargePuzzle,
   chainPowered,
@@ -14,6 +18,7 @@ import {
   degree,
   type FusePuzzle,
   type Mirror,
+  type PackPuzzle,
   type PetsPuzzle,
   type Point,
   rotate,
@@ -142,7 +147,6 @@ export function mountChain(root: HTMLElement, p: ChainPuzzle, ctx: GameCtx): Cle
 // ── Промінь ─────────────────────────────────────────────────────────────────────────────────
 
 export function mountBeam(root: HTMLElement, p: BeamPuzzle, ctx: GameCtx): Cleanup {
-  ctx.say("Повертай дзеркала, щоб промінь ліхтарика влучив у сонячну панель");
   const { n } = p;
   const mirrors = new Map<number, Mirror>(p.mirrors);
   const size = 300;
@@ -152,7 +156,10 @@ export function mountBeam(root: HTMLElement, p: BeamPuzzle, ctx: GameCtx): Clean
   let won = false;
   const draw = () => {
     svg.replaceChildren();
-    const { points, hit } = traceBeam(p, mirrors);
+    const { points, lit } = traceBeam(p, mirrors);
+    ctx.say(
+      `Повертай дзеркала, щоб промінь ліхтарика пройшов через усі сонячні панелі · заряджено ${lit.size} з ${p.panels.length}`,
+    );
     for (let i = 0; i < n * n; i++)
       svgEl(
         "rect",
@@ -171,25 +178,38 @@ export function mountBeam(root: HTMLElement, p: BeamPuzzle, ctx: GameCtx): Clean
       { x: 2, y: (p.row + 0.5) * cs - 9, width: 20, height: 18, rx: 5, style: `fill:${TEXT}` },
       svg,
     );
+    // the panels: a framed square with a cross of cells, lit while the beam runs through
+    for (const cell of p.panels) {
+      const x = ox + (cell % n) * cs + cs * 0.18;
+      const y = Math.floor(cell / n) * cs + cs * 0.18;
+      const s = cs * 0.64;
+      const on = lit.has(cell);
+      svgEl(
+        "rect",
+        {
+          x,
+          y,
+          width: s,
+          height: s,
+          rx: 4,
+          style: `fill:${on ? LIGHT : TILE};stroke:${on ? LIGHT : TEXT};stroke-width:2`,
+        },
+        svg,
+      );
+      svgEl(
+        "path",
+        {
+          d: `M${x + s / 2} ${y + 2}V${y + s - 2}M${x + 2} ${y + s / 2}H${x + s - 2}`,
+          style: `stroke:${on ? "#1a1208" : DIM};stroke-width:1.5`,
+        },
+        svg,
+      );
+    }
     svgEl(
       "polyline",
       {
         points: points.map(([a, b]) => `${ox + a * cs},${b * cs}`).join(" "),
-        style: `fill:none;stroke:${LIGHT};stroke-width:4;stroke-linejoin:round;stroke-linecap:round`,
-      },
-      svg,
-    );
-    const tx = ox + (p.target % n) * cs;
-    const ty = Math.floor(p.target / n) * cs;
-    svgEl(
-      "rect",
-      {
-        x: tx + cs * 0.2,
-        y: ty + cs * 0.2,
-        width: cs * 0.6,
-        height: cs * 0.6,
-        rx: 4,
-        style: `fill:${hit ? LIGHT : TILE};stroke:${hit ? LIGHT : DIM};stroke-width:2`,
+        style: `fill:none;stroke:${LIGHT};stroke-width:4;stroke-linejoin:round;stroke-linecap:round;opacity:0.9`,
       },
       svg,
     );
@@ -200,32 +220,18 @@ export function mountBeam(root: HTMLElement, p: BeamPuzzle, ctx: GameCtx): Clean
       const b = cs * 0.78;
       const g = svgEl("g", { class: "g-tap" }, svg);
       svgEl("rect", { x, y, width: cs, height: cs, style: "fill:transparent" }, g);
-      svgEl(
-        "line",
+      const line =
         m === "/"
-          ? {
-              x1: x + a,
-              y1: y + b,
-              x2: x + b,
-              y2: y + a,
-              style: `stroke:${TEXT};stroke-width:5;stroke-linecap:round`,
-            }
-          : {
-              x1: x + a,
-              y1: y + a,
-              x2: x + b,
-              y2: y + b,
-              style: `stroke:${TEXT};stroke-width:5;stroke-linecap:round`,
-            },
-        g,
-      );
+          ? { x1: x + a, y1: y + b, x2: x + b, y2: y + a }
+          : { x1: x + a, y1: y + a, x2: x + b, y2: y + b };
+      svgEl("line", { ...line, style: `stroke:${TEXT};stroke-width:5;stroke-linecap:round` }, g);
       g.addEventListener("click", () => {
         if (won) return;
         mirrors.set(cell, m === "/" ? "\\" : "/");
         draw();
         if (traceBeam(p, mirrors).hit) {
           won = true;
-          ctx.done("панель заряджається");
+          ctx.done("усі панелі заряджаються");
         }
       });
     }
@@ -783,4 +789,425 @@ export function mountCharge(root: HTMLElement, p: ChargePuzzle, ctx: GameCtx): C
   });
   render();
   return () => resize.disconnect();
+}
+
+// ── Тривожна валізка ────────────────────────────────────────────────────────────────────────
+
+const ITEM_COLORS = ["#ff9a3d", "#8fa3c8", "#d9b86a", "#7cc6a0", "#e2807a", "#b99ad8", "#6cc0c0"];
+const INK = "#1a1208";
+
+/** An icon drawn into the board's SVG, centred on (cx, cy). */
+function svgIcon(parent: Element, name: GameIcon, cx: number, cy: number, size: number) {
+  const s = svgEl(
+    "svg",
+    {
+      x: cx - size / 2,
+      y: cy - size / 2,
+      width: size,
+      height: size,
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: INK,
+      "stroke-width": 1.9,
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      "pointer-events": "none",
+    },
+    parent,
+  );
+  s.innerHTML = iconPaths(name);
+}
+
+export function mountPack(root: HTMLElement, p: PackPuzzle, ctx: GameCtx): Cleanup {
+  const { w, h } = p;
+  const bag = new Set(p.bag);
+  const items = p.pieces.map((piece, i) => ({
+    kind: piece.kind,
+    cells: piece.cells.map(([r, c]) => [r, c] as [number, number]),
+    at: null as { r: number; c: number } | null,
+    color: ITEM_COLORS[i % ITEM_COLORS.length] as string,
+  }));
+  type Item = (typeof items)[number];
+  const vw = 320;
+  const cs = Math.min(48, Math.floor(296 / w));
+  const bx = (vw - w * cs) / 2;
+  const by = 6;
+  // next to the bag every item has its own square slot, big enough whichever way it is turned
+  const ts = Math.round(cs * 0.6);
+  const { slots, vh } = (() => {
+    const out: { x: number; y: number; side: number }[] = [];
+    let x = 8;
+    let y = by + h * cs + 20;
+    let rowH = 0;
+    for (const it of items) {
+      const side = (Math.max(...it.cells.map(([r]) => r), ...it.cells.map(([, c]) => c)) + 1) * ts;
+      if (x + side > vw - 8) {
+        x = 8;
+        y += rowH + 12;
+        rowH = 0;
+      }
+      out.push({ x, y, side });
+      x += side + 12;
+      rowH = Math.max(rowH, side);
+    }
+    return { slots: out, vh: y + rowH + 6 };
+  })();
+  const svg = svgRoot(root, vw, vh, "g-drag");
+  /** Where an item lying next to the bag starts: centred in its slot. */
+  const slotOrigin = (i: number): [number, number] => {
+    const it = items[i] as Item;
+    const slot = slots[i] as { x: number; y: number; side: number };
+    const iw = (Math.max(...it.cells.map(([, c]) => c)) + 1) * ts;
+    const ih = (Math.max(...it.cells.map(([r]) => r)) + 1) * ts;
+    return [slot.x + (slot.side - iw) / 2, slot.y + (slot.side - ih) / 2];
+  };
+  /** Bag cells an item fills now (none while it lies outside). */
+  const filling = (o: Item): number[] => {
+    const at = o.at;
+    return at ? o.cells.map(([r, c]) => (at.r + r) * w + at.c + c) : [];
+  };
+  const taken = (cell: number, except: Item) =>
+    items.some((o) => o !== except && filling(o).includes(cell));
+  const fits = (it: Item, cells: [number, number][], at: { r: number; c: number }) =>
+    cells.every(([r, c]) => {
+      const rr = at.r + r;
+      const cc = at.c + c;
+      return (
+        rr >= 0 && rr < h && cc >= 0 && cc < w && bag.has(rr * w + cc) && !taken(rr * w + cc, it)
+      );
+    });
+  const packed = () => items.reduce((n, it) => n + (it.at ? it.cells.length : 0), 0) === bag.size;
+
+  let drag: {
+    i: number;
+    gx: number;
+    gy: number;
+    x: number;
+    y: number;
+    sx: number;
+    sy: number;
+    moved: boolean;
+  } | null = null;
+  let won = false;
+
+  const drawItem = (it: Item, x: number, y: number, s: number, lifted = false) => {
+    const g = svgEl("g", { style: lifted ? "opacity:0.92" : "" }, svg);
+    for (const [r, c] of it.cells)
+      svgEl(
+        "rect",
+        {
+          x: x + c * s + 1.5,
+          y: y + r * s + 1.5,
+          width: s - 3,
+          height: s - 3,
+          rx: s * 0.2,
+          style: `fill:${it.color}`,
+        },
+        g,
+      );
+    // the cell nearest the middle carries the item's icon
+    const mr = it.cells.reduce((a, [r]) => a + r, 0) / it.cells.length;
+    const mc = it.cells.reduce((a, [, c]) => a + c, 0) / it.cells.length;
+    const [ir, ic] = it.cells.reduce((best, cell) =>
+      (cell[0] - mr) ** 2 + (cell[1] - mc) ** 2 < (best[0] - mr) ** 2 + (best[1] - mc) ** 2
+        ? cell
+        : best,
+    );
+    svgIcon(g, it.kind as GameIcon, x + (ic + 0.5) * s, y + (ir + 0.5) * s, s * 0.62);
+  };
+
+  const draw = () => {
+    svg.replaceChildren();
+    const inside = items.filter((it) => it.at).length;
+    ctx.say(
+      `Склади всі речі в рюкзак без щілин: тягни річ, тап повертає її · у рюкзаку ${inside} з ${items.length}`,
+    );
+    for (const cell of bag)
+      svgEl(
+        "rect",
+        {
+          x: bx + (cell % w) * cs + 1.5,
+          y: by + Math.floor(cell / w) * cs + 1.5,
+          width: cs - 3,
+          height: cs - 3,
+          rx: 7,
+          style: `fill:${TILE}`,
+        },
+        svg,
+      );
+    items.forEach((it, i) => {
+      if (drag?.i === i && drag.moved) return;
+      if (it.at) drawItem(it, bx + it.at.c * cs, by + it.at.r * cs, cs);
+      else {
+        const [x, y] = slotOrigin(i);
+        drawItem(it, x, y, ts);
+      }
+    });
+    if (drag?.moved) {
+      const it = items[drag.i] as Item;
+      drawItem(it, drag.x - drag.gx * cs, drag.y - drag.gy * cs, cs, true);
+    }
+  };
+
+  /** The item under the finger and where on it, in its own cells. */
+  const itemAt = (x: number, y: number) => {
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i] as Item;
+      const [ox, oy, s] = it.at
+        ? [bx + it.at.c * cs, by + it.at.r * cs, cs]
+        : [...slotOrigin(i), ts];
+      const gx = (x - ox) / s;
+      const gy = (y - oy) / s;
+      if (it.cells.some(([r, c]) => gx >= c && gx < c + 1 && gy >= r && gy < r + 1))
+        return { i, gx, gy };
+    }
+    return null;
+  };
+
+  svg.addEventListener("pointerdown", (e) => {
+    if (won) return;
+    const [x, y] = pointIn(svg, e, vw, vh);
+    const hit = itemAt(x, y);
+    if (!hit) return;
+    drag = { ...hit, x, y, sx: x, sy: y, moved: false };
+    svg.setPointerCapture(e.pointerId);
+  });
+  svg.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    const [x, y] = pointIn(svg, e, vw, vh);
+    drag.x = x;
+    drag.y = y;
+    if (!drag.moved && Math.hypot(x - drag.sx, y - drag.sy) > 6) drag.moved = true;
+    if (drag.moved) draw();
+  });
+  const up = () => {
+    if (!drag) return;
+    const d = drag;
+    drag = null;
+    const it = items[d.i] as Item;
+    if (!d.moved) {
+      // a tap turns it; in the bag, round the cell under the finger, else back out of it
+      const raw = it.cells.map(([r, c]) => [c, -r] as [number, number]);
+      const r0 = Math.min(...raw.map(([r]) => r));
+      const c0 = Math.min(...raw.map(([, c]) => c));
+      const cells = raw.map(([r, c]) => [r - r0, c - c0] as [number, number]);
+      if (it.at) {
+        const gr = Math.floor(d.gy);
+        const gc = Math.floor(d.gx);
+        const at = { r: it.at.r + gr - (gc - r0), c: it.at.c + gc - (-gr - c0) };
+        it.at = fits(it, cells, at) ? at : null;
+      }
+      it.cells = cells;
+    } else {
+      const at = {
+        r: Math.round((d.y - d.gy * cs - by) / cs),
+        c: Math.round((d.x - d.gx * cs - bx) / cs),
+      };
+      it.at = fits(it, it.cells, at) ? at : null;
+    }
+    draw();
+    if (!won && packed()) {
+      won = true;
+      ctx.done("усе влізло");
+    }
+  };
+  svg.addEventListener("pointerup", up);
+  svg.addEventListener("pointercancel", () => {
+    drag = null;
+    draw();
+  });
+  draw();
+  return undefined;
+}
+
+// ── Батарейки по зарядках ───────────────────────────────────────────────────────────────────
+
+const BATTERY_COLORS = ["#ff9a3d", "#8fa3c8", "#7cc6a0", "#e2807a", "#b99ad8"];
+
+export function mountBatteries(root: HTMLElement, p: BatteryPuzzle, ctx: GameCtx): Cleanup {
+  const stacks = p.stacks.map((s) => [...s]);
+  const k = stacks.length;
+  const vw = 320;
+  const gap = 8;
+  const tw = Math.min(54, (vw - gap * (k + 1)) / k);
+  const left = (vw - (k * tw + (k - 1) * gap)) / 2;
+  const slot = 30;
+  const lift = 36;
+  const th = p.cap * slot + 16;
+  const vh = lift + th + 4;
+  // touch-action none: a drag moves batteries instead of scrolling the page
+  const svg = svgRoot(root, vw, vh, "g-drag");
+  /** The charger whose top batteries are lifted (by a tap, or held while dragging). */
+  let pick: number | null = null;
+  /** A drag under way: the finger, and whether it has moved enough to be one. */
+  let drag: { x: number; y: number; sx: number; sy: number; moved: boolean; held: boolean } | null =
+    null;
+  let moves = 0;
+  let won = false;
+  const tubeAt = (x: number): number => {
+    const i = Math.floor((x - left + gap / 2) / (tw + gap));
+    return i >= 0 && i < k ? i : -1;
+  };
+  /** Pour the lifted batteries onto charger `to`; false when they cannot go there. */
+  const pour = (from: number, to: number): boolean => {
+    const n = batteryPour(stacks, from, to);
+    if (n === 0) return false;
+    const source = stacks[from] as number[];
+    (stacks[to] as number[]).push(...source.splice(source.length - n, n));
+    moves++;
+    return true;
+  };
+  /** How many of the same kind lie on top. */
+  const topRun = (s: readonly number[]) => {
+    let run = s.length ? 1 : 0;
+    while (run < s.length && s[s.length - 1 - run] === s[s.length - 1]) run++;
+    return run;
+  };
+  const battery = (x: number, y: number, bw: number, bh: number, kind: number) => {
+    const color = BATTERY_COLORS[kind] as string;
+    svgEl("rect", { x, y, width: bw - 4, height: bh, rx: 6, style: `fill:${color}` }, svg);
+    svgEl(
+      "rect",
+      {
+        x: x + bw - 5,
+        y: y + bh * 0.3,
+        width: 5,
+        height: bh * 0.4,
+        rx: 1.5,
+        style: `fill:${color}`,
+      },
+      svg,
+    );
+    const label = svgEl(
+      "text",
+      {
+        x: x + (bw - 4) / 2,
+        y: y + bh / 2 + 4,
+        "text-anchor": "middle",
+        style: `fill:${INK};font:700 11px Manrope Variable, sans-serif`,
+      },
+      svg,
+    );
+    label.textContent = BATTERY_KINDS[kind] ?? "";
+  };
+  const draw = () => {
+    svg.replaceChildren();
+    ctx.say(
+      `Розклади батарейки так, щоб у кожній зарядці був один тип: перетягни або тапни звідки й куди · ходів: ${moves}`,
+    );
+    const flying = drag?.moved && pick !== null;
+    // while dragging, the charger under the finger says whether they can go there
+    const over = flying && drag ? tubeAt(drag.x) : -1;
+    const fits = over >= 0 && pick !== null && over !== pick && batteryPour(stacks, pick, over) > 0;
+    stacks.forEach((s, i) => {
+      const x = left + i * (tw + gap);
+      const ring =
+        i === over && i !== pick
+          ? fits
+            ? LIGHT
+            : BAD
+          : pick === i && !flying
+            ? LIGHT
+            : "transparent";
+      svgEl(
+        "rect",
+        {
+          x,
+          y: lift,
+          width: tw,
+          height: th,
+          rx: 12,
+          style: `fill:${TILE};stroke:${ring};stroke-width:2`,
+        },
+        svg,
+      );
+      svgEl(
+        "rect",
+        {
+          x: x + tw * 0.3,
+          y: lift + th - 7,
+          width: tw * 0.4,
+          height: 3,
+          rx: 1.5,
+          style: `fill:${DIM}`,
+        },
+        svg,
+      );
+      const run = pick === i ? topRun(s) : 0;
+      s.forEach((kind, j) => {
+        const lifted = j >= s.length - run;
+        if (lifted && flying) return; // they are under the finger
+        const up = lifted ? lift - 4 : 0; // the picked ones rise out of the charger
+        battery(x + 5, lift + th - 12 - (j + 1) * slot + 3 - up, tw - 10, slot - 5, kind);
+      });
+    });
+    if (flying && drag && pick !== null) {
+      // the lifted batteries ride under the finger, a little above it so it does not hide them
+      const s = stacks[pick] as number[];
+      const run = topRun(s);
+      for (let j = 0; j < run; j++)
+        battery(
+          drag.x - (tw - 10) / 2,
+          drag.y - 22 - (j + 1) * slot + 3,
+          tw - 10,
+          slot - 5,
+          s[s.length - 1] as number,
+        );
+    }
+  };
+  const settle = () => {
+    draw();
+    if (!won && batterySorted(stacks)) {
+      won = true;
+      ctx.done(`ходів: ${moves}`);
+    }
+  };
+  svg.addEventListener("pointerdown", (e) => {
+    if (won) return;
+    const [x, y] = pointIn(svg, e, vw, vh);
+    const i = tubeAt(x);
+    if (i < 0) return;
+    // batteries already lifted by a tap go to the charger tapped next; when they cannot, that
+    // charger's own batteries are taken instead (and can be dragged at once)
+    if (pick !== null && pick !== i) {
+      const poured = pour(pick, i);
+      pick = null;
+      if (poured || (stacks[i] as number[]).length === 0) {
+        settle();
+        return;
+      }
+    }
+    if ((stacks[i] as number[]).length === 0) return;
+    drag = { x, y, sx: x, sy: y, moved: false, held: pick === i };
+    pick = i;
+    svg.setPointerCapture(e.pointerId);
+    draw();
+  });
+  svg.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    const [x, y] = pointIn(svg, e, vw, vh);
+    drag.x = x;
+    drag.y = y;
+    if (!drag.moved && Math.hypot(x - drag.sx, y - drag.sy) > 8) drag.moved = true;
+    if (drag.moved) draw();
+  });
+  svg.addEventListener("pointerup", (e) => {
+    if (!drag || pick === null) return;
+    const d = drag;
+    drag = null;
+    if (d.moved) {
+      // let go over another charger: they go there if they can; anywhere else they drop back
+      const to = tubeAt(pointIn(svg, e, vw, vh)[0]);
+      if (to >= 0 && to !== pick) pour(pick, to);
+      pick = null;
+    } else if (d.held) pick = null; // a second tap puts them back
+    settle();
+  });
+  svg.addEventListener("pointercancel", () => {
+    drag = null;
+    pick = null;
+    draw();
+  });
+  draw();
+  return undefined;
 }

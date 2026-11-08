@@ -2,14 +2,14 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { KYIV_TZ, zonedToEpoch } from "@svitlo/domain";
+import { GAME_WINDOWS, KYIV_TZ, zonedToEpoch } from "@svitlo/domain";
 import type { Transformer } from "grammy";
 import type { UserFromGetMe } from "grammy/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type Core, startCore } from "../app.ts";
 import { loadConfig } from "../config.ts";
 import { ManualClock } from "../runtime/clock.ts";
-import type { GameRating, GameState } from "../services/game.ts";
+import type { GameBuildings, GameRating, GameState } from "../services/game.ts";
 import { signInitData, verifyInitData } from "./telegram-auth.ts";
 
 const TOKEN = "123:test-token";
@@ -301,5 +301,53 @@ describe("window game", () => {
     });
     expect(wrong.statusCode).toBe(404);
     expect(avatarCalls.every((u) => u.includes("api.telegram.org"))).toBe(true);
+  });
+
+  it("buildings: every facade lit beyond 10%, its outage, players and who lit most first", async () => {
+    const before = at("2026-11-07", "16:00");
+    const earlier = at("2026-11-07", "18:00");
+    outage(before);
+    lightBack(at("2026-11-07", "17:00"));
+    outage(earlier);
+    lightBack(at("2026-11-07", "19:00"));
+    outage(OUTAGE);
+    await call("GET", "");
+    await call("GET", "", BOB);
+    const store = (core as Core).store;
+    /** `floors` whole storeys from the 2nd, every window by one player, from `from` on. */
+    const light = (session: number, user: number, floors: number, from: number) => {
+      for (let f = 2; f < 2 + floors; f++)
+        for (let c = 1; c <= 22; c++)
+          store.game.addSolve({
+            siteId: "4u",
+            session,
+            floor: f,
+            col: c,
+            userId: user,
+            points: 10,
+            durationMs: 5000,
+            solvedAt: from + f * 100 + c,
+          });
+    };
+    light(before, 7, 2, before + 1000); // 44 windows, 7.7%: not shown
+    light(earlier, 7, 3, earlier + 1000); // 66 windows, Ann first
+    light(earlier, 8, 1, earlier + 600_000); // Bob after her on one storey
+    light(OUTAGE, 7, 3, OUTAGE + 1000); // this outage, then the game is rebuilt…
+    expect(store.game.clearFacade("4u", OUTAGE)).toBe(66);
+    light(OUTAGE, 8, 4, OUTAGE + 600_000); // …and Bob lights the new building
+
+    const { body } = await call<GameBuildings>("GET", "/buildings");
+    expect(body.minShare).toBe(0.1);
+    // the facade emptied in this outage is no building of the history
+    expect(body.buildings.map((b) => [b.start, b.end, b.current, b.windows, b.players])).toEqual([
+      [OUTAGE, null, true, 88, 1],
+      [earlier, at("2026-11-07", "19:00"), false, 66, 2],
+    ]);
+    const past = body.buildings[1];
+    expect(past).toMatchObject({ solves: 88, points: 880, share: 66 / GAME_WINDOWS });
+    expect(past?.top).toEqual([expect.objectContaining({ id: 7, name: "Анна", firsts: 66 })]);
+    expect(body.buildings[0]?.top).toEqual([
+      expect.objectContaining({ id: 8, name: "Богдан", firsts: 88 }),
+    ]);
   });
 });

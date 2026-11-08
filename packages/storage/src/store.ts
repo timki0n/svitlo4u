@@ -221,6 +221,15 @@ export function createStore(db: Db) {
             .get() ?? null
         );
       },
+      /** The outages that began at these instants (the game's sessions): start and end. */
+      startingAt(siteId: string, starts: readonly number[]) {
+        if (starts.length === 0) return [];
+        return db
+          .select({ start: outages.start, end: outages.end })
+          .from(outages)
+          .where(and(eq(outages.siteId, siteId), inArray(outages.start, [...starts])))
+          .all();
+      },
     },
 
     schedules: {
@@ -672,6 +681,34 @@ export function createStore(db: Db) {
           .groupBy(gameSolves.userId)
           .orderBy(desc(sql`sum(${gameSolves.points})`), asc(sql`max(${gameSolves.solvedAt})`))
           .all();
+      },
+      /**
+       * Every building lit, one per stored session (a negative one is a facade emptied during its
+       * outage, see clearFacade): windows lit, solves, players and points.
+       */
+      buildings(siteId: string) {
+        return db
+          .select({
+            session: gameSolves.session,
+            windows: sql<number>`count(distinct ${gameSolves.floor} * 1000 + ${gameSolves.col})`,
+            solves: sql<number>`count(*)`,
+            players: sql<number>`count(distinct ${gameSolves.userId})`,
+            points: sql<number>`sum(${gameSolves.points})`,
+          })
+          .from(gameSolves)
+          .where(eq(gameSolves.siteId, siteId))
+          .groupBy(gameSolves.session)
+          .all();
+      },
+      /** How many windows of each building every player lit first. */
+      firsts(siteId: string) {
+        return db.all<{ session: number; userId: number; firsts: number }>(sql`
+          select session, user_id as userId, count(*) as firsts from (
+            select session, user_id, row_number() over (
+              partition by session, floor, col order by solved_at, user_id
+            ) as n
+            from ${gameSolves} where site_id = ${siteId}
+          ) where n = 1 group by session, user_id`);
       },
     },
 
