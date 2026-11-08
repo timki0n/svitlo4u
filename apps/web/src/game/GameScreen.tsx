@@ -119,6 +119,16 @@ function Game({ siteId, tz, where }: { siteId: string; tz: string; where: Route 
   useEffect(() => {
     if (where.kind === "play") setSelected(where.win);
   }, [where]);
+  // Up close (a window picked on the facade, or its puzzle) the tab bar hides (game.css) and the
+  // screen is the game's; it comes back on the whole facade, the rating, or if the game breaks.
+  const close =
+    Boolean(state?.session) &&
+    (where.kind === "play" || (where.kind === "facade" && selected !== null));
+  useEffect(() => {
+    if (!close) return;
+    document.documentElement.setAttribute("data-game", "");
+    return () => document.documentElement.removeAttribute("data-game");
+  }, [close]);
 
   if (where.kind === "rating") return <RatingScreen api={api} tz={tz} />;
   if (!state) {
@@ -149,24 +159,25 @@ function Game({ siteId, tz, where }: { siteId: string; tz: string; where: Route 
 function Notice({ text }: { text: string }) {
   return (
     <main className="screen">
-      <GameHeader title="Гра" />
+      <GameHeader />
       <p className="card muted">{text}</p>
     </main>
   );
 }
 
-function GameHeader({ title, back }: { title: string; back?: boolean }) {
+/** A window's header (titled) leads back to the facade; the facade's leads to the rating. */
+function GameHeader({ title }: { title?: string }) {
   return (
     <header className="header">
-      {back ? (
+      {title ? (
         <a className="g-back" href="#/game">
           <Icon name="back" size={18} />
           Фасад
         </a>
       ) : (
-        <span className="label">{title}</span>
+        <span className="label">Гра</span>
       )}
-      {back ? (
+      {title ? (
         <span className="label">{title}</span>
       ) : (
         <a className="g-back" href="#/game/rating">
@@ -205,7 +216,7 @@ function Facade({
     : "";
   return (
     <main className="screen">
-      <GameHeader title="Гра" />
+      <GameHeader />
       <p className="g-meta">
         <span>{offline ? "Немає зв'язку" : label}</span>
         <span>
@@ -242,6 +253,14 @@ const SIDE_GAP = 22;
 
 const percent = (part: number) =>
   `${((part / GAME_WINDOWS) * 100).toLocaleString("uk-UA", { maximumFractionDigits: 1 })}%`;
+
+/** The ring's whole percent: no «0%» once a window is lit, no «100%» while one is still dark. */
+const wholePercent = (part: number) => {
+  const p = (part / GAME_WINDOWS) * 100;
+  if (part > 0 && p < 1) return "1%";
+  if (part < GAME_WINDOWS && p > 99) return "99%";
+  return `${Math.round(p)}%`;
+};
 
 /**
  * Beside the whole facade: the share lit as a ring, and the neighbours with the share each of them
@@ -303,7 +322,7 @@ function Ring({ part }: { part: number }) {
           />
         )}
       </svg>
-      <span className="g-ring-pct">{percent(part)}</span>
+      <span className="g-ring-pct">{wholePercent(part)}</span>
     </div>
   );
 }
@@ -528,7 +547,7 @@ function Play({
 
   return (
     <main className="screen">
-      <GameHeader title={`Поверх ${win.floor} · вікно ${win.col}`} back />
+      <GameHeader title={`Поверх ${win.floor} · вікно ${win.col}`} />
       <section className="card">
         <div className="card-head">
           <span className="card-title">{info.game.name}</span>

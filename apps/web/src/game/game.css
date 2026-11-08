@@ -1,5 +1,10 @@
 /* The window game: the facade and its puzzles, in the site's dark neumorphism. */
 
+/* up close (a picked window, a puzzle) the screen is the game's: no tab bar (GameScreen.tsx) */
+:root[data-game] .nav {
+  display: none;
+}
+
 .g-meta {
   display: flex;
   justify-content: space-between;
