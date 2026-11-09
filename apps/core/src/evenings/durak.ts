@@ -3,7 +3,8 @@
  * and 36 cards. The attacker leads a card; the defender beats it or takes the table; everyone but
  * the defender may add cards of the ranks already down. After every bout the hands are refilled to
  * six from the stock; once it is empty, whoever has no cards left is out, and the last one still
- * holding cards is the durak.
+ * holding cards is the durak. A bout all answered is closed by the attacker («Бито»), or by the
+ * game a moment later when plainly nobody may add (closing()) — never at once by itself.
  *
  * Pure state: the core keeps a game in memory, feeds every move through act(), shows each player
  * viewDurak() and runs the clock on waitingFor(). Nothing here mutates its arguments: a move returns
@@ -205,8 +206,30 @@ export function act(g: DurakGame, id: number, move: DurakMove): DurakGame {
     default:
       fail("bad_move");
   }
-  // Everything answered and nobody able to add: the bout ends without waiting for «Бито».
-  return answered(next) && !canAdd(next) ? endBout(next) : next;
+  // Never closed here, even with nobody able to add: closing at once would tell everyone so, and
+  // the last card would be gone before anyone saw it (see closing()).
+  return next;
+}
+
+/**
+ * Whether the bout, everything on the table answered, waits to be closed, and how: "plain" — it is
+ * plain to all that nobody may add (the table is full, or nobody but the defender holds a card),
+ * so it closes by itself after a moment, the last card seen; "call" — the attacker adds more or
+ * calls «Бито» («Готово» after «беру»), and silent, it is called for them. Whether anyone could add
+ * is never told: the bout waits the same either way. null while a card waits for the defender.
+ */
+export function closing(g: DurakGame): "plain" | "call" | null {
+  if (g.phase !== "playing" || !answered(g)) return null;
+  const plain =
+    g.table.length >= g.limit ||
+    g.players.every((p, i) => i === g.defender || p.out || p.hand.length === 0);
+  return plain ? "plain" : "call";
+}
+
+/** Closes the bout as the attacker's «Бито» (or «Готово») would: the game does it by itself. */
+export function closeBout(g: DurakGame): DurakGame {
+  if (closing(g) === null) fail("not_finished");
+  return endBout(clone(g));
 }
 
 /** Whose move the clock runs on (null when done). */
@@ -288,10 +311,6 @@ function throwRefusal(g: DurakGame, i: number, card: DurakCard): string | null {
     return "rank_not_on_table";
   return null;
 }
-
-/** Somebody may still put a card down this bout. */
-const canAdd = (g: DurakGame): boolean =>
-  g.players.some((p, i) => !p.out && p.hand.some((card) => throwRefusal(g, i, card) === null));
 
 /** The first seat from `from` on, clockwise, that is not out. */
 function seatFrom(g: DurakGame, from: number): number {

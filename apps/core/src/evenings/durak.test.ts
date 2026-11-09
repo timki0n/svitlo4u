@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   act,
   beats,
+  closeBout,
+  closing,
   DURAK_RANKS,
   type DurakCard,
   type DurakGame,
@@ -223,8 +225,12 @@ describe("a bout", () => {
     expect(legalFor(g, B)).toEqual(nothing);
     expect(legalFor(g, C)).toEqual({ throw: ["6d"], beat: [], take: false, done: false });
     expect(legalFor(g, A)).toEqual({ throw: [], beat: [], take: false, done: true });
-    // C adds the last 6 around: nobody can add more, so the bout ends by itself
+    // C adds the last 6 around: nobody can add more, yet the bout waits for A all the same
     g = act(g, C, put("6d"));
+    expect(g.table).toHaveLength(2);
+    expect(closing(g)).toBe("call");
+    expect(waitingFor(g)).toBe(A);
+    g = act(g, A, done);
     expect(g.bout).toBe(2);
     expect(g.table).toEqual([]);
     expect(g.took).toBe(false);
@@ -267,8 +273,12 @@ describe("a bout", () => {
       take: true,
       done: false,
     });
-    // the table is full, so taking ends the bout at once
+    // the table is full: plain to all that nobody may add, so the game closes the bout itself —
+    // a moment later, not with the move
     g = act(g, B, take);
+    expect(g.table).toHaveLength(3);
+    expect(closing(g)).toBe("plain");
+    g = closeBout(g);
     expect(g.bout).toBe(2);
     expect(hand(g, B)).toEqual(cards("9s Qd 7s 8s 7h 7d"));
     expect(g.attacker).toBe(2);
@@ -277,10 +287,19 @@ describe("a bout", () => {
     expect(g.limit).toBe(2);
   });
 
-  it("ends by itself once everything is answered and nobody can add", () => {
+  it("never ends with a move: nobody able to add looks the same as somebody thinking", () => {
     const g0 = position("Ah", ["6s 9d", "7s Td", "8c 9c Tc Jc Qc Kc Ac 8d"], "Jh Ah");
     expect(g0.limit).toBe(2);
     let g = act(act(g0, A, put("6s")), B, beat("7s", 0));
+    // nobody holds a 6 or a 7, yet the defense stays on the table, the bout A's to close
+    expect(g.table).toEqual([{ attack: "6s", defense: "7s" }]);
+    expect(g.bout).toBe(1);
+    expect(closing(g)).toBe("call");
+    expect(waitingFor(g)).toBe(A);
+    expect(legalFor(g, A)).toEqual({ throw: [], beat: [], take: false, done: true });
+    // A silent: the game calls «Бито» for them, the same as their own
+    expect(closeBout(g)).toEqual(act(g, A, done));
+    g = act(g, A, done);
     expect(g.bout).toBe(2);
     expect(g.discard).toBe(2);
     expect(g.table).toEqual([]);
@@ -291,14 +310,34 @@ describe("a bout", () => {
     // C holds eight cards, but a bout never has more than six attacks
     expect(g.limit).toBe(6);
 
-    // taking with nothing to add: the cards go to the defender at once
+    // taking with nothing to add: the cards wait on the table too, then go to the defender
     g = act(act(g0, A, put("6s")), B, take);
+    expect(g.bout).toBe(1);
+    expect(closing(g)).toBe("call");
+    g = closeBout(g);
     expect(g.bout).toBe(2);
     expect(hand(g, B)).toEqual(cards("7s Td 6s"));
     expect(hand(g, A)).toEqual(cards("9d Jh Ah"));
     expect(g.attacker).toBe(2);
     expect(g.defender).toBe(0);
     expect(g.limit).toBe(3);
+  });
+
+  it("closes by itself, plainly, when the table is full or nobody but the defender holds a card", () => {
+    const g0 = position("Ac", ["6s", "7s 9d Td"], "Qh Ac");
+    expect(closing(g0)).toBeNull(); // nothing on the table yet
+    const open = act(g0, A, put("6s"));
+    expect(closing(open)).toBeNull(); // a card waits for the defender
+    expect(() => closeBout(open)).toThrow("not_finished");
+    // A put down their last card: nobody but B holds one, plain to all
+    const g = act(open, B, beat("7s", 0));
+    expect(closing(g)).toBe("plain");
+    const next = closeBout(g);
+    expect(next.bout).toBe(2);
+    expect(next.discard).toBe(2);
+    expect(hand(next, A)).toEqual(cards("Qh Ac"));
+    expect(closing(next)).toBeNull();
+    expect(() => closeBout(forfeit(g, A))).toThrow("not_finished"); // over is over
   });
 
   it("the attacker calls «Бито» only when it is theirs and everything is answered", () => {
@@ -384,6 +423,9 @@ describe("the end", () => {
   it("with the stock empty, who has no cards goes out; the last one holding cards is the durak", () => {
     let g = position("Ac", ["6s", "7s 9d", "Kd Qc"], "");
     g = act(act(g, A, put("6s")), B, beat("7s", 0));
+    // C holds cards (none to add, but nobody else knows): A, with none left, still calls «Бито»
+    expect(closing(g)).toBe("call");
+    g = act(g, A, done);
     expect(g.phase).toBe("playing");
     expect(g.players.map((p) => p.out)).toEqual([true, false, false]);
     expect(g.finished).toEqual([A]);
@@ -395,6 +437,9 @@ describe("the end", () => {
     expect(() => act(g, A, put("6s"))).toThrow("not_in_game");
 
     g = act(act(g, B, put("9d")), C, beat("Kd", 0));
+    // B has no cards left and A is out: nobody but C holds any
+    expect(closing(g)).toBe("plain");
+    g = closeBout(g);
     expect(g.phase).toBe("done");
     expect(g.durak).toBe(C);
     expect(g.finished).toEqual([A, B]);
@@ -408,7 +453,7 @@ describe("the end", () => {
   it("a defender who goes out passes the attack on to the next seat", () => {
     let g = position("Ac", ["6s 9d", "7s", "Kd Qc"], "");
     expect(g.limit).toBe(1);
-    g = act(act(g, A, put("6s")), B, beat("7s", 0));
+    g = closeBout(act(act(g, A, put("6s")), B, beat("7s", 0)));
     expect(g.finished).toEqual([B]);
     expect(g.attacker).toBe(2);
     expect(g.defender).toBe(0);
@@ -419,7 +464,7 @@ describe("the end", () => {
     const g0 = position("Ac", ["6s 8h", "7d 9d", "", "Ks Qs Js"], "");
     const players = g0.players.map((p) => (p.id === C ? { ...p, out: true } : p));
     let g: DurakGame = { ...g0, players, finished: [C] };
-    g = act(act(g, A, put("6s")), B, take);
+    g = act(act(act(g, A, put("6s")), B, take), A, done);
     expect(hand(g, B)).toEqual(cards("7d 9d 6s"));
     // C would attack next but is out: D attacks, A (after D) defends
     expect(g.attacker).toBe(3);
@@ -429,7 +474,7 @@ describe("the end", () => {
   });
 
   it("a draw when the last two go out together", () => {
-    const g = act(act(position("Ac", ["6s", "7s"], ""), A, put("6s")), B, beat("7s", 0));
+    const g = closeBout(act(act(position("Ac", ["6s", "7s"], ""), A, put("6s")), B, beat("7s", 0)));
     expect(g.phase).toBe("done");
     expect(g.durak).toBeNull();
     expect(g.finished).toEqual([A, B]);
@@ -502,7 +547,7 @@ describe("purity", () => {
       ["6s 8d Kc Qd Jc 7c", "8s 7d Tc Jd 6c Kd", "7s Ts Qc Ac 9c", "Js Qs Ks As Td"],
       "9s 9d Ah",
     );
-    // one bout closed by «Бито», one taken and closed by itself (both refill from the stock)
+    // one bout beaten, one taken, both closed by «Бито» (both refill from the stock)
     const lines: [number, DurakMove][][] = [
       [
         [A, put("6s")],
@@ -514,6 +559,7 @@ describe("purity", () => {
         [B, beat("8s", 0)],
         [A, put("8d")],
         [B, take],
+        [A, done],
       ],
     ];
     for (const line of lines) {
@@ -527,6 +573,7 @@ describe("purity", () => {
         viewDurak(next, id).hand.push("Xx");
         legalFor(next, id).throw.push("Xx");
         forfeit(next, id);
+        if (closing(next)) closeBout(next);
         expect(next).toEqual(after);
         g = next;
       }
@@ -564,7 +611,12 @@ describe("random play", () => {
         // whoever the clock runs on always has a move, and every listed move is accepted
         expect(options.some(([id]) => id === turn)).toBe(true);
         const [id, move] = pick(options);
-        g = act(g, id, move);
+        const bout = g.bout;
+        // now and then the attacker stays silent and the game closes the bout for them
+        const closed = closing(g) !== null && rand() < 0.25;
+        g = closed ? closeBout(g) : act(g, id, move);
+        // only «Бито» (or the game, a while later) closes a bout: never another move
+        if (!closed && move.type !== "done") expect(g.bout).toBe(bout);
         const all = inPlay(g);
         expect(new Set(all).size).toBe(all.length);
         expect(all.length + g.discard).toBe(36);

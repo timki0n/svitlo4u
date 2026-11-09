@@ -47,7 +47,7 @@ import {
 } from "../evenings/poker.ts";
 import type { Clock } from "../runtime/clock.ts";
 import type { GamePlayerView, GameService } from "./game.ts";
-import { NOPE_MS, ROUNDS, roundRules } from "./rounds.ts";
+import { CALL_MS, HOLD_MS, NOPE_MS, ROUNDS, roundRules } from "./rounds.ts";
 
 export const EVENING_DOORS = 5;
 export const EVENING_PARTS = 3;
@@ -194,6 +194,10 @@ export type EveningTimings = {
   lobbyMs: number;
   /** «Блекаут»: the window to cancel an action (see NOPE_MS). */
   nopeMs: number;
+  /** «Дурень»: a bout nobody may add to, shown before it closes (see HOLD_MS). */
+  holdMs: number;
+  /** «Дурень»: the attacker's time to add or call «Бито» (see CALL_MS). */
+  callMs: number;
 };
 export type EveningsDeps = {
   store: Store;
@@ -246,6 +250,8 @@ export class EveningService {
       resultMs: RESULT_SHOWN_MS,
       lobbyMs: LOBBY_MS,
       nopeMs: NOPE_MS,
+      holdMs: HOLD_MS,
+      callMs: CALL_MS,
       ...deps.timings,
     };
   }
@@ -706,9 +712,9 @@ export class EveningService {
     }
     const step = rules.auto?.(r.game);
     if (step) {
-      // a step the game takes by itself (an action waiting out the window to cancel it): its
-      // time is shown as the clock
-      this.deadline(t, this.timings.nopeMs, () => {
+      // a step the game takes by itself (an action waiting out the window to cancel it, a bout
+      // closing): its time is shown as the clock
+      this.deadline(t, this.timings[step.wait], () => {
         if (!t.round || rules.done(t.round.game)) return;
         t.round.game = step.run(t.round.game, rand);
         this.roundNext(t);

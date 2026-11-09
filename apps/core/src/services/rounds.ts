@@ -30,11 +30,13 @@ import {
   viewColors,
 } from "../evenings/colors.ts";
 import {
+  closeBout,
   DURAK_MAX,
   type DurakGame,
   type DurakMove,
   type DurakView,
   act as durakAct,
+  closing as durakClosing,
   forfeit as durakForfeit,
   waitingFor as durakWaitingFor,
   newDurak,
@@ -46,6 +48,12 @@ export type RoundGame = "durak" | "colors" | "blackout";
 export type RoundViews = { durak: DurakView; colors: ColorsView; blackout: BlackoutView };
 /** «Блекаут»: how long anyone may cancel an action played (the service may shorten it in tests). */
 export const NOPE_MS = 4_000;
+/** «Дурень»: how long a bout nobody may add to stays on the table before it closes by itself. */
+export const HOLD_MS = 2_000;
+/** «Дурень»: the attacker's time to add more or call «Бито»; silent, it is called for them. */
+export const CALL_MS = 20_000;
+/** The timings a step the game takes by itself waits (the service's names for them). */
+export type RoundWait = "nopeMs" | "holdMs" | "callMs";
 
 export type RoundRules<G, V> = {
   /** Most players. */
@@ -66,10 +74,11 @@ export type RoundRules<G, V> = {
   /** Once over: what each player gets (+) or pays (−), from their stakes. */
   settle(g: G, stakeOf: (id: number) => number): Record<string, number>;
   /**
-   * A step the game takes by itself after a while (none: the move's clock runs instead) — in
-   * «Блекаут», an action played happens once the window to cancel it is over.
+   * A step the game takes by itself once `wait` is over (none: the move's clock runs instead) — in
+   * «Блекаут», an action played happens once the window to cancel it is over; in «Дурень», a bout
+   * all answered closes.
    */
-  auto?(g: G): { ms: number; run: (g: G, rand: () => number) => G } | null;
+  auto?(g: G): { wait: RoundWait; run: (g: G, rand: () => number) => G } | null;
 };
 
 const bad = (): never => {
@@ -97,6 +106,12 @@ const durak: RoundRules<DurakGame, DurakView> = {
   forfeit: durakForfeit,
   inPlay: (g, id) => g.players.some((p) => p.id === id && !p.out),
   view: viewDurak,
+  // a bout all answered: shown a moment when nobody may add, else the attacker's to close — and
+  // one silent on «Бито» does not lose the game for it, the game says it for them
+  auto(g) {
+    const how = durakClosing(g);
+    return how === null ? null : { wait: how === "plain" ? "holdMs" : "callMs", run: closeBout };
+  },
   settle(g, stakeOf) {
     const pay: Record<string, number> = {};
     if (g.durak === null) return pay;
@@ -184,7 +199,7 @@ const blackout: RoundRules<BlackoutGame, BlackoutView> = {
   inPlay: (g, id) => g.players.some((p) => p.id === id && !p.out),
   view: viewBlackout,
   settle: (g, stakeOf) => winnerTakes(g.players, g.winner, stakeOf),
-  auto: (g) => (g.pending ? { ms: NOPE_MS, run: blackoutResolve } : null),
+  auto: (g) => (g.pending ? { wait: "nopeMs", run: blackoutResolve } : null),
 };
 
 export const ROUNDS: { durak: typeof durak; colors: typeof colors; blackout: typeof blackout } = {

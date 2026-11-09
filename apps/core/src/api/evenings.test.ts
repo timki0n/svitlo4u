@@ -86,7 +86,15 @@ beforeEach(async () => {
         paceMs: 0,
       },
       gameFetch: async () => Response.json({ ok: false }),
-      eveningTimings: { turnMs: 300, betweenHandsMs: 20, resultMs: 20, lobbyMs: 150, nopeMs: 60 },
+      eveningTimings: {
+        turnMs: 300,
+        betweenHandsMs: 20,
+        resultMs: 20,
+        lobbyMs: 150,
+        nopeMs: 60,
+        holdMs: 60,
+        callMs: 200,
+      },
     },
   );
   // an outage: the session
@@ -382,8 +390,12 @@ describe("«Вечорниці»", () => {
     ).toBe(200);
     expect((await table(door, defender)).durak?.game?.legal?.take).toBe(true);
     await call("POST", `/evenings/${door}/move`, defender, { type: "take" });
-    if ((await table(door, attacker)).durak?.game?.legal?.done)
-      await call("POST", `/evenings/${door}/move`, attacker, { type: "done" });
+    // the table waits for the attacker («Готово»), whether or not they have more to add
+    t = await table(door, attacker);
+    expect(t.durak?.game?.bout).toBe(1);
+    expect(t.durak?.game?.table).toHaveLength(1);
+    expect(t.durak?.game?.legal?.done).toBe(true);
+    await call("POST", `/evenings/${door}/move`, attacker, { type: "done" });
     t = await table(door, defender);
     expect(t.durak?.game?.bout).toBe(2);
     expect(t.durak?.game?.hand.length).toBeGreaterThan(6);
@@ -395,6 +407,28 @@ describe("«Вечорниці»", () => {
     expect(t.durak?.pay).toEqual({ 7: -20, 8: 20 });
     expect([await points(ANN), await points(BOB)]).toEqual([30, 70]);
     await vi.waitFor(async () => expect((await table(door, ANN)).seats).toEqual([]));
+  });
+
+  it("«Дурень»: a bout all answered waits for «Бито»; silent on it, the game says it for you", async () => {
+    const door = await doorOf("durak");
+    await openDoor(door);
+    await call("POST", `/evenings/${door}/join`, ANN, { stake: 30 });
+    await call("POST", `/evenings/${door}/join`, BOB, { stake: 20 });
+    await vi.waitFor(async () => expect((await table(door, ANN)).durak?.game).not.toBeNull());
+    const g = (await table(door, ANN)).durak?.game;
+    const attacker = g?.players[g.attacker]?.id === 7 ? ANN : BOB;
+    const defender = attacker === ANN ? BOB : ANN;
+    const lead = (await table(door, attacker)).durak?.game?.legal?.throw[0];
+    await call("POST", `/evenings/${door}/move`, attacker, { type: "throw", card: lead });
+    await call("POST", `/evenings/${door}/move`, defender, { type: "take" });
+    const t = await table(door, CAT);
+    expect(t.durak?.game?.bout).toBe(1);
+    expect(t.deadline).not.toBeNull(); // the clock on the attacker's «Готово»
+    // nobody says it: the bout closes all the same, and nobody loses the game for that silence
+    await vi.waitFor(async () => expect((await table(door, CAT)).durak?.game?.bout).toBe(2));
+    const after = (await table(door, CAT)).durak?.game;
+    expect(after?.phase).toBe("playing");
+    expect(after?.table).toEqual([]);
   });
 
   it("«Дурень»: whoever stays silent on their move is the durak, and pays the rest evenly", async () => {
