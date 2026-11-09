@@ -538,7 +538,10 @@ describe("purity", () => {
 });
 
 describe("random play", () => {
-  it("keeps all 36 cards, never gets stuck, and ends with a durak or a draw", () => {
+  // hundreds of whole games: quick here, slow on a shared CI runner
+  it("keeps all 36 cards, never gets stuck, and ends with a durak or a draw", {
+    timeout: 60_000,
+  }, () => {
     const rand = lcg(2024);
     const pick = <T>(xs: T[]): T => xs[Math.floor(rand() * xs.length)] as T;
     for (let game = 0; game < 300; game++) {

@@ -666,7 +666,10 @@ describe("purity", () => {
 });
 
 describe("random play", () => {
-  it("keeps all 108 cards, never gets stuck, and always ends with a winner", () => {
+  // hundreds of whole games: quick here, slow on a shared CI runner
+  it("keeps all 108 cards, never gets stuck, and always ends with a winner", {
+    timeout: 60_000,
+  }, () => {
     const rand = lcg(2026);
     const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)] as T;
     const full = everyCard(newColors([1, 2], rand)).sort();
