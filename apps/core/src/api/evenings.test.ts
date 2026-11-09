@@ -299,6 +299,29 @@ describe("«Вечорниці»", () => {
     expect((await points(loser)) + (await points(winner))).toBe(100);
   });
 
+  it("poker: when the other stands up after a hand, the hand leaves the table and it waits", async () => {
+    const door = await doorOf("poker");
+    await openDoor(door);
+    await call("POST", `/evenings/${door}/join`, ANN, { stake: 40 });
+    await call("POST", `/evenings/${door}/join`, BOB, { stake: 40 });
+    await vi.waitFor(async () => expect((await table(door, ANN)).poker?.hand).not.toBeNull());
+    const first = (await table(door, ANN)).poker?.legal ? ANN : BOB;
+    const other = first === ANN ? BOB : ANN;
+    await call("POST", `/evenings/${door}/move`, first, { type: "fold" });
+    expect((await table(door, ANN)).poker?.hand?.street).toBe("done");
+    // the other stands up straight after: nobody to play the next hand with
+    await call("POST", `/evenings/${door}/leave`, other);
+    await vi.waitFor(async () => expect((await table(door, first)).poker?.hand).toBeNull());
+    expect((await table(door, first)).seats.map((s) => s.id)).toEqual([first.id]);
+    // someone sits down: the next hand is dealt
+    await call("POST", `/evenings/${door}/join`, CAT, { stake: 30 });
+    await vi.waitFor(async () => {
+      const t = await table(door, first);
+      expect(t.poker?.hand?.street).not.toBe("done");
+      expect(t.poker?.handNo).toBe(2);
+    });
+  });
+
   it("«Дурень»: two sit, a moment later the cards are dealt; giving up makes you the durak", async () => {
     const door = await doorOf("durak");
     await openDoor(door);

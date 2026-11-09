@@ -536,8 +536,12 @@ export class EveningService {
         else if (t.seats.length >= ROOM[t.game]) this.roundStart(t);
         else if (!t.timer) this.deadline(t, this.timings.lobbyMs, () => this.roundStart(t));
       }
-    } else if (!this.live(t) && !stale && t.seats.filter((s) => s.stake > 0).length >= 2) {
-      if (!t.timer) this.pause(t, this.timings.betweenHandsMs, () => this.pokerStart(t));
+    } else if (!this.live(t) && !stale) {
+      // between hands: the next one comes in a moment while two can play; with fewer, the hand
+      // just played leaves the table after that moment, and the table waits for players
+      const ready = t.seats.filter((s) => s.stake > 0).length >= 2;
+      if (!t.timer && (ready || t.poker.hand))
+        this.pause(t, this.timings.betweenHandsMs, () => this.pokerStart(t));
     }
     this.changed(t);
   }
@@ -745,12 +749,10 @@ export class EveningService {
 
   private pokerStart(t: Table): void {
     this.deadline(t, null);
-    if (this.deps.game.session(t.site)?.start !== t.session) {
-      this.advance(t);
-      return;
-    }
     const players = t.seats.filter((s) => s.stake > 0 && !s.leaving);
-    if (players.length < 2) {
+    if (this.deps.game.session(t.site)?.start !== t.session || players.length < 2) {
+      // nobody to play with (or an earlier outage's table): the hand played leaves the table
+      t.poker.hand = null;
       this.advance(t);
       return;
     }

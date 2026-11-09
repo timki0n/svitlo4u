@@ -909,11 +909,18 @@ function PokerMoves({ v, api, door, run, error }: TableProps & { error: string |
           ? "Чекаємо на суперника"
           : "Роздача ось-ось почнеться…"
         : done
-          ? net > 0
-            ? `Твій виграш: +${net}`
-            : net < 0
-              ? `Ця роздача: −${-net}`
-              : "Роздачу завершено"
+          ? `${
+              net > 0
+                ? `Твій виграш: +${net}`
+                : net < 0
+                  ? `Ця роздача: −${-net}`
+                  : "Роздачу завершено"
+            } · ${
+              // who stays for the next hand: two or more — it comes in a moment
+              v.seats.filter((s) => s.stake > 0 && !s.leaving).length >= 2
+                ? "наступна роздача за мить"
+                : "чекаємо на суперника"
+            }`
           : !hs
             ? "Карти отримаєш у наступній роздачі"
             : hs.folded
