@@ -23,7 +23,16 @@ import {
   useMotion,
 } from "./motion.tsx";
 import { Bolt, playerName } from "./Rating.tsx";
-import { FanSeat, Hand, MePlate, type RoundScreenProps, RoundSeating, ringOf } from "./round.tsx";
+import {
+  FanSeat,
+  GiveUp,
+  Hand,
+  MePlate,
+  type RoundScreenProps,
+  RoundSeating,
+  ringOf,
+  Watchers,
+} from "./round.tsx";
 
 /** Each card: its name, what it does, its mark and its colour. */
 const CARDS: Record<string, { name: string; about: string; mark: string; tone: string }> = {
@@ -264,9 +273,9 @@ export function BlackoutScreen({ v, api, door, run, left, error }: RoundScreenPr
           data-lifting={lift !== null || undefined}
         >
           <div className="g-felt" style={L.felt} />
-          {v.watchers > 0 && (
+          {v.watchers.length > 0 && (
             <span className="g-felt-note" data-side="left">
-              дивляться: {v.watchers}
+              <Watchers v={v} />
             </span>
           )}
           {left !== null && (
@@ -502,13 +511,16 @@ export function BlackoutScreen({ v, api, door, run, left, error }: RoundScreenPr
                           </button>
                         ) : (
                           !myTurn && (
-                            <button
-                              type="button"
-                              className="g-btn"
-                              onClick={() => run(() => api.stand(door))}
-                            >
-                              Здатися
-                            </button>
+                            <GiveUp
+                              cost={
+                                <>
+                                  Ти вийдеш із гри, а переможець забере до{" "}
+                                  {v.seats.find((s) => s.id === me)?.stake ?? 0}
+                                  <Bolt size={12} /> твоєї ставки
+                                </>
+                              }
+                              onYes={() => run(() => api.stand(door))}
+                            />
                           )
                         )}
                       </div>

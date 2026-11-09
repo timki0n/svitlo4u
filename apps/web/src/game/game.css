@@ -2330,3 +2330,185 @@
 .g-card-copy > * {
   box-shadow: 0 8px 18px rgba(0, 0, 0, 0.5);
 }
+
+/* «Здатися?»: a window over the dimmed page, the safe answer bright */
+.g-confirm {
+  width: min(320px, calc(100vw - 32px));
+  margin: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 22px;
+  background: var(--surface);
+  box-shadow:
+    var(--raised),
+    0 24px 60px rgba(0, 0, 0, 0.55);
+  color: var(--text);
+}
+
+.g-confirm::backdrop {
+  background: rgba(12, 13, 15, 0.66);
+}
+
+.g-confirm[open] {
+  animation: g-confirm-in 0.16s ease-out;
+}
+
+@keyframes g-confirm-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .g-confirm[open] {
+    animation: none;
+  }
+}
+
+.g-confirm-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 22px 18px 18px;
+  text-align: center;
+}
+
+.g-confirm-title {
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.g-confirm-text {
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.g-confirm-moves {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.g-confirm-yes {
+  color: var(--warn);
+}
+
+/* emojis: a row under the game; each sent rises over the sender's face in a bubble and fades */
+.g-emotes {
+  flex-direction: row;
+  justify-content: space-between;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: 18px;
+}
+
+.g-emote-btn {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    transform 0.12s ease,
+    opacity 0.2s ease;
+}
+
+.g-emote-btn:active {
+  transform: scale(1.25);
+}
+
+.g-emote-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.g-emote-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 35;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.g-emote {
+  position: absolute;
+  transform: translate(-50%, -100%);
+}
+
+.g-emote-bubble {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-width: 44px;
+  height: 40px;
+  padding: 0 8px;
+  border-radius: 14px;
+  background: #3a3c44;
+  box-shadow:
+    0 8px 20px rgba(0, 0, 0, 0.5),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  font-size: 26px;
+  line-height: 1;
+}
+
+/* the bubble's tail, down to the face */
+.g-emote-bubble::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -5px;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: #3a3c44;
+  transform: translateX(-50%) rotate(45deg);
+}
+
+/* who watches: an eye, their faces small and overlapping in a row, «+N» for the rest */
+.g-watchers {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+}
+
+.g-watchers-eye {
+  flex: none;
+}
+
+.g-watchers-faces {
+  display: inline-flex;
+  align-items: center;
+}
+
+.g-watcher {
+  display: inline-flex;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1.5px var(--page);
+}
+
+.g-watcher + .g-watcher {
+  margin-left: -6px;
+}
+
+.g-watchers-more {
+  margin-left: 4px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.g-head-side {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}

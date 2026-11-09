@@ -20,7 +20,16 @@ import {
   useMotion,
 } from "./motion.tsx";
 import { Bolt, playerName } from "./Rating.tsx";
-import { FanSeat, Hand, MePlate, type RoundScreenProps, RoundSeating, ringOf } from "./round.tsx";
+import {
+  FanSeat,
+  GiveUp,
+  Hand,
+  MePlate,
+  type RoundScreenProps,
+  RoundSeating,
+  ringOf,
+  Watchers,
+} from "./round.tsx";
 
 type Durak = NonNullable<NonNullable<EveningTableView["durak"]>["game"]>;
 
@@ -206,9 +215,9 @@ export function DurakScreen({ v, api, door, run, left, error }: RoundScreenProps
           data-lifting={lift !== null || undefined}
         >
           <div className="g-felt" style={L.felt} />
-          {v.watchers > 0 && (
+          {v.watchers.length > 0 && (
             <span className="g-felt-note" data-side="left">
-              дивляться: {v.watchers}
+              <Watchers v={v} />
             </span>
           )}
           {left !== null && (
@@ -365,13 +374,16 @@ export function DurakScreen({ v, api, door, run, left, error }: RoundScreenProps
                   </button>
                 )}
                 {!legal?.take && !legal?.done && (
-                  <button
-                    type="button"
-                    className="g-btn"
-                    onClick={() => run(() => api.stand(door))}
-                  >
-                    Здатися
-                  </button>
+                  <GiveUp
+                    cost={
+                      <>
+                        Гра скінчиться, і дурнем станеш ти: заплатиш решті до{" "}
+                        {v.seats.find((s) => s.id === me)?.stake ?? 0}
+                        <Bolt size={12} /> своєї ставки
+                      </>
+                    }
+                    onYes={() => run(() => api.stand(door))}
+                  />
                 )}
               </div>
             </>

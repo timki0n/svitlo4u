@@ -322,6 +322,42 @@ describe("«Вечорниці»", () => {
     });
   });
 
+  it("who watches a table: their ids, with their names, not those sitting at it", async () => {
+    const door = await doorOf("durak");
+    await openDoor(door);
+    await call("POST", `/evenings/${door}/join`, ANN, { stake: 30 });
+    await table(door, CAT);
+    await table(door, BOB);
+    const t = await table(door, ANN);
+    expect(t.watchers).toEqual([9, 8]); // Kate first: she came first; Ann sits, so not her
+    expect(t.players["9"]?.name).toBe("Катя");
+    clock.advanceBy(41_000); // their screens went quiet
+    expect((await table(door, ANN)).watchers).toEqual([]);
+  });
+
+  it("emojis: one at the table sends them, everyone sees them a few seconds, one a second", async () => {
+    const door = await doorOf("durak");
+    await openDoor(door);
+    await call("POST", `/evenings/${door}/join`, ANN, { stake: 30 });
+    const send = (who: Person, emoji: string) =>
+      call<{ error?: string }>("POST", `/evenings/${door}/emote`, who, { emoji });
+
+    expect((await send(BOB, "👍")).body.error).toBe("not_seated"); // a spectator has no face here
+    expect((await send(ANN, "🍕")).body.error).toBe("bad_emote");
+    expect((await send(ANN, "😂")).status).toBe(200);
+    expect((await send(ANN, "🔥")).body.error).toBe("too_fast");
+
+    const seen = (await table(door, CAT)).emotes;
+    expect(seen.map((e) => [e.id, e.emoji])).toEqual([[7, "😂"]]);
+    clock.advanceBy(1_000);
+    expect((await send(ANN, "🔥")).status).toBe(200);
+    const both = (await table(door, BOB)).emotes;
+    expect(both.map((e) => e.emoji)).toEqual(["😂", "🔥"]);
+    expect(both[1]?.n).toBeGreaterThan(both[0]?.n ?? Infinity);
+    clock.advanceBy(3_500);
+    expect((await table(door, BOB)).emotes.map((e) => e.emoji)).toEqual(["🔥"]); // the first is gone
+  });
+
   it("«Дурень»: two sit, a moment later the cards are dealt; giving up makes you the durak", async () => {
     const door = await doorOf("durak");
     await openDoor(door);

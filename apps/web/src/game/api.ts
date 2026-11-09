@@ -4,6 +4,7 @@
  */
 import type {
   EveningDoor,
+  EveningEmote,
   EveningGame,
   EveningMove,
   EveningsOverview,
@@ -24,6 +25,7 @@ import { tgInitData } from "../telegram.ts";
 export type GameState = CoreState & { evenings: EveningsOverview };
 export type {
   EveningDoor,
+  EveningEmote,
   EveningGame,
   EveningMove,
   EveningsOverview,
@@ -103,5 +105,8 @@ export function gameApi(siteId: string) {
     stand: (n: number) => call<{ ok: true }>("POST", door(n, "leave")),
     move: (n: number, move: EveningMove) =>
       call<{ ok: true }>("POST", door(n, "move"), { body: move }),
+    /** An emoji over my face at the table, on every screen. */
+    emote: (n: number, emoji: EveningEmote) =>
+      call<{ ok: true }>("POST", door(n, "emote"), { body: { emoji } }),
   };
 }

@@ -3,7 +3,7 @@
  * cards face down, my own plate, my hand of cards, and the card under the table while one is not
  * in a game — sitting down with a stake, waiting for the others, the queue.
  */
-import { type ReactNode, useRef, useState } from "react";
+import { type ReactNode, useId, useRef, useState } from "react";
 import type { EveningTableView, gameApi } from "./api.ts";
 import { CardFace, clock, Net, type Point } from "./cards.tsx";
 import type { Spot } from "./motion.tsx";
@@ -82,6 +82,39 @@ export function FanSeat({
         {net !== 0 && <Net net={net} />}
       </span>
     </div>
+  );
+}
+
+/** Who watches the table: an eye, their faces small in a row (the first few, then «+N»). */
+export function Watchers({ v, size = 20 }: { v: EveningTableView; size?: number }) {
+  const ids = v.watchers;
+  if (ids.length === 0) return null;
+  const shown = ids.slice(0, ids.length > 5 ? 4 : 5);
+  const names = ids.map((id) => playerName(v.players[id])).join(", ");
+  return (
+    <span className="g-watchers" title={`Дивляться: ${names}`}>
+      <span className="sr-only">Дивляться: {names}</span>
+      <svg className="g-watchers-eye" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+        <path
+          d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12Z"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinejoin="round"
+        />
+        <circle cx="12" cy="12" r="3" fill="currentColor" />
+      </svg>
+      <span className="g-watchers-faces" aria-hidden="true">
+        {shown.map((id) => (
+          <span key={id} className="g-watcher">
+            <Avatar id={id} player={v.players[id]} size={size} />
+          </span>
+        ))}
+        {ids.length > shown.length && (
+          <span className="g-watchers-more">+{ids.length - shown.length}</span>
+        )}
+      </span>
+    </span>
   );
 }
 
@@ -273,6 +306,67 @@ export function Hand({
         </span>
       )}
     </span>
+  );
+}
+
+/**
+ * «Здатися», asked once more in a window over the page (giving up loses points, a slip of a finger
+ * must not): what it costs, «Грати далі» (the one in focus) or «Здатися». A tap outside or Esc
+ * closes it.
+ */
+export function GiveUp({ cost, onYes }: { cost: ReactNode; onYes: () => void }) {
+  const box = useRef<HTMLDialogElement>(null);
+  const stay = useRef<HTMLButtonElement>(null);
+  const title = useId();
+  const close = () => box.current?.close();
+  return (
+    <>
+      <button
+        type="button"
+        className="g-btn"
+        onClick={() => {
+          box.current?.showModal();
+          // the safe answer in focus: a slip (or Enter) keeps playing
+          stay.current?.focus();
+        }}
+      >
+        Здатися
+      </button>
+      <dialog
+        ref={box}
+        className="g-confirm"
+        aria-labelledby={title}
+        onClick={(e) => {
+          // the dialog itself is hit only round its card: the dimmed page
+          if (e.target === box.current) close();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") close();
+        }}
+      >
+        <div className="g-confirm-card">
+          <p id={title} className="g-confirm-title">
+            Здатися?
+          </p>
+          <p className="g-confirm-text">{cost}</p>
+          <div className="g-confirm-moves">
+            <button
+              type="button"
+              className="g-btn g-confirm-yes"
+              onClick={() => {
+                close();
+                onYes();
+              }}
+            >
+              Здатися
+            </button>
+            <button ref={stay} type="button" className="g-play" onClick={close}>
+              Грати далі
+            </button>
+          </div>
+        </div>
+      </dialog>
+    </>
   );
 }
 

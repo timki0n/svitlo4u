@@ -36,6 +36,7 @@ const DoorParams = SiteParams.extend({ door: z.coerce.number().int().min(1).max(
 const PartParams = DoorParams.extend({ part: z.coerce.number().int().min(1).max(9) });
 const SinceQuery = z.object({ since: z.coerce.number().int().default(-1) });
 const JoinBody = z.object({ stake: z.number().int().positive() });
+const EmoteBody = z.object({ emoji: z.string().min(1).max(16) });
 const MoveBody = z.discriminatedUnion("type", [
   z.object({ type: z.literal("shuffle") }),
   z.object({ type: z.literal("ready") }),
@@ -190,6 +191,18 @@ export function registerGame(
     if (!params.success || !body.success) return fail(reply, 400, "bad_move");
     return evening(reply, () => {
       evenings.act(p.site.id, p.user.id, params.data.door, body.data);
+      return { ok: true };
+    });
+  });
+
+  app.post("/api/v1/sites/:siteId/game/evenings/:door/emote", async (request, reply) => {
+    const p = player(request, reply);
+    if (!p) return reply;
+    const params = DoorParams.safeParse(request.params);
+    const body = EmoteBody.safeParse(request.body);
+    if (!params.success || !body.success) return fail(reply, 400, "bad_emote");
+    return evening(reply, () => {
+      evenings.emote(p.site.id, p.user.id, params.data.door, body.data.emoji);
       return { ok: true };
     });
   });

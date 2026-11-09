@@ -85,6 +85,13 @@ const BETWEEN_HANDS_MS = 6_000;
 const RESULT_SHOWN_MS = 8_000;
 /** A spectator counts while their screen asks at least this often. */
 const WATCHING_MS = 40_000;
+/** The emojis a player at a table may send: each rises over their face on every screen. */
+export const EVENING_EMOTES = ["👍", "😂", "😎", "😱", "😢", "😡", "🤔", "🔥"] as const;
+export type EveningEmote = (typeof EVENING_EMOTES)[number];
+/** How long an emoji sent stays in the view (screens show it once, as it comes). */
+const EMOTE_MS = 4_000;
+/** One player's emojis: at most one this often. */
+const EMOTE_GAP_MS = 1_000;
 
 const rand = () => randomInt(0, 2 ** 30) / 2 ** 30;
 
@@ -141,7 +148,8 @@ export type EveningTableView = {
   available: number;
   seats: EveningSeat[];
   queue: number[];
-  watchers: number;
+  /** Who watches the table (not sitting at it), the first to come first. */
+  watchers: number[];
   me: { id: number; seated: boolean; queued: boolean };
   battle:
     | (BattleView & {
@@ -162,6 +170,8 @@ export type EveningTableView = {
   durak: RoundTableView<DurakView> | null;
   colors: RoundTableView<ColorsView> | null;
   blackout: RoundTableView<BlackoutView> | null;
+  /** Emojis sent in the last few seconds: `n` tells each apart (screens show each once). */
+  emotes: { n: number; id: number; emoji: EveningEmote; at: number }[];
   /** The last game or hand that ended, for a moment. */
   result: {
     winners: number[];
@@ -207,6 +217,7 @@ type Table = {
   /** A round game (rounds.ts) under way or just over. */
   round: { game: unknown; pay: Record<string, number> | null } | null;
   result: EveningTableView["result"];
+  emotes: EveningTableView["emotes"];
   deadline: number | null;
   timer: ReturnType<typeof setTimeout> | null;
   waiters: Set<() => void>;
@@ -264,7 +275,7 @@ export class EveningService {
         open: parts.every((p) => p !== null),
         players: table?.seats.map((s) => s.id) ?? [],
         live: table ? this.live(table) : false,
-        watchers: table ? this.watching(table, now) : 0,
+        watchers: table ? this.watching(table, now).length : 0,
       };
     });
     return { session, doors };
@@ -419,6 +430,20 @@ export class EveningService {
     }
   }
 
+  /** An emoji from one at the table, over their face on every screen (one a second at most). */
+  emote(siteId: string, userId: number, door: number, emoji: string): void {
+    const table = this.tables.get(siteId)?.get(door);
+    if (!table?.seats.some((s) => s.id === userId)) fail("not_seated");
+    const t = table as Table;
+    if (!(EVENING_EMOTES as readonly string[]).includes(emoji)) fail("bad_emote");
+    const now = this.deps.clock.now();
+    t.emotes = t.emotes.filter((e) => now - e.at < EMOTE_MS);
+    if (t.emotes.some((e) => e.id === userId && now - e.at < EMOTE_GAP_MS)) fail("too_fast");
+    const n = (t.emotes[t.emotes.length - 1]?.n ?? now) + 1;
+    t.emotes.push({ n, id: userId, emoji: emoji as EveningEmote, at: now });
+    this.changed(t);
+  }
+
   /** The table as the viewer may see it; waits (up to ~25 s) until it changes past `since`. */
   async view(siteId: string, userId: number, door: number, since = -1): Promise<EveningTableView> {
     const overview = this.overview(siteId).doors[door - 1];
@@ -466,6 +491,7 @@ export class EveningService {
         poker: { hand: null, button: 0, handNo: 0 },
         round: null,
         result: null,
+        emotes: [],
         deadline: null,
         timer: null,
         waiters: new Set(),
@@ -483,9 +509,10 @@ export class EveningService {
     return t.poker.hand !== null && t.poker.hand.street !== "done";
   }
 
-  private watching(t: Table, now: number): number {
+  /** Who watches the table now, not sitting at it (their screens asked lately). */
+  private watching(t: Table, now: number): number[] {
     for (const [id, at] of t.watchers) if (now - at > WATCHING_MS) t.watchers.delete(id);
-    return [...t.watchers.keys()].filter((id) => !t.seats.some((s) => s.id === id)).length;
+    return [...t.watchers.keys()].filter((id) => !t.seats.some((s) => s.id === id));
   }
 
   /** Something changed: wake the screens waiting on it. */
@@ -856,8 +883,10 @@ export class EveningService {
     const seated = t.seats.some((s) => s.id === userId);
     const b = t.battle;
     const hand = t.poker.hand;
+    const watchers = this.watching(t, now);
     const ids = new Set<number>([
       userId,
+      ...watchers,
       ...t.seats.map((s) => s.id),
       ...t.queue.map((q) => q.id),
       ...(t.result?.winners ?? []),
@@ -877,7 +906,7 @@ export class EveningService {
       available: this.available(t.site, userId),
       seats: t.seats.map(({ id, stake, leaving }) => ({ id, stake, leaving })),
       queue: t.queue.map((q) => q.id),
-      watchers: this.watching(t, now),
+      watchers,
       me: { id: userId, seated, queued: t.queue.some((q) => q.id === userId) },
       battle:
         t.game === "battle" && b
@@ -901,6 +930,7 @@ export class EveningService {
       durak: t.game === "durak" ? (this.roundView(t, seated ? userId : null) as never) : null,
       colors: t.game === "colors" ? (this.roundView(t, seated ? userId : null) as never) : null,
       blackout: t.game === "blackout" ? (this.roundView(t, seated ? userId : null) as never) : null,
+      emotes: t.emotes.filter((e) => now - e.at < EMOTE_MS),
       result: t.result,
       players: this.deps.game.views(t.site, [...ids]),
     };

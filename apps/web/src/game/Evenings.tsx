@@ -18,8 +18,10 @@ import { BlackoutScreen } from "./Blackout.tsx";
 import { ColorsScreen } from "./Colors.tsx";
 import { CardFace, clock, Net, PLACES, tableLayout, useSize } from "./cards.tsx";
 import { DurakScreen } from "./Durak.tsx";
+import { Emotes } from "./emotes.tsx";
 import { PayFlight } from "./flight.tsx";
 import { Avatar, Bolt, playerName } from "./Rating.tsx";
+import { GiveUp, Watchers } from "./round.tsx";
 
 type Api = ReturnType<typeof gameApi>;
 
@@ -258,13 +260,9 @@ export function EveningScreen({ api, door }: { api: Api; door: number }) {
           <section className="card g-table">
             <div className="card-head">
               <span className="card-title">{EVENING_NAMES[v.game]}</span>
-              <span className="muted" style={{ fontSize: 13 }}>
-                {[
-                  v.watchers > 0 ? `дивляться: ${v.watchers}` : "",
-                  left !== null ? `⏱ ${clock(left)}` : "",
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
+              <span className="g-head-side muted">
+                <Watchers v={v} size={18} />
+                {left !== null && <span>⏱ {clock(left)}</span>}
               </span>
             </div>
             <BattleTable v={v} api={api} door={door} run={run} />
@@ -273,6 +271,7 @@ export function EveningScreen({ api, door }: { api: Api; door: number }) {
           <Seating v={v} api={api} door={door} run={run} />
         </>
       )}
+      {v && <Emotes v={v} api={api} door={door} root={main} />}
     </main>
   );
 }
@@ -297,9 +296,25 @@ function Seating({ v, api, door, run }: TableProps) {
           Твоя ставка: <b>{seat?.stake ?? 0}</b>
           <Bolt size={12} />
         </p>
-        <button type="button" className="g-btn" onClick={() => run(() => api.stand(door))}>
-          {live ? "Здатися" : "Встати з-за столу"}
-        </button>
+        {live ? (
+          <GiveUp
+            cost={
+              <>
+                Перемога дістанеться суперникові: віддаси йому{" "}
+                {Math.min(
+                  seat?.stake ?? 0,
+                  v.seats.find((s) => s.id !== playerOf(v))?.stake ?? seat?.stake ?? 0,
+                )}
+                <Bolt size={12} />
+              </>
+            }
+            onYes={() => run(() => api.stand(door))}
+          />
+        ) : (
+          <button type="button" className="g-btn" onClick={() => run(() => api.stand(door))}>
+            Встати з-за столу
+          </button>
+        )}
       </section>
     );
   }
@@ -688,9 +703,9 @@ function PokerScreen({
     <>
       <div ref={box} className="g-felt-box" data-compact={L.compact || undefined}>
         <div className="g-felt" style={L.felt} />
-        {v.watchers > 0 && (
+        {v.watchers.length > 0 && (
           <span className="g-felt-note" data-side="left">
-            дивляться: {v.watchers}
+            <Watchers v={v} />
           </span>
         )}
         {left !== null && (
