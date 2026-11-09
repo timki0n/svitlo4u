@@ -36,6 +36,11 @@ export function Bolt({ size = 14 }: { size?: number }) {
 }
 
 const SHADES = ["#8fa3c8", "#d9b86a", "#c48f7a", "#8fb8a6", "#b49ac8", "#c8a27a"];
+/** The calm colour behind a player's letter. */
+export const avatarShade = (id: number): string => SHADES[Math.abs(id) % SHADES.length] as string;
+/** The letter shown without a photo. */
+export const avatarLetter = (player: PlayerView | undefined): string =>
+  (player?.name || player?.username || "?").trim().charAt(0).toUpperCase();
 
 /** The Telegram photo the core saved, or the first letter on a calm colour. */
 export function Avatar({
@@ -59,13 +64,9 @@ export function Avatar({
         onError={() => setBroken(true)}
       />
     );
-  const letter = (player?.name || player?.username || "?").trim().charAt(0).toUpperCase();
+  const letter = avatarLetter(player);
   return (
-    <span
-      className="g-avatar"
-      style={{ ...style, background: SHADES[Math.abs(id) % SHADES.length] }}
-      aria-hidden="true"
-    >
+    <span className="g-avatar" style={{ ...style, background: avatarShade(id) }} aria-hidden="true">
       {letter}
     </span>
   );

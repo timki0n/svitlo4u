@@ -33,6 +33,7 @@ import { type Bus, EventBus } from "./runtime/bus.ts";
 import { type Clock, SystemClock } from "./runtime/clock.ts";
 import { buildServer } from "./server.ts";
 import { BackupService, loadBackupConfig } from "./services/backup.ts";
+import { EveningService, type EveningTimings } from "./services/evenings.ts";
 import { GameService } from "./services/game.ts";
 import { ChromiumScheduleImages, type ScheduleImages } from "./services/images.ts";
 import { PowerService } from "./services/power.ts";
@@ -65,6 +66,8 @@ export type CoreDeps = {
   images?: ScheduleImages | null;
   /** Replace the Bot API calls for the game's avatars (tests). */
   gameFetch?: (url: string) => Promise<Response>;
+  /** Shorter clocks for the tables of «Вечорниці» (tests). */
+  eveningTimings?: Partial<EveningTimings>;
 };
 
 export type Core = {
@@ -211,7 +214,13 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
     ...(deps.gameFetch ? { fetch: deps.gameFetch } : {}),
     log,
   });
-  registerGame(app, game, clock);
+  const evenings = new EveningService({
+    store,
+    clock,
+    game,
+    ...(deps.eveningTimings ? { timings: deps.eveningTimings } : {}),
+  });
+  registerGame(app, game, clock, evenings);
   telegram.registerRoutes(app);
   sse.registerRoutes(app);
 
@@ -375,6 +384,7 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
       for (const service of power.values()) service.stop();
       mqtt?.end?.(true);
       notifierInstance.stop();
+      evenings.stop();
       await telegram.stop();
       // Let sends in progress finish; what is left stays in the outbox for the next start.
       outbox.stop();

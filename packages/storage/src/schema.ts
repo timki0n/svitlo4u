@@ -244,3 +244,52 @@ export const gameSolves = sqliteTable(
     index("game_solves_by_time").on(t.siteId, t.solvedAt),
   ],
 );
+
+/**
+ * «Вечорниці»: the ground floor's doors, each in three parts. A part is opened once per session by
+ * one player, and a player opens at most one part of a door.
+ */
+export const gameUnlocks = sqliteTable(
+  "game_unlocks",
+  {
+    siteId: text("site_id")
+      .notNull()
+      .references(() => sites.id),
+    session: integer("session").notNull(),
+    door: integer("door").notNull(),
+    part: integer("part").notNull(),
+    userId: integer("user_id").notNull(),
+    unlockedAt: integer("unlocked_at").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.siteId, t.session, t.door, t.part] }),
+    uniqueIndex("game_unlocks_one_part").on(t.siteId, t.session, t.door, t.userId),
+  ],
+);
+
+/**
+ * Points won and lost besides windows: a door's part opened, a game of «Вечорниці» played. They
+ * count in the session they belong to, like windows.
+ */
+export const gameLedger = sqliteTable(
+  "game_ledger",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    siteId: text("site_id")
+      .notNull()
+      .references(() => sites.id),
+    session: integer("session").notNull(),
+    userId: integer("user_id").notNull(),
+    /** Points won (+) or lost (−). */
+    points: integer("points").notNull(),
+    /** door | poker | battle */
+    kind: text("kind").notNull(),
+    /** What it was for: "door 3 part 2", a table and hand. */
+    ref: text("ref").notNull(),
+    at: integer("at").notNull(),
+  },
+  (t) => [
+    index("game_ledger_by_session").on(t.siteId, t.session),
+    index("game_ledger_by_time").on(t.siteId, t.at),
+  ],
+);

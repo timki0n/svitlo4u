@@ -64,6 +64,66 @@ const WIN_OUT = 0.12;
 /** The open galleries of the halls (the vertical strips of lights): on the yard side only. */
 const GALLERY_X = [-19, 19];
 
+/** The tower's shops on the yard side, on the ground floor: «Вечорниці» in the game. */
+const DOOR_X = [-28, -14, 0, 14, 28] as const;
+const DOOR_W = 5.5;
+const DOOR_H = 4;
+const DOOR_Y = 3;
+/** A door is looked at nearer than windows (a share of the close distance), to see who plays. */
+const DOOR_ZOOM = 0.45;
+/**
+ * The faces of who plays behind a door (DOOR_W × DOOR_H), by how many: radius and centres. The
+ * fewer, the bigger; neighbours overlap a little.
+ */
+const FACE_LAYOUTS: Record<number, { r: number; at: [number, number][] }> = {
+  1: { r: 1.6, at: [[0, 0]] },
+  2: {
+    r: 1.4,
+    at: [
+      [-1.15, 0],
+      [1.15, 0],
+    ],
+  },
+  3: {
+    r: 1.17,
+    at: [
+      [-1.58, -0.3],
+      [0, 0.3],
+      [1.58, -0.3],
+    ],
+  },
+  4: {
+    r: 1.12,
+    at: [
+      [-1.15, 0.88],
+      [1.15, 0.88],
+      [-1.15, -0.88],
+      [1.15, -0.88],
+    ],
+  },
+  5: {
+    r: 1,
+    at: [
+      [-1.75, 0.95],
+      [0, 0.95],
+      [1.75, 0.95],
+      [-0.88, -0.95],
+      [0.88, -0.95],
+    ],
+  },
+  6: {
+    r: 1,
+    at: [
+      [-1.75, 0.95],
+      [0, 0.95],
+      [1.75, 0.95],
+      [-1.75, -0.95],
+      [0, -0.95],
+      [1.75, -0.95],
+    ],
+  },
+};
+
 /** A window on the ground plan: its centre and the way it looks (a unit vector). */
 type Spot = { x: number; z: number; nx: number; nz: number };
 
@@ -413,7 +473,20 @@ export type FacadeScene = {
   select(win: FacadeWindow | null): void;
   /** Room (px) kept free on the right of the whole tower: the building moves left, same size. */
   setInset(px: number): void;
+  /** The doors of «Вечорниці»: which parts are open, who sits at each table. */
+  setDoors(doors: readonly FacadeDoor[]): void;
+  /** Mark a door and come close to it; null leaves it. */
+  selectDoor(door: number | null): void;
   dispose(): void;
+};
+/** A door of «Вечорниці» (1–5, left to right seen from the yard) as the facade shows it. */
+export type FacadeDoor = {
+  door: number;
+  /** Its three parts: open or not. */
+  parts: boolean[];
+  open: boolean;
+  /** Who sits at its table: a photo link, or a letter on a colour. */
+  players: { id: number; avatar: string | null; letter: string; shade: string }[];
 };
 const FIRST_FLOOR = GAME_FLOORS.first;
 const floorY = (floor: number) => GROUND + (floor - FIRST_FLOOR) * FLOOR + FLOOR / 2;
@@ -505,6 +578,7 @@ export function createFacade(
   host: HTMLElement,
   canvas: HTMLCanvasElement,
   onPick: (win: FacadeWindow) => void,
+  onPickDoor: (door: number) => void = () => {},
 ): FacadeScene {
   const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
@@ -522,7 +596,8 @@ export function createFacade(
     disposables.push(x);
     return x;
   };
-  const { model, yard, annexWindows, winMesh, lights, bars, barMat, signMat } = buildFigure(keep);
+  const { model, yard, annexWindows, shopWindows, winMesh, lights, bars, barMat, signMat } =
+    buildFigure(keep);
   signMat.emissiveIntensity = 0;
   barMat.color.set(STATES.off.bar); // the generator keeps the hall lights on
   model.position.z = 0; // the tower stands on the axis the camera goes round
@@ -530,6 +605,8 @@ export function createFacade(
   yard.visible = false;
   const gone = new THREE.Matrix4().makeScale(0, 0, 0);
   for (let i = annexWindows[0]; i < annexWindows[1]; i++) winMesh.setMatrixAt(i, gone);
+  // the tower's shops are the doors of «Вечорниці» here (drawn below)
+  for (let i = shopWindows[0]; i < shopWindows[1]; i++) winMesh.setMatrixAt(i, gone);
   winMesh.instanceMatrix.needsUpdate = true;
   scene.add(model);
   scene.updateMatrixWorld(true);
@@ -540,6 +617,129 @@ export function createFacade(
   );
   mark.visible = false;
   model.add(mark);
+
+  // ── «Вечорниці»: five doors, three parts each (dark until opened), faces of who plays ────────
+  const doorZ = TOWER_Z + 0.16;
+  const partW = DOOR_W / 3;
+  const partGeo = keep(new THREE.PlaneGeometry(partW - 0.12, DOOR_H));
+  const barGeo = keep(new THREE.BoxGeometry(0.14, DOOR_H + 0.24, 0.1));
+  const barMatDoor = keep(new THREE.MeshBasicMaterial({ color: "#0d0e11", toneMapped: false }));
+  /** A face of radius 1, scaled to its layout. */
+  const faceGeo = keep(new THREE.CircleGeometry(1, 48));
+  const shutColor = new THREE.Color("#1c1e24");
+  const ajarColor = new THREE.Color(PALETTE.lamp).multiplyScalar(0.62);
+  const openColor = new THREE.Color(PALETTE.lamp);
+  const doorParts: THREE.MeshBasicMaterial[][] = [];
+  const doorFaces: THREE.Group[] = [];
+  DOOR_X.forEach((x) => {
+    const g = new THREE.Group();
+    g.position.set(x, DOOR_Y, doorZ);
+    model.add(g);
+    const mats = [0, 1, 2].map((k) => {
+      const m = keep(new THREE.MeshBasicMaterial({ color: shutColor, toneMapped: false }));
+      const part = new THREE.Mesh(partGeo, m);
+      part.position.set((k - 1) * partW, 0, 0);
+      g.add(part);
+      return m;
+    });
+    // the two lines that split a door into its parts
+    for (const k of [-0.5, 0.5]) {
+      const bar = new THREE.Mesh(barGeo, barMatDoor);
+      bar.position.set(k * partW, 0, 0.04);
+      g.add(bar);
+    }
+    const faces = new THREE.Group();
+    // well in front of the bars between the parts: nearer than that, the bars showed through
+    faces.position.set(0, 0, 0.6);
+    g.add(faces);
+    doorParts.push(mats);
+    doorFaces.push(faces);
+  });
+  /** Round faces drawn once per player and photo, reused. */
+  const faceTextures = new Map<string, THREE.CanvasTexture>();
+  const faceOf = (p: FacadeDoor["players"][number]): THREE.CanvasTexture => {
+    const key = `${p.id}:${p.avatar ?? ""}`;
+    const known = faceTextures.get(key);
+    if (known) return known;
+    const art = document.createElement("canvas");
+    art.width = 160;
+    art.height = 160;
+    const g = art.getContext("2d");
+    const texture = keep(new THREE.CanvasTexture(art));
+    texture.colorSpace = THREE.SRGBColorSpace;
+    const round = () => {
+      if (!g) return;
+      g.beginPath();
+      g.arc(80, 80, 76, 0, Math.PI * 2);
+      g.closePath();
+    };
+    if (g) {
+      round();
+      g.fillStyle = p.shade;
+      g.fill();
+      g.fillStyle = "#1a1208";
+      g.font = "800 76px Manrope Variable, sans-serif";
+      g.textAlign = "center";
+      g.textBaseline = "middle";
+      g.fillText(p.letter, 80, 86);
+    }
+    // a dark rim, so a face reads on the lit door and apart from the face it overlaps
+    const rim = () => {
+      if (!g) return;
+      round();
+      g.lineWidth = 8;
+      g.strokeStyle = "#0d0e11";
+      g.stroke();
+    };
+    rim();
+    if (p.avatar && g) {
+      const img = new Image();
+      img.onload = () => {
+        g.save();
+        round();
+        g.clip();
+        g.drawImage(img, 0, 0, 160, 160);
+        g.restore();
+        rim();
+        texture.needsUpdate = true;
+        wake();
+      };
+      img.src = p.avatar;
+    }
+    faceTextures.set(key, texture);
+    return texture;
+  };
+  let doors: readonly FacadeDoor[] = [];
+  const dressDoors = () => {
+    doors.forEach((d) => {
+      const mats = doorParts[d.door - 1];
+      const faces = doorFaces[d.door - 1];
+      if (!mats || !faces) return;
+      mats.forEach((m, k) => {
+        m.color.copy(d.open ? openColor : d.parts[k] ? ajarColor : shutColor);
+      });
+      for (const child of [...faces.children]) {
+        faces.remove(child);
+        const mat = (child as THREE.Mesh).material as THREE.Material;
+        mat.dispose();
+      }
+      // up to six faces, as big as the door holds them, a little over one another
+      const shown = d.players.slice(0, 6);
+      const layout = FACE_LAYOUTS[shown.length];
+      if (!layout) return;
+      shown.forEach((p, i) => {
+        const [x, y] = layout.at[i] ?? [0, 0];
+        const face = new THREE.Mesh(
+          faceGeo,
+          new THREE.MeshBasicMaterial({ map: faceOf(p), transparent: true, toneMapped: false }),
+        );
+        face.scale.setScalar(layout.r);
+        // each next one a hair nearer, so it lies over the one before
+        face.position.set(x, y, i * 0.012);
+        faces.add(face);
+      });
+    });
+  };
 
   // ── windows: dark, lit, or blinking while someone plays them ──────────────────────────────
   const glass = new THREE.Color(PALETTE.glass);
@@ -640,8 +840,8 @@ export function createFacade(
   // ── the camera: round the whole tower from afar, or close along its walls ──────────────────
   let viewWidth = 1;
   let inset = 0;
-  /** Afar: where the camera stands round the tower (the street side, a little from the side). */
-  let turn = Math.PI + 0.2;
+  /** Afar: where the camera stands round the tower (the yard side with the doors, a little aside). */
+  let turn = 0.2;
   /** Afar: how far, the same from every side (fitFar). */
   let farDist = 300;
   /** Close: the walk along the walls (wallAt) and the height looked at. */
@@ -649,12 +849,22 @@ export function createFacade(
   let walk = 0;
   let height = 0;
   let selected: FacadeWindow | null = null;
+  let selectedDoor: number | null = null;
+  /** Close: how near — 1 along the windows, DOOR_ZOOM at a door. */
+  let zoom = 1;
 
   const half = () => Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
   const closeDist = () => Math.max(CLOSE_H / 2 / half(), CLOSE_W / 2 / (half() * camera.aspect));
+  /**
+   * Close up (at a zoom), the lowest the view may look: its bottom edge a little under the doors,
+   * whatever the screen's shape, so the ground floor with «Вечорниці» can always be looked at.
+   */
+  const lowest = (z: number) => DOOR_Y - DOOR_H / 2 - 1.5 + closeDist() * z * half();
+  /** Where the view looks at a door: as low as it goes, the door near its bottom edge. */
+  const doorHeight = () => lowest(DOOR_ZOOM);
   /** Close up the view stays on the walls instead of showing the ground or the sky. */
-  const clampHeight = (y: number) =>
-    Math.min(H + 2 - CLOSE_H / 2, Math.max(GROUND - 2 + CLOSE_H / 2, y));
+  const clampHeight = (y: number, z = zoom) =>
+    Math.min(H + 2 - CLOSE_H / 2, Math.max(lowest(z), y));
   /** The part of the view left of the inset, where the whole tower stands. */
   const share = () => Math.max(0.5, (viewWidth - inset) / viewWidth);
   /**
@@ -689,7 +899,7 @@ export function createFacade(
     );
   };
   const closePose = (pose: Pose) => {
-    const d = closeDist();
+    const d = closeDist() * zoom;
     const at = wallAt(walk);
     pose.target.set(at.x, height, at.z);
     pose.pos.set(at.x + at.nx * d, height, at.z + at.nz * d);
@@ -700,7 +910,14 @@ export function createFacade(
   type Tween = {
     start: number;
     from: Pose;
-    walk?: { from: number; to: number; heightFrom: number; heightTo: number };
+    walk?: {
+      from: number;
+      to: number;
+      heightFrom: number;
+      heightTo: number;
+      zoomFrom: number;
+      zoomTo: number;
+    };
   };
   let tween: Tween | null = null;
   const lookAt = new THREE.Vector3();
@@ -728,7 +945,7 @@ export function createFacade(
     out.pos.set(Math.sin(a) * r, from.pos.y + (to.pos.y - from.pos.y) * e, Math.cos(a) * r);
     out.target.lerpVectors(from.target, to.target, e);
   };
-  const startTween = (walkTo?: { walk: number; height: number }) => {
+  const startTween = (walkTo?: { walk: number; height: number; zoom: number }) => {
     const from = newPose();
     from.pos.copy(camera.position);
     from.target.copy(lookAt);
@@ -738,7 +955,14 @@ export function createFacade(
       let to = walkTo.walk;
       while (to - walk > ROUND / 2) to -= ROUND;
       while (walk - to > ROUND / 2) to += ROUND;
-      tween.walk = { from: walk, to, heightFrom: height, heightTo: walkTo.height };
+      tween.walk = {
+        from: walk,
+        to,
+        heightFrom: height,
+        heightTo: walkTo.height,
+        zoomFrom: zoom,
+        zoomTo: walkTo.zoom,
+      };
     }
     wake();
   };
@@ -746,6 +970,7 @@ export function createFacade(
     if (tween?.walk) {
       walk = tween.walk.to;
       height = tween.walk.heightTo;
+      zoom = tween.walk.zoomTo;
     }
     tween = null;
   };
@@ -757,7 +982,7 @@ export function createFacade(
   let settle = false;
   const move = (dx: number, dy: number) => {
     if (close) {
-      const metres = (2 * closeDist() * half() * camera.aspect) / viewWidth;
+      const metres = (2 * closeDist() * zoom * half() * camera.aspect) / viewWidth;
       walk -= dx * metres;
       height = clampHeight(height + dy * metres);
     } else {
@@ -780,6 +1005,7 @@ export function createFacade(
       if (tween.walk) {
         walk = tween.walk.from + (tween.walk.to - tween.walk.from) * e;
         height = tween.walk.heightFrom + (tween.walk.heightTo - tween.walk.heightFrom) * e;
+        zoom = tween.walk.zoomFrom + (tween.walk.zoomTo - tween.walk.zoomFrom) * e;
         restPose(blending);
       } else {
         restPose(goal);
@@ -797,7 +1023,7 @@ export function createFacade(
       } else if (!drag && settle) {
         settle = false;
         const to = close ? settleWalk(walk) : walk;
-        if (Math.abs(to - walk) > 0.05) startTween({ walk: to, height });
+        if (Math.abs(to - walk) > 0.05) startTween({ walk: to, height, zoom });
       }
       restPose(goal);
       place(goal);
@@ -818,12 +1044,17 @@ export function createFacade(
     new THREE.Vector3(TOWER_X, H, TOWER_Z),
   );
   const hit = new THREE.Vector3();
-  const pick = (clientX: number, clientY: number): FacadeWindow | null => {
+  const pick = (clientX: number, clientY: number): FacadeWindow | { door: number } | null => {
     const r = canvas.getBoundingClientRect();
     ndc.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
     ray.setFromCamera(ndc, camera);
     const p = ray.ray.intersectBox(tower, hit);
     if (!p) return null;
+    // a door of «Вечорниці»: the yard side's ground floor
+    if (p.y < GROUND && Math.abs(p.z - TOWER_Z) < 0.3) {
+      const i = DOOR_X.findIndex((x) => Math.abs(p.x - x) <= DOOR_W / 2 + 0.3);
+      return i >= 0 ? { door: i + 1 } : null;
+    }
     const f = Math.floor((p.y - GROUND) / FLOOR);
     if (f < 0 || f >= FLOORS) return null;
     // the nearest window along the wall that was hit
@@ -872,8 +1103,9 @@ export function createFacade(
     settle = !tapped;
     drag = null;
     if (tapped) {
-      const win = pick(e.clientX, e.clientY);
-      if (win) onPick(win);
+      const got = pick(e.clientX, e.clientY);
+      if (got && "door" in got) onPickDoor(got.door);
+      else if (got) onPick(got);
     }
     wake();
   };
@@ -895,6 +1127,8 @@ export function createFacade(
     camera.aspect = width / tall;
     camera.updateProjectionMatrix();
     fitFar();
+    // close up, a view of another shape: keep its edges where they may be (a door low in it)
+    if (close && !tween) height = selectedDoor ? doorHeight() : clampHeight(height);
     wake();
   };
   const ro = new ResizeObserver(resize);
@@ -922,21 +1156,74 @@ export function createFacade(
       fitFar();
       if (!close) startTween();
     },
+    setDoors(next) {
+      doors = next;
+      dressDoors();
+      wake();
+    },
+    selectDoor(door) {
+      if (door === selectedDoor) return;
+      selectedDoor = door;
+      const x = door ? DOOR_X[door - 1] : undefined;
+      if (x === undefined) {
+        // no door, no window: back to the whole tower, from the side the camera is on now
+        if (!selected) {
+          mark.visible = false;
+          if (close) {
+            close = false;
+            turn = Math.atan2(camera.position.x, camera.position.z);
+            startTween();
+          }
+          canvas.style.touchAction = "";
+        }
+        return;
+      }
+      selected = null;
+      mark.visible = true;
+      mark.scale.set((DOOR_W + 0.7) / 3.5, (DOOR_H + 0.7) / 2.5, 1);
+      mark.position.set(x, DOOR_Y, doorZ - 0.03);
+      mark.rotation.y = 0;
+      // nearer than the windows, and low: the door whole, its faces big enough to know
+      const to = {
+        walk: spotWalk({ x, z: TOWER_Z + WIN_OUT, nx: 0, nz: 1 }),
+        height: doorHeight(),
+        zoom: DOOR_ZOOM,
+      };
+      if (close) startTween(to);
+      else {
+        close = true;
+        walk = to.walk;
+        height = to.height;
+        zoom = to.zoom;
+        startTween();
+      }
+      vel.x = 0;
+      vel.y = 0;
+      canvas.style.touchAction = "none";
+    },
     select(win) {
-      if (win?.floor === selected?.floor && win?.col === selected?.col) return;
+      if (win?.floor === selected?.floor && win?.col === selected?.col && !selectedDoor) return;
+      if (win) selectedDoor = null;
+      if (!win && selectedDoor) return; // a door is chosen: leave it as it is
       selected = win;
       const spot = win ? SPOTS[win.col - 1] : undefined;
       mark.visible = spot !== undefined;
+      mark.scale.set(1, 1, 1);
       if (win && spot) {
         mark.position.set(spot.x + spot.nx * 0.08, floorY(win.floor), spot.z + spot.nz * 0.08);
         mark.rotation.y = Math.atan2(spot.nx, spot.nz);
         // a window next to a corner, or on a narrow end wall, is seen from the corner at 45°
-        const to = { walk: settleWalk(spotWalk(spot)), height: clampHeight(floorY(win.floor)) };
+        const to = {
+          walk: settleWalk(spotWalk(spot)),
+          height: clampHeight(floorY(win.floor), 1),
+          zoom: 1,
+        };
         if (close) startTween(to);
         else {
           close = true;
           walk = to.walk;
           height = to.height;
+          zoom = to.zoom;
           startTween();
         }
       } else if (close) {
@@ -1117,7 +1404,8 @@ function buildFigure(keep: <T extends { dispose(): void }>(x: T) => T) {
   }
   for (let z = 15; z <= 37; z += 8) addWindow(38.12, 3.2, z, 0.3, 3.6, 3.8, true, -1);
   const annexTo = lights.length;
-  for (let x = -28; x <= 28; x += 14) addWindow(x, 3, 9.62, 5.5, 4, 0.3, true, -1);
+  for (const x of DOOR_X) addWindow(x, DOOR_Y, 9.62, DOOR_W, DOOR_H, 0.3, true, -1);
+  const shopsTo = lights.length;
 
   const winMesh = new THREE.InstancedMesh(
     keep(new THREE.BoxGeometry(1, 1, 1)),
@@ -1156,6 +1444,7 @@ function buildFigure(keep: <T extends { dispose(): void }>(x: T) => T) {
     model,
     yard,
     annexWindows: [annexFrom, annexTo] as const,
+    shopWindows: [annexTo, shopsTo] as const,
     winMesh,
     lights,
     bars,

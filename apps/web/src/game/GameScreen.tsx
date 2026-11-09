@@ -14,12 +14,13 @@ import {
 } from "../../../../packages/domain/src/game.ts";
 import { hhmm } from "../format.ts";
 import type { Live } from "../live.ts";
-import type { FacadeLit, FacadeScene, FacadeWindow } from "../scene3d.ts";
+import type { FacadeDoor, FacadeLit, FacadeScene, FacadeWindow } from "../scene3d.ts";
 import { inMiniApp } from "../telegram.ts";
 import { Icon } from "../ui.tsx";
 import { GameApiError, type GameState, gameApi, type SolveResult } from "./api.ts";
-import { TIER_LABEL, type WindowGame, windowGame } from "./games.ts";
-import { Avatar, Bolt, playerName, RatingScreen } from "./Rating.tsx";
+import { DoorCard, EveningScreen } from "./Evenings.tsx";
+import { partGame, TIER_LABEL, type WindowGame, windowGame } from "./games.ts";
+import { Avatar, avatarLetter, avatarShade, Bolt, playerName, RatingScreen } from "./Rating.tsx";
 import { rngOf } from "./rng.ts";
 import "./game.css";
 
@@ -28,11 +29,22 @@ const POLL_MS = 3000;
 /** While a puzzle is open, the phone tells the core every so often (others see it blink). */
 const HEARTBEAT_MS = 10_000;
 
-type Route = { kind: "facade" } | { kind: "rating" } | { kind: "play"; win: FacadeWindow };
+type Route =
+  | { kind: "facade" }
+  | { kind: "rating" }
+  | { kind: "play"; win: FacadeWindow }
+  | { kind: "part"; door: number; part: number }
+  | { kind: "evening"; door: number };
 
 function route(): Route {
   const hash = location.hash;
   if (hash === "#/game/rating") return { kind: "rating" };
+  // «Вечорниці»: #/game/v/<door> its table, #/game/v/<door>/<part> a part's puzzle
+  const v = /^#\/game\/v\/([1-5])(?:\/([1-3]))?$/.exec(hash);
+  if (v)
+    return v[2]
+      ? { kind: "part", door: Number(v[1]), part: Number(v[2]) }
+      : { kind: "evening", door: Number(v[1]) };
   const m = /^#\/game\/(\d+)-(\d+)$/.exec(hash);
   const floor = Number(m?.[1]);
   const col = Number(m?.[2]);
@@ -115,14 +127,27 @@ function Game({ siteId, tz, where }: { siteId: string; tz: string; where: Route 
   const [selected, setSelected] = useState<FacadeWindow | null>(
     where.kind === "play" ? where.win : null,
   );
+  const [door, setDoor] = useState<number | null>(
+    where.kind === "part" || where.kind === "evening" ? where.door : null,
+  );
   useEffect(() => {
-    if (where.kind === "play") setSelected(where.win);
+    if (where.kind === "play") {
+      setSelected(where.win);
+      setDoor(null);
+    } else if (where.kind === "part" || where.kind === "evening") {
+      setDoor(where.door);
+      setSelected(null);
+    }
   }, [where]);
-  // Up close (a window picked on the facade, or its puzzle) the tab bar hides (game.css) and the
-  // screen is the game's; it comes back on the whole facade, the rating, or if the game breaks.
+  // Up close (a window or a door picked on the facade, a puzzle, a table) the tab bar hides
+  // (game.css) and the screen is the game's; it comes back on the whole facade, the rating, or if
+  // the game breaks.
   const close =
     Boolean(state?.session) &&
-    (where.kind === "play" || (where.kind === "facade" && selected !== null));
+    (where.kind === "play" ||
+      where.kind === "part" ||
+      where.kind === "evening" ||
+      (where.kind === "facade" && (selected !== null || door !== null)));
   useEffect(() => {
     if (!close) return;
     document.documentElement.setAttribute("data-game", "");
@@ -144,15 +169,40 @@ function Game({ siteId, tz, where }: { siteId: string; tz: string; where: Route 
   if (where.kind === "play")
     return (
       // a window of its own each time, even when one follows another without the facade between
-      <Play key={keyOf(where.win)} api={api} session={session} win={where.win} onScored={refresh} />
+      <Play
+        key={keyOf(where.win)}
+        api={api}
+        session={session}
+        target={{ kind: "window", win: where.win }}
+        onScored={refresh}
+      />
     );
+  if (where.kind === "part")
+    return (
+      <Play
+        key={`door${where.door}-${where.part}`}
+        api={api}
+        session={session}
+        target={{ kind: "part", door: where.door, part: where.part }}
+        onScored={refresh}
+      />
+    );
+  if (where.kind === "evening") return <EveningScreen api={api} door={where.door} />;
   return (
     <Facade
       state={state}
       tz={tz}
       session={session}
       selected={selected}
-      onSelect={setSelected}
+      onSelect={(w) => {
+        setSelected(w);
+        if (w) setDoor(null);
+      }}
+      door={door}
+      onDoor={(d) => {
+        setDoor(d);
+        if (d) setSelected(null);
+      }}
       offline={error === "network"}
     />
   );
@@ -199,6 +249,8 @@ function Facade({
   session,
   selected,
   onSelect,
+  door,
+  onDoor,
   offline,
 }: {
   state: GameState;
@@ -206,6 +258,8 @@ function Facade({
   session: string;
   selected: FacadeWindow | null;
   onSelect: (w: FacadeWindow | null) => void;
+  door: number | null;
+  onDoor: (door: number | null) => void;
   offline: boolean;
 }) {
   const lit = useMemo(
@@ -221,6 +275,22 @@ function Facade({
     [state.windows, session],
   );
   const playing = useMemo(() => new Set(state.playing.map(keyOf)), [state.playing]);
+  const doors = useMemo(
+    (): FacadeDoor[] =>
+      state.evenings.doors.map((d) => ({
+        door: d.door,
+        parts: d.parts.map((by) => by !== null),
+        open: d.open,
+        players: d.players.map((id) => ({
+          id,
+          avatar: state.players[id]?.avatar ?? null,
+          letter: avatarLetter(state.players[id]),
+          shade: avatarShade(id),
+        })),
+      })),
+    [state.evenings, state.players],
+  );
+  const up = selected !== null || door !== null;
   const s = state.session;
   const label = s
     ? s.end === null
@@ -244,17 +314,24 @@ function Facade({
           playing={playing}
           selected={selected}
           onSelect={onSelect}
-          inset={selected ? 0 : SIDE_WIDTH + SIDE_GAP}
+          doors={doors}
+          door={door}
+          onDoor={onDoor}
+          inset={up ? 0 : SIDE_WIDTH + SIDE_GAP}
         />
-        {!selected && <SidePanel state={state} lit={lit.size} />}
+        {!up && <SidePanel state={state} lit={lit.size} />}
       </div>
-      <WindowCard
-        state={state}
-        tz={tz}
-        session={session}
-        selected={selected}
-        onClose={() => onSelect(null)}
-      />
+      {door !== null ? (
+        <DoorCard state={state} door={door} onClose={() => onDoor(null)} />
+      ) : (
+        <WindowCard
+          state={state}
+          tz={tz}
+          session={session}
+          selected={selected}
+          onClose={() => onSelect(null)}
+        />
+      )}
     </main>
   );
 }
@@ -345,23 +422,29 @@ function FacadeFigure({
   playing,
   selected,
   onSelect,
+  doors,
+  door,
+  onDoor,
   inset,
 }: {
   lit: ReadonlyMap<string, FacadeLit>;
   playing: ReadonlySet<string>;
   selected: FacadeWindow | null;
   onSelect: (w: FacadeWindow) => void;
+  doors: readonly FacadeDoor[];
+  door: number | null;
+  onDoor: (door: number) => void;
   /** Room kept free on the right (px). */
   inset: number;
 }) {
   const host = useRef<HTMLElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const scene = useRef<FacadeScene | null>(null);
-  const latest = useRef({ lit, playing, selected, onSelect, inset });
+  const latest = useRef({ lit, playing, selected, onSelect, doors, door, onDoor, inset });
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    latest.current = { lit, playing, selected, onSelect, inset };
+    latest.current = { lit, playing, selected, onSelect, doors, door, onDoor, inset };
   });
 
   useEffect(() => {
@@ -369,11 +452,18 @@ function FacadeFigure({
     import("../scene3d.ts")
       .then(({ createFacade }) => {
         if (cancelled || !host.current || !canvas.current) return;
-        const s = createFacade(host.current, canvas.current, (w) => latest.current.onSelect(w));
+        const s = createFacade(
+          host.current,
+          canvas.current,
+          (w) => latest.current.onSelect(w),
+          (d) => latest.current.onDoor(d),
+        );
         s.setLit(latest.current.lit);
         s.setPlaying(latest.current.playing);
+        s.setDoors(latest.current.doors);
         s.setInset(latest.current.inset);
         s.select(latest.current.selected);
+        s.selectDoor(latest.current.door);
         scene.current = s;
       })
       .catch((e: unknown) => {
@@ -394,9 +484,13 @@ function FacadeFigure({
     scene.current?.setPlaying(playing);
   }, [playing]);
   useEffect(() => {
+    scene.current?.setDoors(doors);
+  }, [doors]);
+  useEffect(() => {
     scene.current?.setInset(inset);
     scene.current?.select(selected);
-  }, [selected, inset]);
+    scene.current?.selectDoor(door);
+  }, [selected, door, inset]);
 
   return (
     <figure className="g-facade" ref={host}>
@@ -498,27 +592,55 @@ function WindowCard({
 
 // ── a window's puzzle ─────────────────────────────────────────────────────────────────────────
 
+/** Why a door's part may not be opened, as the core answers its start or solve. */
+const PART_REFUSALS: Record<string, string> = {
+  taken: "Цю частину вже відчинив хтось інший",
+  one_part_each: "У цих дверях у тебе вже є своя частина: інші відчиняють сусіди",
+  no_session: "Двері відчиняються лише під час відключення",
+  bad_door: "Таких дверей немає",
+};
+
+/** What a puzzle opens: a window, or a part of a door of «Вечорниці». */
+type PlayTarget =
+  | { kind: "window"; win: FacadeWindow }
+  | { kind: "part"; door: number; part: number };
+
 function Play({
   api,
   session,
-  win,
+  target,
   onScored,
 }: {
   api: ReturnType<typeof gameApi>;
   session: string;
-  win: FacadeWindow;
+  target: PlayTarget;
   onScored: () => void;
 }) {
+  const win = target.kind === "window" ? target.win : { floor: 0, col: 0 };
+  const door = target.kind === "part" ? target : null;
+  // plain numbers for the hooks: a door's part, or 0 for a window
+  const doorNo = door?.door ?? 0;
+  const partNo = door?.part ?? 0;
   const info = useMemo(
-    () => windowGame(session, win.floor, win.col),
-    [session, win.floor, win.col],
+    () => (doorNo ? partGame(session, doorNo, partNo) : windowGame(session, win.floor, win.col)),
+    [session, win.floor, win.col, doorNo, partNo],
   );
   const [line, setLine] = useState<{ text: string; warn?: string }>({ text: "" });
   const [result, setResult] = useState<{ text: string; ok: boolean; points?: number } | null>(null);
   const [round, setRound] = useState(0);
+  /** A door's part one may not open (taken, or one's own part is another): said instead of a puzzle. */
+  const [refused, setRefused] = useState<string | null>(null);
 
   // the core learns the window is being played (others see it blink) and when it was opened
   useEffect(() => {
+    if (doorNo) {
+      setRefused(null);
+      api.partStart(doorNo, partNo).catch((e: unknown) => {
+        const text = e instanceof GameApiError ? PART_REFUSALS[e.code] : undefined;
+        if (text) setRefused(text);
+      });
+      return;
+    }
     const ping = () => {
       api.start(win.floor, win.col).catch(() => {});
     };
@@ -528,10 +650,17 @@ function Play({
       window.clearInterval(timer);
       api.leave(win.floor, win.col).catch(() => {});
     };
-  }, [api, win.floor, win.col]);
+  }, [api, win.floor, win.col, doorNo, partNo]);
 
   const solved = async (note: string, seconds: number) => {
     try {
+      if (door) {
+        const r = await api.partSolve(door.door, door.part);
+        setResult({ ok: true, points: r.points, text: `${seconds} с · частину дверей відчинено` });
+        navigator.vibrate?.(40);
+        onScored();
+        return;
+      }
       const r: SolveResult = await api.solve(win.floor, win.col);
       setResult(
         r.already
@@ -551,16 +680,37 @@ function Play({
         text:
           code === "too_fast"
             ? "Надто швидко — так не рахується. Зіграй ще раз"
-            : code === "start_first" || code === "no_session"
-              ? "Зв'язок із грою перервався. Зіграй ще раз"
-              : "Не вдалося зарахувати: немає зв'язку. Зіграй ще раз, коли з'явиться",
+            : (code === "taken" || code === "one_part_each") && PART_REFUSALS[code]
+              ? PART_REFUSALS[code]
+              : code === "start_first" || code === "no_session"
+                ? "Зв'язок із грою перервався. Зіграй ще раз"
+                : "Не вдалося зарахувати: немає зв'язку. Зіграй ще раз, коли з'явиться",
       });
     }
   };
 
+  if (refused)
+    return (
+      <main className="screen">
+        <GameHeader title={`Вечорниця ${doorNo} · частина ${partNo}`} />
+        <section className="card">
+          <p className="g-result-text g-warn">{refused}</p>
+          <a className="g-play" href="#/game">
+            До фасаду
+          </a>
+        </section>
+      </main>
+    );
+
   return (
     <main className="screen">
-      <GameHeader title={`Поверх ${win.floor} · вікно ${win.col}`} />
+      <GameHeader
+        title={
+          door
+            ? `Вечорниця ${door.door} · частина ${door.part}`
+            : `Поверх ${win.floor} · вікно ${win.col}`
+        }
+      />
       <section className="card">
         <div className="card-head">
           <span className="card-title">{info.game.name}</span>

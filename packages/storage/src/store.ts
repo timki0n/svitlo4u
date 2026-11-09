@@ -18,8 +18,10 @@ import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, or, sql } from "
 import type { Db } from "./db.ts";
 import {
   detectorState,
+  gameLedger,
   gamePlayers,
   gameSolves,
+  gameUnlocks,
   heartbeatMinutes,
   notificationOutbox,
   outages,
@@ -662,25 +664,46 @@ export function createStore(db: Db) {
           .where(and(eq(gameSolves.siteId, siteId), eq(gameSolves.session, session)))
           .run().changes;
       },
-      /** Points and windows per player, best first: of one session, since an instant, or ever. */
+      /**
+       * Points and windows per player, best first: of one session, since an instant, or ever. The
+       * points are the windows' and the ledger's (doors opened, «Вечорниці» won and lost).
+       */
       totals(siteId: string, filter: { session?: number; since?: number } = {}) {
-        const where = [eq(gameSolves.siteId, siteId)];
         // a session's points include its solves cleared from the facade (clearFacade)
-        if (filter.session !== undefined)
-          where.push(inArray(gameSolves.session, [filter.session, -filter.session]));
-        if (filter.since !== undefined) where.push(gte(gameSolves.solvedAt, filter.since));
+        const inSession = (column: string) =>
+          filter.session === undefined
+            ? sql``
+            : sql` and ${sql.raw(column)} in (${filter.session}, ${-filter.session})`;
+        const since = (column: string) =>
+          filter.since === undefined ? sql`` : sql` and ${sql.raw(column)} >= ${filter.since}`;
+        return db.all<{ userId: number; points: number; windows: number; last: number }>(sql`
+          select user_id as userId, sum(points) as points, sum(windows) as windows, max(at) as last
+          from (
+            select user_id, points, 1 as windows, solved_at as at from game_solves
+            where site_id = ${siteId}${inSession("session")}${since("solved_at")}
+            union all
+            select user_id, points, 0 as windows, at from game_ledger
+            where site_id = ${siteId}${inSession("session")}${since("at")}
+          )
+          group by user_id
+          order by sum(points) desc, max(at) asc`);
+      },
+      /** Open a door's part; false when it is open already or the player opened another part. */
+      unlock(row: typeof gameUnlocks.$inferInsert): boolean {
+        return db.insert(gameUnlocks).values(row).onConflictDoNothing().run().changes > 0;
+      },
+      /** The doors' parts opened in a session. */
+      unlocks(siteId: string, session: number) {
         return db
-          .select({
-            userId: gameSolves.userId,
-            points: sql<number>`sum(${gameSolves.points})`,
-            windows: sql<number>`count(*)`,
-            last: sql<number>`max(${gameSolves.solvedAt})`,
-          })
-          .from(gameSolves)
-          .where(and(...where))
-          .groupBy(gameSolves.userId)
-          .orderBy(desc(sql`sum(${gameSolves.points})`), asc(sql`max(${gameSolves.solvedAt})`))
+          .select()
+          .from(gameUnlocks)
+          .where(and(eq(gameUnlocks.siteId, siteId), eq(gameUnlocks.session, session)))
+          .orderBy(asc(gameUnlocks.unlockedAt))
           .all();
+      },
+      /** Points won or lost besides windows. */
+      addLedger(row: Omit<typeof gameLedger.$inferInsert, "id">): void {
+        db.insert(gameLedger).values(row).run();
       },
       /**
        * Every building lit, one per stored session (a negative one is a facade emptied during its

@@ -328,6 +328,54 @@ describe("voltage, heartbeat, outbox, reminders, subscribers", () => {
     // another session's totals know nothing of it
     expect(store.game.totals(SITE, { session: min(60) })).toEqual([]);
   });
+
+  it("doors open part by part, one part a player; the ledger counts in the ratings", () => {
+    const S = min(0);
+    const open = (door: number, part: number, userId: number) =>
+      store.game.unlock({ siteId: SITE, session: S, door, part, userId, unlockedAt: min(part) });
+    expect(open(1, 1, 7)).toBe(true);
+    expect(open(1, 1, 8)).toBe(false); // that part is open
+    expect(open(1, 2, 7)).toBe(false); // one part of a door each
+    expect(open(1, 2, 8)).toBe(true);
+    expect(open(2, 1, 7)).toBe(true); // another door is fine
+    expect(store.game.unlocks(SITE, S).map((u) => [u.door, u.part, u.userId])).toEqual([
+      [1, 1, 7],
+      [2, 1, 7],
+      [1, 2, 8],
+    ]);
+
+    store.game.addSolve({
+      siteId: SITE,
+      session: S,
+      floor: 3,
+      col: 1,
+      userId: 7,
+      points: 15,
+      durationMs: 5000,
+      solvedAt: min(5),
+    });
+    const ledger = (userId: number, points: number, at: number) =>
+      store.game.addLedger({
+        siteId: SITE,
+        session: S,
+        userId,
+        points,
+        kind: "door",
+        ref: "x",
+        at,
+      });
+    ledger(7, 50, min(6));
+    ledger(8, 50, min(7));
+    ledger(8, -30, min(8));
+    const rows = store.game.totals(SITE, { session: S });
+    expect(rows.map((r) => [r.userId, r.points, r.windows])).toEqual([
+      [7, 65, 1],
+      [8, 20, 0],
+    ]);
+    expect(store.game.totals(SITE, { since: min(7) }).map((r) => [r.userId, r.points])).toEqual([
+      [8, 20],
+    ]);
+  });
 });
 
 describe("legacy import", () => {

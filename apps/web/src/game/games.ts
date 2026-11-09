@@ -70,3 +70,10 @@ export function windowGame(outage: string, floor: number, col: number): WindowGa
   const index = ri(rngOf(key), GAMES.length);
   return { key, game: GAMES[index] as GameDef, tier: tierOf(floor) };
 }
+
+/** A part of a door of «Вечорниці»: one of the window games, always on the hard level. */
+export function partGame(outage: string, door: number, part: number): WindowGame {
+  const key = `${outage}:door${door}-${part}`;
+  const index = ri(rngOf(key), GAMES.length);
+  return { key, game: GAMES[index] as GameDef, tier: 2 };
+}

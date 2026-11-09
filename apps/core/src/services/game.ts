@@ -344,7 +344,8 @@ export class GameService {
     };
   }
 
-  private views(siteId: string, ids: readonly number[]): Record<string, GamePlayerView> {
+  /** Names and photo links of players, by id (for the facade, the rating, «Вечорниці»). */
+  views(siteId: string, ids: readonly number[]): Record<string, GamePlayerView> {
     const site = this.site(siteId);
     const out: Record<string, GamePlayerView> = {};
     for (const p of this.deps.store.game.players(siteId, [...new Set(ids)])) {

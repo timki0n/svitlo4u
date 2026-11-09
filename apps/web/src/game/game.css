@@ -789,3 +789,1402 @@
 .g-people-share {
   color: var(--muted);
 }
+
+/* «Вечорниці»: a door's parts on the facade's card */
+.g-parts {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.g-parts li {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 70px;
+  padding: 8px 6px;
+  border-radius: 14px;
+  background: var(--well);
+  box-shadow: var(--inset-sm);
+  font-size: 12px;
+}
+
+.g-part-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+/* an open door: who sits at its table, then quietly who opened it */
+.g-at-table {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 58px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  background: var(--well);
+  box-shadow: var(--inset-sm);
+  font-size: 13px;
+}
+
+.g-faces {
+  flex: none;
+  display: inline-flex;
+}
+
+.g-stack-face {
+  display: inline-flex;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--well);
+}
+
+.g-stack-face + .g-stack-face {
+  margin-left: -10px;
+}
+
+.g-at-table-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.g-at-table-text b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.g-at-table-text .g-dot {
+  display: inline-block;
+  margin-right: 6px;
+  vertical-align: 1px;
+}
+
+.g-openers {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.g-part-open {
+  padding: 7px 12px;
+  border-radius: 11px;
+  background: var(--light);
+  color: #1a1208;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+/* a table: the stake, rows of buttons */
+.g-stake {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 14px;
+}
+
+.g-stake input,
+.g-raise {
+  width: 100%;
+  accent-color: var(--light);
+}
+
+.g-row {
+  display: flex;
+  gap: 10px;
+}
+
+.g-row > * {
+  flex: 1;
+}
+
+/* «Графік»: a week's schedule, days down, 3-hour slots across */
+.g-battle {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.g-schedule-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.g-schedule {
+  display: grid;
+  gap: 3px;
+  align-items: center;
+}
+
+.g-hour {
+  font-size: 9px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.g-day {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.g-cell {
+  display: block;
+  aspect-ratio: 1;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: var(--well);
+}
+
+.g-cell-tap {
+  cursor: pointer;
+}
+
+.g-cell-tap:active {
+  transform: scale(0.9);
+}
+
+/* light found there */
+.g-cell[data-k="light"] {
+  background: rgba(255, 179, 71, 0.38);
+}
+
+/* surely light: next to a block found */
+.g-cell[data-k="near"] {
+  background: rgba(255, 179, 71, 0.14);
+}
+
+/* an outage rung, its block not whole yet */
+.g-cell[data-k="hit"] {
+  background: #0b0c0e;
+  box-shadow: inset 0 0 0 2px var(--off);
+}
+
+/* one's own block, not rung */
+.g-cell[data-k="block"] {
+  background: #474a55;
+}
+
+/* a block found whole */
+.g-cell[data-k="found"] {
+  background: var(--off);
+}
+
+.g-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.g-legend .g-cell {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+}
+
+/* poker: an oval table — the felt, the seats round its rail, chips, the board; my moves below.
+   The table takes what the screen has left under the header and above the moves. */
+.g-felt-box {
+  position: relative;
+  flex: none;
+  height: clamp(340px, calc(100vh - 280px), 480px);
+  margin: 0 -10px;
+}
+
+@supports (height: 100dvh) {
+  .g-felt-box {
+    height: clamp(340px, calc(100dvh - 280px), 480px);
+  }
+}
+
+.g-felt {
+  position: absolute;
+  border-radius: 999px;
+  background: radial-gradient(ellipse at 50% 42%, #36322c 0%, #27282d 72%);
+  box-shadow:
+    0 0 0 9px #17181b,
+    0 0 0 10px rgba(255, 154, 61, 0.22),
+    0 16px 34px rgba(0, 0, 0, 0.45),
+    inset 0 0 42px rgba(0, 0, 0, 0.45);
+}
+
+.g-felt-note {
+  position: absolute;
+  top: 2px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.g-felt-note[data-side="left"] {
+  left: 6px;
+}
+
+.g-felt-note[data-side="right"] {
+  right: 6px;
+  color: var(--text);
+}
+
+.g-felt-middle {
+  position: absolute;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.g-community {
+  display: flex;
+  gap: 4px;
+}
+
+.g-pot {
+  font-size: 13px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.g-pot b {
+  color: var(--light);
+}
+
+.g-felt-text {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 200px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--muted);
+  text-align: center;
+}
+
+.g-felt-text small {
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+/* cards: rank over suit; mini by a seat, the board, my own big ones */
+.g-card {
+  flex: none;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  width: 34px;
+  height: 48px;
+  border-radius: 5px;
+  background: #f2efea;
+  color: #1a1208;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.g-card-rank {
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.g-card[data-red] {
+  color: #c23b3b;
+}
+
+.g-card-back {
+  background: repeating-linear-gradient(45deg, #3a3d46 0 4px, #2c2e35 4px 8px);
+  box-shadow: inset 0 0 0 1.5px rgba(242, 239, 234, 0.14);
+}
+
+.g-card[data-size="mini"] {
+  width: 20px;
+  height: 28px;
+  border-radius: 4px;
+  font-size: 9px;
+}
+
+.g-card[data-size="mini"] .g-card-rank {
+  font-size: 11px;
+}
+
+.g-card[data-size="big"] {
+  width: 44px;
+  height: 62px;
+  border-radius: 7px;
+  font-size: 16px;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.4);
+}
+
+.g-card[data-size="big"] .g-card-rank {
+  font-size: 20px;
+}
+
+/* a seat's cards shown at the showdown: in front of its face, bigger, fanned */
+.g-card[data-size="open"] {
+  width: 30px;
+  height: 42px;
+  font-size: 11px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.55);
+}
+
+.g-card[data-size="open"] .g-card-rank {
+  font-size: 14px;
+}
+
+.g-card[data-size="open"]:first-child {
+  transform: rotate(-7deg) translateX(3px);
+}
+
+.g-card[data-size="open"]:last-child {
+  transform: rotate(7deg) translateX(-3px);
+}
+
+.g-card-slot {
+  flex: none;
+  width: 34px;
+  height: 48px;
+  border-radius: 5px;
+  box-shadow: inset 0 0 0 1.5px rgba(242, 239, 234, 0.1);
+}
+
+[data-compact] .g-card[data-size="board"],
+[data-compact] .g-card-slot {
+  width: 30px;
+  height: 42px;
+}
+
+[data-compact] .g-card[data-size="big"] {
+  width: 38px;
+  height: 54px;
+}
+
+/* a seat: a point at the centre of its face; the cards peek out above, the plate hangs below */
+.g-pseat {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+
+.g-pseat-cards {
+  position: absolute;
+  left: 0;
+  bottom: 10px;
+  display: flex;
+  gap: 2px;
+  transform: translateX(-50%);
+}
+
+.g-pseat-face {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 1;
+  display: inline-flex;
+  transform: translate(-50%, -50%);
+}
+
+.g-pseat-plate {
+  position: absolute;
+  left: 0;
+  top: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: max-content;
+  max-width: 86px;
+  padding: 4px 8px 3px;
+  border-radius: 9px;
+  background: #17181b;
+  box-shadow: 0 0 0 1px rgba(242, 239, 234, 0.08);
+  transform: translateX(-50%);
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--muted);
+}
+
+.g-pname {
+  max-width: 62px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+[data-compact] .g-pseat-plate {
+  top: 11px;
+}
+
+[data-compact] .g-pseat-cards {
+  bottom: 8px;
+}
+
+.g-pseat-cards[data-open] {
+  top: 0;
+  bottom: auto;
+  z-index: 2;
+  gap: 0;
+  transform: translate(-50%, -64%);
+}
+
+.g-pseat[data-out] {
+  opacity: 0.45;
+}
+
+.g-pseat[data-turn] .g-pseat-plate,
+.g-pseat[data-win] .g-pseat-plate {
+  box-shadow: 0 0 0 1.5px var(--light);
+}
+
+.g-pseat[data-turn] .g-pseat-face {
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 2.5px var(--light),
+    0 0 16px rgba(255, 154, 61, 0.55);
+}
+
+.g-dealer {
+  position: absolute;
+  right: -6px;
+  bottom: -4px;
+  display: grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: #f2efea;
+  color: #1a1208;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.g-dealer-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #f2efea;
+  color: #1a1208;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+/* what one has put in on this street, in front of them */
+.g-chip {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px 2px 3px;
+  border-radius: 999px;
+  background: rgba(13, 14, 17, 0.75);
+  transform: translate(-50%, -50%);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.g-chip::before {
+  content: "";
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #ffd58a 0 32%, var(--light) 34% 62%, #b8541a 64%);
+}
+
+/* me: my cards, big, at the bottom of the table, my plate under them */
+.g-pme {
+  position: absolute;
+  left: 50%;
+  bottom: 6px;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transform: translateX(-50%);
+}
+
+.g-pme-cards {
+  display: flex;
+  gap: 6px;
+  margin-bottom: -8px;
+}
+
+.g-pme-cards .g-card:first-child {
+  transform: rotate(-4deg);
+}
+
+.g-pme-cards .g-card:last-child {
+  transform: rotate(4deg);
+}
+
+.g-pme[data-out] .g-pme-cards {
+  opacity: 0.45;
+}
+
+.g-pme-plate {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 11px;
+  background: #17181b;
+  box-shadow: 0 0 0 1px rgba(242, 239, 234, 0.08);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.g-pme[data-turn] .g-pme-plate {
+  box-shadow:
+    0 0 0 1.5px var(--light),
+    0 0 16px rgba(255, 154, 61, 0.4);
+}
+
+.g-pme[data-win] .g-pme-plate {
+  box-shadow: 0 0 0 1.5px var(--light);
+}
+
+.g-hand-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--light);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+/* a hand's win or loss */
+.g-net {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.g-net[data-up] {
+  color: var(--light);
+}
+
+/* under the table: my moves, or how it stands, or a stake to sit down with */
+.g-pact {
+  min-height: 128px;
+  justify-content: center;
+}
+
+.g-moves {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.3fr;
+  gap: 8px;
+}
+
+.g-moves[data-two] {
+  grid-template-columns: 1fr 1fr;
+}
+
+.g-moves > * {
+  min-height: 52px;
+  padding: 0 8px;
+}
+
+.g-btn-2 {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  line-height: 1.1;
+}
+
+.g-btn-2 small {
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.75;
+}
+
+.g-btn-2 b {
+  font-size: 17px;
+}
+
+.g-wait {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.g-wait p {
+  flex: 1;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+/* the round games: my hand lies under the table, so the table yields it a little height */
+.g-felt-box[data-game="durak"],
+.g-felt-box[data-game="colors"] {
+  height: clamp(320px, calc(100vh - 330px), 460px);
+}
+
+@supports (height: 100dvh) {
+  .g-felt-box[data-game="durak"],
+  .g-felt-box[data-game="colors"] {
+    height: clamp(320px, calc(100dvh - 330px), 460px);
+  }
+}
+
+/* the stock with its count, the trump across beside it; «бито» */
+.g-stock {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.g-stock-back {
+  position: relative;
+  display: inline-flex;
+}
+
+.g-stock-trump {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 34px;
+}
+
+.g-stock-trump .g-card {
+  transform: rotate(90deg);
+}
+
+.g-trump-suit {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 48px;
+  border-radius: 5px;
+  box-shadow: inset 0 0 0 1.5px rgba(242, 239, 234, 0.14);
+  font-size: 24px;
+  color: var(--text);
+}
+
+.g-trump-suit[data-red] {
+  color: #e05a5a;
+}
+
+.g-stock-text {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
+.g-count {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--light);
+  color: #1a1208;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+/* the bout: each attack card, its defence across it */
+.g-bout {
+  display: grid;
+  grid-template-columns: repeat(3, 46px);
+  align-content: center;
+  justify-content: center;
+  gap: 8px 12px;
+  min-height: 140px;
+}
+
+.g-pair {
+  position: relative;
+  width: 46px;
+  height: 66px;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+/* on the table a card shows its corner, as a real one does: the beaten card stays readable */
+.g-pair .g-card {
+  position: absolute;
+  top: 0;
+  left: 0;
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 4px 0 0 5px;
+}
+
+.g-pair .g-card + .g-card {
+  top: 18px;
+  left: 12px;
+  transform: rotate(5deg);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.45);
+}
+
+.g-pair[data-target] {
+  cursor: pointer;
+}
+
+.g-pair[data-target] .g-card:first-child {
+  box-shadow:
+    0 0 0 2px var(--light),
+    0 0 14px rgba(255, 154, 61, 0.55);
+}
+
+[data-compact] .g-bout {
+  grid-template-columns: repeat(3, 42px);
+  min-height: 128px;
+}
+
+[data-compact] .g-pair {
+  width: 42px;
+  height: 60px;
+}
+
+.g-pseat-plate [data-role="дурень"] {
+  color: var(--warn);
+  font-weight: 800;
+}
+
+.g-pseat-plate [data-role="вийшов"] {
+  color: var(--light);
+}
+
+/* my hand: the cards I may play stand out, a picked one rises */
+.g-hand {
+  display: flex;
+  justify-content: center;
+  padding-top: 10px;
+}
+
+.g-hand-card {
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  cursor: pointer;
+  transition: transform 0.12s ease;
+}
+
+.g-hand-card:disabled {
+  cursor: default;
+}
+
+.g-hand-card[data-dim] {
+  opacity: 0.45;
+}
+
+.g-hand-card[data-picked] {
+  transform: translateY(-10px);
+}
+
+.g-hand-card[data-picked] .g-card {
+  box-shadow:
+    0 0 0 2px var(--light),
+    0 8px 16px rgba(0, 0, 0, 0.45);
+}
+
+.g-wait-line {
+  font-size: 14px;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* «Кольори»: a dark card, its colour round the edge and in its mark; a wild shows all four */
+.g-ccard {
+  --cc: var(--text);
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 48px;
+  border-radius: 6px;
+  background: #1b1c20;
+  box-shadow:
+    inset 0 0 0 2.5px var(--cc),
+    0 3px 8px rgba(0, 0, 0, 0.35);
+  color: var(--cc);
+  font-size: 17px;
+  font-weight: 800;
+  line-height: 1;
+  vertical-align: middle;
+}
+
+.g-ccard[data-c="r"],
+.g-follow-dot[data-c="r"],
+.g-color-btn[data-c="r"] {
+  --cc: #e5484d;
+}
+
+.g-ccard[data-c="y"],
+.g-follow-dot[data-c="y"],
+.g-color-btn[data-c="y"] {
+  --cc: #f2b33d;
+}
+
+.g-ccard[data-c="g"],
+.g-follow-dot[data-c="g"],
+.g-color-btn[data-c="g"] {
+  --cc: #3fb27f;
+}
+
+.g-ccard[data-c="b"],
+.g-follow-dot[data-c="b"],
+.g-color-btn[data-c="b"] {
+  --cc: #4b8bf5;
+}
+
+.g-ccard[data-c="w"] {
+  background:
+    radial-gradient(circle, #1b1c20 0 38%, transparent 39%),
+    conic-gradient(#e5484d 0 25%, #f2b33d 0 50%, #3fb27f 0 75%, #4b8bf5 0) center / 76% 54%
+    no-repeat,
+    #1b1c20;
+  box-shadow:
+    inset 0 0 0 2px rgba(242, 239, 234, 0.3),
+    0 3px 8px rgba(0, 0, 0, 0.35);
+  color: var(--text);
+}
+
+.g-ccard[data-size="big"] {
+  width: 44px;
+  height: 62px;
+  border-radius: 7px;
+  font-size: 22px;
+}
+
+.g-ccard[data-size="mini"] {
+  width: 18px;
+  height: 25px;
+  border-radius: 3px;
+  font-size: 10px;
+  box-shadow: inset 0 0 0 1.5px var(--cc);
+}
+
+/* the middle: the draw pile, the top card, the colour to follow and the way the turn goes */
+.g-piles {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.g-follow {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.g-follow-dot {
+  --cc: var(--text);
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--cc);
+  box-shadow: 0 0 12px var(--cc);
+}
+
+.g-follow-way {
+  font-size: 20px;
+  color: var(--muted);
+}
+
+/* a wild played: its colour */
+.g-pick-color {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.g-color-btn {
+  --cc: var(--text);
+  min-height: 48px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 14px;
+  background: #1b1c20;
+  box-shadow: inset 0 0 0 2.5px var(--cc);
+  color: var(--cc);
+  font:
+    700 13px "Manrope Variable",
+    sans-serif;
+  cursor: pointer;
+}
+
+/* a player's cards face down: a fan, how many on it */
+.g-fan .g-card + .g-card {
+  margin-left: -12px;
+}
+
+/* points flying across the table at a result: coins, and «+N» / «−N» by those who get and pay */
+.g-flight {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.g-coin {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #ffd58a 0 30%, var(--light) 32% 62%, #b8541a 64%);
+  box-shadow: 0 0 10px rgba(255, 154, 61, 0.7);
+}
+
+.g-fly-label {
+  position: absolute;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(13, 14, 17, 0.85);
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.g-fly-label[data-up="1"] {
+  color: var(--light);
+  box-shadow: 0 0 12px rgba(255, 154, 61, 0.45);
+}
+
+/* what a flight lands on, wrapped round a face */
+.g-pid {
+  display: inline-flex;
+  border-radius: 50%;
+}
+
+/* «Графік» under way: whose turn, loud when it is mine; the schedule rung stands out, the one of
+   who rings is shaded; my own schedule stays in sight, small, beside the legend */
+.g-turn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-height: 52px;
+  justify-content: center;
+  padding: 8px 12px;
+  border-radius: 16px;
+  background: var(--well);
+  box-shadow: var(--inset-sm);
+  text-align: center;
+}
+
+.g-turn b {
+  font-size: 16px;
+}
+
+.g-turn span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.g-turn[data-mine] {
+  background: linear-gradient(145deg, rgba(255, 174, 69, 0.2), rgba(255, 106, 10, 0.1));
+  animation: g-turn-pulse 1.6s ease-in-out infinite;
+}
+
+.g-turn[data-mine] b {
+  color: var(--light);
+}
+
+@keyframes g-turn-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1.5px var(--light),
+      0 0 8px rgba(255, 122, 26, 0.2);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1.5px var(--light),
+      0 0 22px rgba(255, 122, 26, 0.55);
+  }
+}
+
+.g-field {
+  padding: 8px;
+  border-radius: 16px;
+  transition:
+    opacity 0.25s,
+    filter 0.25s,
+    box-shadow 0.25s;
+}
+
+/* I ring it */
+.g-field[data-state="mine"] {
+  box-shadow:
+    0 0 0 1.5px var(--light),
+    0 0 16px rgba(255, 122, 26, 0.22);
+}
+
+/* it is rung (mine by the rival, or one a spectator watches) */
+.g-field[data-state="rung"] {
+  box-shadow: 0 0 0 1.5px var(--off);
+}
+
+/* who rings: their own schedule waits */
+.g-field[data-state="shaded"] {
+  opacity: 0.62;
+  filter: saturate(0.6);
+}
+
+.g-field-name {
+  flex: 1;
+}
+
+.g-found {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.g-field[data-state="mine"] .g-cell-tap {
+  background: #2d3037;
+  box-shadow: inset 0 0 0 1px rgba(255, 154, 61, 0.22);
+}
+
+.g-mine-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.g-mine-row .g-field {
+  flex: none;
+  width: 148px;
+}
+
+.g-schedule[data-mini] {
+  gap: 2px;
+}
+
+.g-schedule[data-mini] .g-cell {
+  border-radius: 3px;
+}
+
+.g-legend[data-column] {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding-top: 30px;
+}
+
+.g-legend[data-column] > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* the cell rung last: a ring stays on it, and pulses as it comes */
+.g-cell[data-last] {
+  position: relative;
+}
+
+.g-cell[data-last]::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border: 2px solid rgba(242, 239, 234, 0.75);
+  border-radius: 6px;
+  animation: g-ring 0.9s ease-out 2;
+}
+
+@keyframes g-ring {
+  from {
+    transform: scale(1.5);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .g-turn[data-mine],
+  .g-cell[data-last]::after {
+    animation: none;
+  }
+}
+
+/* «Блекаут»: a card shows its name on a band of its colour, its mark below */
+.g-felt-box[data-game="blackout"] {
+  height: clamp(320px, calc(100vh - 360px), 440px);
+}
+
+@supports (height: 100dvh) {
+  .g-felt-box[data-game="blackout"] {
+    height: clamp(320px, calc(100dvh - 360px), 440px);
+  }
+}
+
+.g-bcard {
+  --tone: var(--text);
+  flex: none;
+  display: inline-flex;
+  flex-direction: column;
+  width: 44px;
+  height: 62px;
+  overflow: hidden;
+  border-radius: 7px;
+  background: #1b1c20;
+  box-shadow:
+    inset 0 0 0 2px var(--tone),
+    0 3px 8px rgba(0, 0, 0, 0.35);
+  color: var(--tone);
+  vertical-align: middle;
+}
+
+.g-bcard[data-tone="danger"] {
+  --tone: #e5484d;
+}
+
+.g-bcard[data-tone="light"] {
+  --tone: var(--light);
+}
+
+.g-bcard[data-tone="cool"] {
+  --tone: #8fa3c8;
+}
+
+.g-bcard[data-tone="green"] {
+  --tone: #3fb27f;
+}
+
+.g-bcard[data-tone="warn"] {
+  --tone: #f2b33d;
+}
+
+.g-bcard[data-tone="purple"] {
+  --tone: #a88cf0;
+}
+
+.g-bcard-name {
+  padding: 3px 1px;
+  background: var(--tone);
+  color: #15161a;
+  font-size: 7.5px;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -0.2px;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.g-bcard-mark {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.g-bcard[data-size="hand"] {
+  width: 56px;
+  height: 76px;
+}
+
+.g-bcard[data-size="hand"] .g-bcard-name {
+  font-size: 8.5px;
+}
+
+.g-bcard[data-size="hand"] .g-bcard-mark {
+  font-size: 24px;
+}
+
+.g-bcard[data-size="mini"] {
+  width: 30px;
+  height: 42px;
+  border-radius: 5px;
+}
+
+.g-bcard[data-size="mini"] .g-bcard-name {
+  font-size: 0;
+  padding: 3px;
+}
+
+.g-bcard[data-size="mini"] .g-bcard-mark {
+  font-size: 14px;
+}
+
+/* how many blackouts lie in the pile, and the odds of drawing one */
+.g-danger {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.g-danger-bar {
+  width: 120px;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: rgba(242, 239, 234, 0.1);
+}
+
+.g-danger-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: #e5484d;
+}
+
+.g-danger[data-high] {
+  color: #e5484d;
+  font-weight: 700;
+}
+
+/* an action waiting out the window to cancel it; «Скасувати!» for one who can */
+.g-pending {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 14px;
+  background: var(--well);
+  box-shadow: var(--inset-sm);
+}
+
+.g-pending-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+}
+
+.g-pending small {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.g-pending[data-nope] {
+  box-shadow:
+    var(--inset-sm),
+    0 0 0 1.5px #e5484d;
+}
+
+.g-nope {
+  flex: none;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 14px;
+  background: #e5484d;
+  box-shadow: 0 0 16px rgba(229, 72, 77, 0.45);
+  color: #fff;
+  font:
+    800 14px "Manrope Variable",
+    sans-serif;
+  cursor: pointer;
+}
+
+/* the top of the pile, as one who looked sees it */
+.g-peek {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.g-peek-row {
+  display: flex;
+  gap: 10px;
+}
+
+.g-peek-card {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 3px;
+}
+
+.g-peek-card i {
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+  color: var(--text);
+}
+
+/* a defused blackout: where it goes back */
+.g-tuck p {
+  margin-bottom: 8px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.g-tuck-title {
+  color: var(--light);
+}
+
+.g-tuck-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.g-tuck-grid .g-btn {
+  padding: 0 4px;
+}
+
+/* a card tapped: what it does, and how to play it */
+.g-card-info {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.g-targets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.g-targets .g-btn {
+  flex: 1 1 45%;
+}
+
+/* a card picked in a round game's hand, whatever its face */
+.g-hand-card[data-picked] > .g-bcard,
+.g-hand-card[data-picked] > .g-ccard {
+  box-shadow:
+    0 0 0 2px var(--light),
+    0 8px 16px rgba(0, 0, 0, 0.45);
+}
