@@ -16,7 +16,7 @@ import type {
 import { GameApiError } from "./api.ts";
 import { BlackoutScreen } from "./Blackout.tsx";
 import { ColorsScreen } from "./Colors.tsx";
-import { CardFace, clock, Net, PLACES, tableLayout, useSize } from "./cards.tsx";
+import { CardFace, clock, Net, placesOf, tableLayout, useSize } from "./cards.tsx";
 import { DurakScreen } from "./Durak.tsx";
 import { Emotes } from "./emotes.tsx";
 import { PayFlight } from "./flight.tsx";
@@ -692,7 +692,7 @@ function PokerScreen({
   for (const s of v.seats) if (!ids.includes(s.id)) ids.push(s.id);
   const at = ids.indexOf(me);
   const ring = (at > 0 ? [...ids.slice(at), ...ids.slice(0, at)] : ids).slice(0, 6);
-  const places = PLACES[ring.length] ?? [];
+  const places = placesOf(ring.length, ring[0] === me);
   const L = tableLayout(w, h);
   const turnId = hand && hand.turn !== null ? hand.seats[hand.turn]?.id : undefined;
   const buttonId = hand ? hand.seats[hand.button]?.id : undefined;

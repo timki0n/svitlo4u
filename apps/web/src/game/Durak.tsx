@@ -7,7 +7,7 @@
  */
 import { useLayoutEffect, useRef, useState } from "react";
 import type { EveningMove, EveningTableView } from "./api.ts";
-import { CardFace, clock, PLACES, SUITS, tableLayout, useSize } from "./cards.tsx";
+import { CardFace, clock, placesOf, SUITS, tableLayout, useSize } from "./cards.tsx";
 import {
   type Counted,
   counted,
@@ -123,7 +123,7 @@ export function DurakScreen({ v, api, door, run, left, error }: RoundScreenProps
   };
 
   const ring = ringOf(g ? g.players.map((p) => p.id) : v.seats.map((s) => s.id), me);
-  const places = PLACES[ring.length] ?? [];
+  const places = placesOf(ring.length, ring[0] === me);
   const L = tableLayout(w, h);
   const turnId = g ? whoMoves(g) : undefined;
   const mine = g?.players.find((p) => p.id === me);

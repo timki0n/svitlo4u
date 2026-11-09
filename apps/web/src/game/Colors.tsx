@@ -7,7 +7,7 @@
  */
 import { useLayoutEffect, useRef, useState } from "react";
 import type { EveningMove } from "./api.ts";
-import { CardFace, clock, PLACES, tableLayout, useSize } from "./cards.tsx";
+import { CardFace, clock, placesOf, tableLayout, useSize } from "./cards.tsx";
 import {
   type Counted,
   counted,
@@ -111,7 +111,7 @@ export function ColorsScreen({ v, api, door, run, left, error }: RoundScreenProp
   };
 
   const ring = ringOf(g ? g.players.map((p) => p.id) : v.seats.map((s) => s.id), me);
-  const places = PLACES[ring.length] ?? [];
+  const places = placesOf(ring.length, ring[0] === me);
   const L = tableLayout(w, h);
   const turnId = g && !done ? g.players[g.turn]?.id : undefined;
   const mine = g?.players.find((p) => p.id === me);

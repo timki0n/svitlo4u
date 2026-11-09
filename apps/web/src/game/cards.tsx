@@ -103,4 +103,14 @@ export const PLACES: Record<number, number[]> = {
   6: [0, 1, 2, 3, 4, 5],
 };
 
+/**
+ * The places a ring of players takes (the ring starts at the bottom). One seated in it sits at the
+ * bottom; one watching leaves the bottom empty while the table has room — a seat there would lie
+ * over the middle (laid out to end above my own small plate).
+ */
+export function placesOf(count: number, seated: boolean): number[] {
+  if (seated || count >= 6) return PLACES[count] ?? [];
+  return (PLACES[count + 1] ?? []).slice(1);
+}
+
 export const clock = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;

@@ -34,14 +34,20 @@ export function droppedAt(m: Motion, card: string, at: Spot) {
   m.dropped.current = { card, at, t: Date.now() };
 }
 
-/** A place's centre: "pid:7" (a player — me: my hand), or an anchor ("stock", "discard", "hand"). */
+/**
+ * A place's centre: "pid:7" (a player: the cards by their seat, not their face — me: my hand), or
+ * an anchor ("stock", "discard", "hand").
+ */
 export function spotOf(root: HTMLElement, at: string, me: number): Spot | null {
   let el: Element | null = null;
   if (at.startsWith("pid:")) {
     const id = Number(at.slice(4));
+    const seat = root.querySelector(`[data-pid="${id}"]`);
     el =
       (id === me ? root.querySelector('[data-anchor="hand"]') : null) ??
-      root.querySelector(`[data-pid="${id}"]`);
+      seat?.querySelector(".g-pseat-cards") ??
+      seat ??
+      null;
   } else el = root.querySelector(`[data-anchor="${at}"]`);
   if (!el) return null;
   const r = el.getBoundingClientRect();
@@ -84,8 +90,8 @@ export function flyDraws(
   }
 }
 
-/** A copy of a card flies from one spot to another, then is gone. */
-function flyCopy(node: Node, from: DOMRect | Spot, to: Spot, delay: number, fade: boolean) {
+/** A copy of a card flies from one spot to another and, arriving, fades into it. */
+function flyCopy(node: HTMLElement, from: DOMRect | Spot, to: Spot, delay: number) {
   const box = document.createElement("div");
   box.className = "g-card-copy";
   const x = "width" in from ? from.left + from.width / 2 : from.x;
@@ -94,16 +100,18 @@ function flyCopy(node: Node, from: DOMRect | Spot, to: Spot, delay: number, fade
   box.style.top = `${y}px`;
   box.append(node);
   layer().append(box);
+  const timing = { duration: 480, delay, fill: "both" } as const;
   box.animate(
     [
-      { transform: "translate(-50%, -50%)", opacity: 1 },
+      { transform: "translate(-50%, -50%)" },
       {
-        transform: `translate(calc(-50% + ${to.x - x}px), calc(-50% + ${to.y - y}px)) scale(${fade ? 0.5 : 0.8})`,
-        opacity: fade ? 0 : 0.9,
+        transform: `translate(calc(-50% + ${to.x - x}px), calc(-50% + ${to.y - y}px)) scale(0.6)`,
       },
     ],
-    { duration: 480, delay, easing: "cubic-bezier(0.4, 0, 0.2, 1)", fill: "both" },
+    { ...timing, easing: "cubic-bezier(0.4, 0, 0.2, 1)" },
   ).onfinish = () => box.remove();
+  // seen all the way, gone as it lands: nothing is left lying over a face
+  node.animate([{ opacity: 1 }, { opacity: 1, offset: 0.65 }, { opacity: 0 }], timing);
   // a page hidden mid-flight holds its animations: the copy goes all the same
   setTimeout(() => box.remove(), delay + 1500);
 }
@@ -119,7 +127,7 @@ export function flyBacks(m: Motion, from: string, to: string, count: number, del
     const back = document.createElement("span");
     back.className = "g-card g-card-back";
     back.dataset.size = "board";
-    flyCopy(back, a, b, delay + i * 90, false);
+    flyCopy(back, a, b, delay + i * 90);
   }
 }
 
@@ -189,7 +197,7 @@ function restRect(el: Element): DOMRect {
  * new view tells it: "pid:…" for one who took them, "discard" for the discard, null: nowhere seen.
  */
 export function useLeaving(m: Motion, round: string, selector: string, goes: string | null) {
-  const last = useRef<{ round: string; cards: { node: Node; rect: DOMRect }[] }>({
+  const last = useRef<{ round: string; cards: { node: HTMLElement; rect: DOMRect }[] }>({
     round,
     cards: [],
   });
@@ -200,14 +208,14 @@ export function useLeaving(m: Motion, round: string, selector: string, goes: str
       const to = spotOf(root, goes, m.me);
       if (to)
         prev.cards.forEach((c, i) => {
-          flyCopy(c.node, c.rect, to, i * 50, goes === "discard");
+          flyCopy(c.node, c.rect, to, i * 50);
         });
     }
     last.current = {
       round,
       cards: root
-        ? [...root.querySelectorAll(selector)].map((el) => ({
-            node: el.cloneNode(true),
+        ? [...root.querySelectorAll<HTMLElement>(selector)].map((el) => ({
+            node: el.cloneNode(true) as HTMLElement,
             rect: restRect(el),
           }))
         : [],
