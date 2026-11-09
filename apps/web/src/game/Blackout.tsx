@@ -3,11 +3,25 @@
  * the card played last, how many blackouts lie in the pile and the odds of drawing one, and what
  * just happened. Under the table: an action waiting out the window to cancel it (and «Скасувати!»
  * for one who can), the blackout to tuck back after a generator saved you, the top cards one saw,
- * my hand — a tap tells what a card does, then «Зіграти» — and «Взяти карту».
+ * my hand — a card drawn up out of it onto the table is played («Вкрасти»: onto the one to rob), a
+ * tap tells what it does, then «Зіграти» — and «Взяти карту». Cards fly: one played from whoever
+ * played it onto the pile, one drawn from the stock to the hand, one stolen from hand to hand, a
+ * blackout tucked from the hand back into the stock.
  */
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import type { EveningMove } from "./api.ts";
 import { CardFace, clock, PLACES, tableLayout, useSize } from "./cards.tsx";
+import {
+  type Counted,
+  counted,
+  droppedAt,
+  FlyIn,
+  flyBacks,
+  flyDraws,
+  MotionContext,
+  type Spot,
+  useMotion,
+} from "./motion.tsx";
 import { Bolt, playerName } from "./Rating.tsx";
 import { FanSeat, Hand, MePlate, type RoundScreenProps, RoundSeating, ringOf } from "./round.tsx";
 
@@ -88,14 +102,48 @@ const TUCK = (deck: number) => [
 ];
 
 export function BlackoutScreen({ v, api, door, run, left, error }: RoundScreenProps) {
+  const root = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLDivElement>(null);
   const { w, h } = useSize(box);
   // a card tapped in my hand: what it does, and «Зіграти» when it may be played
   const [picked, setPicked] = useState<string | null>(null);
+  // the card my finger carries
+  const [lift, setLift] = useState<string | null>(null);
   const bo = v.blackout;
-  if (!bo) return null;
-  const g = bo.game;
+  const g = bo?.game ?? null;
   const me = v.me.id;
+  const m = useMotion(root, me, Boolean(bo));
+  // what the last view showed: the cards each held, the stock, the pile
+  const seen = useRef<{ counts: Counted | null; discard: number } | null>(null);
+  const was = seen.current;
+  // who played the card new on the pile: whoever holds one less than before (or the last to act)
+  const player =
+    (g && was?.counts
+      ? g.players.find((p) => p.cards < (was.counts?.cards.get(p.id) ?? 0))?.id
+      : undefined) ?? g?.last?.id;
+  useLayoutEffect(() => {
+    const prev = seen.current;
+    const now = g ? counted(g) : null;
+    if (prev && now && g) {
+      const before = prev.counts;
+      if (!before || now.deck < before.deck) {
+        // dealt, or drawn: a blackout drawn and saved leaves the hand as it was
+        const any = [...now.cards].some(([id, n]) => n > (before?.cards.get(id) ?? 0));
+        if (any || !before) flyDraws(m, before, now);
+        else if (g.last) flyBacks(m, "stock", `pid:${g.last.id}`, before.deck - now.deck);
+      } else if (now.deck > before.deck && g.last?.kind === "tuck")
+        flyBacks(m, `pid:${g.last.id}`, "stock", 1);
+      else if (now.deck === before.deck && g.discard.length === prev.discard) {
+        // stolen: one has a card more, another one less
+        const gain = [...now.cards].find(([id, n]) => n > (before.cards.get(id) ?? n));
+        const loss = [...now.cards].find(([id, n]) => n < (before.cards.get(id) ?? n));
+        if (gain && loss) flyBacks(m, `pid:${loss[0]}`, `pid:${gain[0]}`, 1);
+      }
+    }
+    seen.current = { counts: now, discard: g?.discard.length ?? 0 };
+  });
+
+  if (!bo) return null;
   const name = (id: number | null | undefined) =>
     id === null || id === undefined ? "" : id === me ? "ти" : playerName(v.players[id]);
   const whoCap = (id: number | null | undefined) => {
@@ -117,6 +165,34 @@ export function BlackoutScreen({ v, api, door, run, left, error }: RoundScreenPr
   const myTurn = turnId === me;
   const hand: string[] = g?.hand ?? [];
   const sel = picked && hand.includes(picked) ? picked : null;
+  // «Скасувати» may be played on another's action (one's own: only to undo another's «Скасувати»)
+  const canNope = Boolean(
+    legal?.nope && g?.pending && (g.pending.by !== me || g.pending.nopes % 2 === 1),
+  );
+  const canPlay = (c: string) => Boolean(legal?.play.includes(c as never));
+  const playable = (c: string) => canPlay(c) || (c === "NO" && canNope);
+  const drop = (c: string, target: string | null, at: Spot) => {
+    if (!target) return;
+    if (c === "NO" && canNope && !canPlay(c)) {
+      droppedAt(m, c, at);
+      return move({ type: "nope" });
+    }
+    if (!canPlay(c)) return;
+    if (c === "ST") {
+      const ts = legal?.targets ?? [];
+      const id = target.startsWith("seat:")
+        ? Number(target.slice(5))
+        : ts.length === 1
+          ? ts[0]
+          : undefined;
+      // whom to rob, the finger did not say: the card's panel asks
+      if (id === undefined || !ts.includes(id)) return setPicked("ST");
+      droppedAt(m, c, at);
+      return move({ type: "play", card: "ST", target: id });
+    }
+    droppedAt(m, c, at);
+    move({ type: "play", card: c });
+  };
 
   const roleOf = (id: number): string | null => {
     if (!g) return null;
@@ -177,259 +253,288 @@ export function BlackoutScreen({ v, api, door, run, left, error }: RoundScreenPr
   const odds = g && g.deck > 0 ? Math.round((g.blackouts / g.deck) * 100) : 0;
 
   return (
-    <>
-      <div
-        ref={box}
-        className="g-felt-box"
-        data-game="blackout"
-        data-compact={L.compact || undefined}
-      >
-        <div className="g-felt" style={L.felt} />
-        {v.watchers > 0 && (
-          <span className="g-felt-note" data-side="left">
-            дивляться: {v.watchers}
-          </span>
-        )}
-        {left !== null && (
-          <span className="g-felt-note" data-side="right">
-            ⏱ {clock(left)}
-          </span>
-        )}
-        <div className="g-felt-middle" style={{ top: L.middle }}>
-          {g ? (
-            <>
-              <span className="g-piles">
-                <span className="g-stock-back" role="img" aria-label={`У колоді ${g.deck}`}>
-                  <CardFace size="board" />
-                  <span className="g-count">{g.deck}</span>
-                </span>
-                <span
-                  role="img"
-                  aria-label={
-                    g.discard.length
-                      ? `Остання: ${cardName(g.discard[g.discard.length - 1] ?? "")}`
-                      : "Скинутих немає"
-                  }
-                >
-                  {g.discard.length ? (
-                    <BlackoutCard card={g.discard[g.discard.length - 1]} size="board" />
-                  ) : (
-                    <span className="g-card-slot" />
-                  )}
-                </span>
-              </span>
-              <span className="g-danger" data-high={odds >= 25 || undefined}>
-                <span className="g-danger-bar">
-                  <span className="g-danger-fill" style={{ width: `${Math.min(100, odds)}%` }} />
-                </span>
-                блекаутів у колоді: {g.blackouts} · шанс {odds}%
-              </span>
-              <span className="g-pot">{done ? `Перемога: ${whoCap(g.winner)}` : lastLine}</span>
-            </>
-          ) : (
-            <span className="g-felt-text">
-              {ring.length < 2
-                ? "Чекаємо гравців: гра почнеться, коли за столом буде двоє"
-                : `Гра почнеться${left !== null ? ` за ${clock(left)}` : " ось-ось"} — ще можна сісти`}
-              <small>
-                По черзі береш карту з колоди. Витягнув «Блекаут» без «Генератора» — вибув. Карти
-                дій допомагають його оминути. Хто лишиться останнім, той виграв
-              </small>
+    <MotionContext.Provider value={m}>
+      <div ref={root} className="g-round">
+        <div
+          ref={box}
+          className="g-felt-box"
+          data-game="blackout"
+          data-compact={L.compact || undefined}
+          data-drop={myTurn || canNope ? "table" : undefined}
+          data-lifting={lift !== null || undefined}
+        >
+          <div className="g-felt" style={L.felt} />
+          {v.watchers > 0 && (
+            <span className="g-felt-note" data-side="left">
+              дивляться: {v.watchers}
             </span>
           )}
-        </div>
-        {ring.map((id, i) => {
-          const p = g?.players.find((x) => x.id === id);
-          const net = done ? (bo.pay?.[String(id)] ?? 0) : 0;
-          const flags = { turn: id === turnId, win: done && g?.winner === id, out: p?.out };
-          return id === me ? (
-            <MePlate
-              key={id}
-              id={id}
-              cards={p && !p.out && !done ? p.cards : null}
-              role={roleOf(id)}
-              net={net}
-              {...flags}
-            />
-          ) : (
-            <FanSeat
-              key={id}
-              v={v}
-              id={id}
-              at={L.places[places[i] ?? 0] ?? { x: 0, y: 0 }}
-              cards={p?.cards ?? 0}
-              role={roleOf(id)}
-              net={net}
-              compact={L.compact}
-              {...flags}
-            />
-          );
-        })}
-      </div>
-
-      <section className="card g-pact">
-        {error && <p className="g-warn">{error}</p>}
-        {g && mine && !done ? (
-          mine.out ? (
-            <p className="g-wait-line">Ти вибув. Чекаємо, хто лишиться останнім</p>
-          ) : (
-            <>
-              {g.pending && (
-                <div className="g-pending" data-nope={legal?.nope || undefined}>
-                  <BlackoutCard card={g.pending.card} size="mini" />
-                  <span className="g-pending-text">
-                    <b>
-                      {whoCap(g.pending.by)}: «{cardName(g.pending.card)}»
-                      {g.pending.target !== null && ` → ${name(g.pending.target)}`}
-                    </b>
-                    <small>
-                      {g.pending.nopes % 2 === 1 ? "скасовано… " : ""}
-                      спрацює за {left ?? 0} с, якщо ніхто не скасує
-                    </small>
+          {left !== null && (
+            <span className="g-felt-note" data-side="right">
+              ⏱ {clock(left)}
+            </span>
+          )}
+          <div className="g-felt-middle" style={{ top: L.column }}>
+            {g ? (
+              <>
+                <span className="g-piles">
+                  <span
+                    className="g-stock-back"
+                    data-anchor="stock"
+                    role="img"
+                    aria-label={`У колоді ${g.deck}`}
+                  >
+                    <CardFace size="board" />
+                    <span className="g-count">{g.deck}</span>
                   </span>
-                  {/* one's own action: only to undo another's «Скасувати» */}
-                  {legal?.nope && (g.pending.by !== me || g.pending.nopes % 2 === 1) && (
-                    <button type="button" className="g-nope" onClick={() => move({ type: "nope" })}>
-                      Скасувати!
-                    </button>
-                  )}
-                </div>
-              )}
-              {g.peek && (
-                <div className="g-peek">
-                  <small>Верх колоди (бачиш тільки ти):</small>
-                  <span className="g-peek-row">
-                    {g.peek.map((c, i) => (
-                      // biome-ignore lint/suspicious/noArrayIndexKey: the order is the point
-                      <span key={i} className="g-peek-card">
-                        <i>{i + 1}</i>
-                        <BlackoutCard card={c} size="board" />
+                  <span
+                    className="g-discard"
+                    data-anchor="discard"
+                    role="img"
+                    aria-label={
+                      g.discard.length
+                        ? `Остання: ${cardName(g.discard[g.discard.length - 1] ?? "")}`
+                        : "Скинутих немає"
+                    }
+                  >
+                    {g.discard.length > 1 && (
+                      <span className="g-discard-under">
+                        <BlackoutCard card={g.discard[g.discard.length - 2]} size="board" />
                       </span>
-                    ))}
-                  </span>
-                </div>
-              )}
-              {legal?.tuck ? (
-                <div className="g-tuck">
-                  <p>
-                    <b className="g-tuck-title">Генератор врятував!</b> Куди сховати блекаут? Інші
-                    не бачать
-                  </p>
-                  <div className="g-tuck-grid">
-                    {TUCK(g.deck).map((t) => (
-                      <button
-                        key={t.label}
-                        type="button"
-                        className="g-btn"
-                        onClick={() => move({ type: "tuck", at: t.at })}
+                    )}
+                    {g.discard.length ? (
+                      <FlyIn
+                        key={g.discard.length}
+                        from={player === undefined ? null : `pid:${player}`}
+                        card={g.discard[g.discard.length - 1]}
                       >
-                        {t.label}
+                        <BlackoutCard card={g.discard[g.discard.length - 1]} size="board" />
+                      </FlyIn>
+                    ) : (
+                      <span className="g-card-slot" />
+                    )}
+                  </span>
+                </span>
+                <span className="g-danger" data-high={odds >= 25 || undefined}>
+                  <span className="g-danger-bar">
+                    <span className="g-danger-fill" style={{ width: `${Math.min(100, odds)}%` }} />
+                  </span>
+                  блекаутів у колоді: {g.blackouts} · шанс {odds}%
+                </span>
+                <span className="g-pot">{done ? `Перемога: ${whoCap(g.winner)}` : lastLine}</span>
+              </>
+            ) : (
+              <span className="g-felt-text">
+                {ring.length < 2
+                  ? "Чекаємо гравців: гра почнеться, коли за столом буде двоє"
+                  : `Гра почнеться${left !== null ? ` за ${clock(left)}` : " ось-ось"} — ще можна сісти`}
+                <small>
+                  По черзі береш карту з колоди. Витягнув «Блекаут» без «Генератора» — вибув. Карти
+                  дій допомагають його оминути. Хто лишиться останнім, той виграв
+                </small>
+              </span>
+            )}
+          </div>
+          {ring.map((id, i) => {
+            const p = g?.players.find((x) => x.id === id);
+            const net = done ? (bo.pay?.[String(id)] ?? 0) : 0;
+            const flags = { turn: id === turnId, win: done && g?.winner === id, out: p?.out };
+            return id === me ? (
+              <MePlate
+                key={id}
+                id={id}
+                cards={p && !p.out && !done ? p.cards : null}
+                role={roleOf(id)}
+                net={net}
+                {...flags}
+              />
+            ) : (
+              <FanSeat
+                key={id}
+                v={v}
+                id={id}
+                at={L.places[places[i] ?? 0] ?? { x: 0, y: 0 }}
+                cards={p?.cards ?? 0}
+                role={roleOf(id)}
+                net={net}
+                compact={L.compact}
+                drop={lift === "ST" && legal?.targets.includes(id) ? `seat:${id}` : undefined}
+                {...flags}
+              />
+            );
+          })}
+        </div>
+
+        <section className="card g-pact">
+          {error && <p className="g-warn">{error}</p>}
+          {g && mine && !done ? (
+            mine.out ? (
+              <p className="g-wait-line">Ти вибув. Чекаємо, хто лишиться останнім</p>
+            ) : (
+              <>
+                {g.pending && (
+                  <div className="g-pending" data-nope={legal?.nope || undefined}>
+                    <BlackoutCard card={g.pending.card} size="mini" />
+                    <span className="g-pending-text">
+                      <b>
+                        {whoCap(g.pending.by)}: «{cardName(g.pending.card)}»
+                        {g.pending.target !== null && ` → ${name(g.pending.target)}`}
+                      </b>
+                      <small>
+                        {g.pending.nopes % 2 === 1 ? "скасовано… " : ""}
+                        спрацює за {left ?? 0} с, якщо ніхто не скасує
+                      </small>
+                    </span>
+                    {canNope && (
+                      <button
+                        type="button"
+                        className="g-nope"
+                        onClick={() => move({ type: "nope" })}
+                      >
+                        Скасувати!
                       </button>
-                    ))}
+                    )}
                   </div>
-                </div>
-              ) : (
-                <>
-                  <Hand
-                    cards={hand}
-                    width={Math.max(200, w - 52)}
-                    size={56}
-                    playable={(c) => Boolean(legal?.play.includes(c as never))}
-                    picked={sel}
-                    label={cardName}
-                    face={(c) => <BlackoutCard card={c} size="hand" />}
-                    onTap={(c) => setPicked(sel === c ? null : c)}
-                    tapAll
-                  />
-                  {sel ? (
-                    <div className="g-card-info">
-                      <p>
-                        <b>{cardName(sel)}</b> — {CARDS[sel]?.about}
-                      </p>
-                      {legal?.play.includes(sel as never) ? (
-                        sel === "ST" ? (
-                          <div className="g-targets">
-                            {legal.targets.map((id) => (
-                              <button
-                                key={id}
-                                type="button"
-                                className="g-btn"
-                                onClick={() => move({ type: "play", card: "ST", target: id })}
-                              >
-                                Вкрасти: {playerName(v.players[id])}
-                              </button>
-                            ))}
-                          </div>
+                )}
+                {g.peek && (
+                  <div className="g-peek">
+                    <small>Верх колоди (бачиш тільки ти):</small>
+                    <span className="g-peek-row">
+                      {g.peek.map((c, i) => (
+                        // biome-ignore lint/suspicious/noArrayIndexKey: the order is the point
+                        <span key={i} className="g-peek-card">
+                          <i>{i + 1}</i>
+                          <BlackoutCard card={c} size="board" />
+                        </span>
+                      ))}
+                    </span>
+                  </div>
+                )}
+                {legal?.tuck ? (
+                  <div className="g-tuck">
+                    <p>
+                      <b className="g-tuck-title">Генератор врятував!</b> Куди сховати блекаут? Інші
+                      не бачать
+                    </p>
+                    <div className="g-tuck-grid">
+                      {TUCK(g.deck).map((t) => (
+                        <button
+                          key={t.label}
+                          type="button"
+                          className="g-btn"
+                          onClick={() => move({ type: "tuck", at: t.at })}
+                        >
+                          {t.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <Hand
+                      cards={hand}
+                      width={Math.max(200, w - 52)}
+                      size={56}
+                      playable={playable}
+                      picked={sel}
+                      label={cardName}
+                      face={(c) => <BlackoutCard card={c} size="hand" />}
+                      onTap={(c) => setPicked(sel === c ? null : c)}
+                      onDrop={drop}
+                      onLift={setLift}
+                    />
+                    {sel ? (
+                      <div className="g-card-info">
+                        <p>
+                          <b>{cardName(sel)}</b> — {CARDS[sel]?.about}
+                        </p>
+                        {canPlay(sel) ? (
+                          sel === "ST" ? (
+                            <div className="g-targets">
+                              {(legal?.targets ?? []).map((id) => (
+                                <button
+                                  key={id}
+                                  type="button"
+                                  className="g-btn"
+                                  onClick={() => move({ type: "play", card: "ST", target: id })}
+                                >
+                                  Вкрасти: {playerName(v.players[id])}
+                                </button>
+                              ))}
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              className="g-play"
+                              onClick={() => move({ type: "play", card: sel })}
+                            >
+                              Зіграти «{cardName(sel)}»
+                            </button>
+                          )
                         ) : (
+                          <p className="g-muted">
+                            {sel === "GN"
+                              ? "Спрацює сам, коли витягнеш блекаут"
+                              : sel === "NO"
+                                ? canNope
+                                  ? "Тягни її на стіл або тисни «Скасувати!» вище"
+                                  : "Грається, коли хтось зіграє дію: тоді тягни її на стіл"
+                                : "Зараз зіграти не можна"}
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="g-wait">
+                        <p>
+                          {g.pending
+                            ? "Чекаємо, чи хтось скасує…"
+                            : myTurn
+                              ? `Твій хід${g.turns > 1 ? " (двічі)" : ""}: тягни карту на стіл або бери з колоди`
+                              : `Хід: ${whoCap(turnId)}`}
+                        </p>
+                        {legal?.draw ? (
                           <button
                             type="button"
                             className="g-play"
-                            onClick={() => move({ type: "play", card: sel })}
+                            onClick={() => move({ type: "draw" })}
                           >
-                            Зіграти «{cardName(sel)}»
+                            Взяти карту
                           </button>
-                        )
-                      ) : (
-                        <p className="g-muted">
-                          {sel === "GN"
-                            ? "Спрацює сам, коли витягнеш блекаут"
-                            : sel === "NO"
-                              ? "Грається, коли хтось зіграє дію: з'явиться кнопка «Скасувати!»"
-                              : "Зараз зіграти не можна"}
-                        </p>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="g-wait">
-                      <p>
-                        {g.pending
-                          ? "Чекаємо, чи хтось скасує…"
-                          : myTurn
-                            ? `Твій хід${g.turns > 1 ? " (двічі)" : ""}: зіграй карту або бери з колоди`
-                            : `Хід: ${whoCap(turnId)}`}
-                      </p>
-                      {legal?.draw ? (
-                        <button
-                          type="button"
-                          className="g-play"
-                          onClick={() => move({ type: "draw" })}
-                        >
-                          Взяти карту
-                        </button>
-                      ) : (
-                        !myTurn && (
-                          <button
-                            type="button"
-                            className="g-btn"
-                            onClick={() => run(() => api.stand(door))}
-                          >
-                            Здатися
-                          </button>
-                        )
-                      )}
-                    </div>
-                  )}
-                </>
-              )}
-            </>
-          )
-        ) : g && done ? (
-          <p className="g-result-text">
-            {!mine
-              ? `Перемога: ${whoCap(g.winner)}`
-              : g.winner === me
-                ? `Перемога за тобою: +${bo.pay?.[String(me)] ?? 0}`
-                : `Ця гра: −${-(bo.pay?.[String(me)] ?? 0)}`}
-            {mine && <Bolt size={14} />}
-          </p>
-        ) : g?.pending ? (
-          <p className="g-wait-line">
-            {whoCap(g.pending.by)}: «{cardName(g.pending.card)}» — спрацює за {left ?? 0} с
-          </p>
-        ) : (
-          <RoundSeating v={v} api={api} door={door} run={run} left={left} />
-        )}
-      </section>
-    </>
+                        ) : (
+                          !myTurn && (
+                            <button
+                              type="button"
+                              className="g-btn"
+                              onClick={() => run(() => api.stand(door))}
+                            >
+                              Здатися
+                            </button>
+                          )
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+              </>
+            )
+          ) : g && done ? (
+            <p className="g-result-text">
+              {!mine
+                ? `Перемога: ${whoCap(g.winner)}`
+                : g.winner === me
+                  ? `Перемога за тобою: +${bo.pay?.[String(me)] ?? 0}`
+                  : `Ця гра: −${-(bo.pay?.[String(me)] ?? 0)}`}
+              {mine && <Bolt size={14} />}
+            </p>
+          ) : g?.pending ? (
+            <p className="g-wait-line">
+              {whoCap(g.pending.by)}: «{cardName(g.pending.card)}» — спрацює за {left ?? 0} с
+            </p>
+          ) : (
+            <RoundSeating v={v} api={api} door={door} run={run} left={left} />
+          )}
+        </section>
+      </div>
+    </MotionContext.Provider>
   );
 }

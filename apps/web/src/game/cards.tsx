@@ -88,6 +88,8 @@ export function tableLayout(w: number, h: number) {
     ] as Point[],
     felt: { left: side, right: side, top, bottom: down + pad },
     middle: (upper + down + lower - up) / 2,
+    /** The round games' middle: between the top seat's plate and my own plate at the bottom. */
+    column: (top + down + h - pad - 34) / 2,
   };
 }
 

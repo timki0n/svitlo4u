@@ -1532,31 +1532,45 @@
   background: none;
 }
 
-/* on the table a card shows its corner, as a real one does: the beaten card stays readable */
-.g-pair .g-card {
+.g-pair > .g-attack,
+.g-pair > .g-defense {
   position: absolute;
   top: 0;
   left: 0;
+  border-radius: 5px;
+  transition: scale 0.12s ease;
+}
+
+.g-pair > .g-defense {
+  top: 18px;
+  left: 12px;
+  rotate: 5deg;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.45);
+}
+
+/* on the table a card shows its corner, as a real one does: the beaten card stays readable */
+.g-pair .g-card {
   align-items: flex-start;
   justify-content: flex-start;
   padding: 4px 0 0 5px;
-}
-
-.g-pair .g-card + .g-card {
-  top: 18px;
-  left: 12px;
-  transform: rotate(5deg);
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.45);
 }
 
 .g-pair[data-target] {
   cursor: pointer;
 }
 
-.g-pair[data-target] .g-card:first-child {
+.g-pair[data-target] > .g-attack {
   box-shadow:
     0 0 0 2px var(--light),
     0 0 14px rgba(255, 154, 61, 0.55);
+}
+
+/* a card carried over the one it beats */
+.g-pair[data-over] > .g-attack {
+  box-shadow:
+    0 0 0 3px var(--light),
+    0 0 24px rgba(255, 154, 61, 0.85);
+  scale: 1.1;
 }
 
 [data-compact] .g-bout {
@@ -1578,21 +1592,47 @@
   color: var(--light);
 }
 
-/* my hand: the cards I may play stand out, a picked one rises */
+/* my hand: the cards I may play stand out, a picked one rises; a finger slid along lifts the card
+   under it, and a card drawn up follows the finger */
 .g-hand {
   display: flex;
   justify-content: center;
-  padding-top: 10px;
+  padding-top: 18px;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .g-hand-card {
+  position: relative;
   flex: none;
   padding: 0;
   border: 0;
   border-radius: 7px;
   background: none;
-  cursor: pointer;
-  transition: transform 0.12s ease;
+  cursor: grab;
+  transition:
+    transform 0.12s ease,
+    opacity 0.12s ease;
+}
+
+.g-hand-card[data-touched] {
+  z-index: 2;
+  transform: translateY(-18px) scale(1.06);
+}
+
+.g-hand-card[data-lifted] {
+  opacity: 0.2;
+}
+
+.g-drag-ghost {
+  position: fixed;
+  z-index: 45;
+  pointer-events: none;
+  /* above the finger: what lies under it stays in sight */
+  transform: translate(-50%, -104%) rotate(-5deg) scale(1.08);
+  filter: drop-shadow(0 14px 16px rgba(0, 0, 0, 0.55));
 }
 
 .g-hand-card:disabled {
@@ -2187,4 +2227,106 @@
   box-shadow:
     0 0 0 2px var(--light),
     0 8px 16px rgba(0, 0, 0, 0.45);
+}
+
+/* the round games: the table and my hand under it are one screen (cards fly between them) */
+.g-round {
+  display: contents;
+}
+
+/* where a card carried may go: the table rims brighter, the spot under the finger glows */
+.g-felt-box[data-lifting][data-drop] .g-felt {
+  box-shadow:
+    0 0 0 9px #17181b,
+    0 0 0 10px rgba(255, 154, 61, 0.6),
+    0 16px 34px rgba(0, 0, 0, 0.45),
+    inset 0 0 42px rgba(0, 0, 0, 0.45);
+}
+
+.g-felt-box[data-lifting][data-over] .g-felt {
+  box-shadow:
+    0 0 0 9px #17181b,
+    0 0 0 11px var(--light),
+    0 16px 34px rgba(0, 0, 0, 0.45),
+    inset 0 0 56px rgba(255, 154, 61, 0.22);
+}
+
+.g-pseat[data-drop] .g-pseat-face {
+  border-radius: 50%;
+  box-shadow: 0 0 0 2.5px var(--light);
+}
+
+.g-pseat[data-over] .g-pseat-face {
+  box-shadow:
+    0 0 0 3.5px var(--light),
+    0 0 26px rgba(255, 154, 61, 0.9);
+}
+
+/* «Дурень»: the stock in a column beside the bout — its trump across under it, «бито» below */
+.g-durak {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.g-durak .g-stock {
+  flex-direction: column;
+  gap: 6px;
+}
+
+.g-durak .g-stock-text {
+  text-align: center;
+}
+
+.g-stock-pile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.g-stock-pile .g-stock-back {
+  z-index: 1;
+}
+
+.g-stock-pile .g-stock-trump {
+  margin-top: -10px;
+}
+
+/* a card coming onto the table flies in; the top of a pile lies over the one before it */
+.g-fly-in {
+  display: inline-flex;
+}
+
+.g-discard {
+  position: relative;
+  display: inline-flex;
+}
+
+.g-discard > .g-fly-in {
+  position: relative;
+}
+
+.g-discard-under {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  opacity: 0.5;
+  transform: rotate(-10deg);
+}
+
+/* copies of cards on their way: from the stock to a hand, from the table to the discard */
+.g-card-flight {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.g-card-copy {
+  position: absolute;
+}
+
+.g-card-copy > * {
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.5);
 }

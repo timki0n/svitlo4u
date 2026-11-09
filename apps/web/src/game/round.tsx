@@ -3,9 +3,10 @@
  * cards face down, my own plate, my hand of cards, and the card under the table while one is not
  * in a game — sitting down with a stake, waiting for the others, the queue.
  */
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 import type { EveningTableView, gameApi } from "./api.ts";
 import { CardFace, clock, Net, type Point } from "./cards.tsx";
+import type { Spot } from "./motion.tsx";
 import { Avatar, Bolt, playerName } from "./Rating.tsx";
 
 type Api = ReturnType<typeof gameApi>;
@@ -44,6 +45,7 @@ export function FanSeat({
   role,
   net,
   compact,
+  drop,
   ...flags
 }: {
   v: EveningTableView;
@@ -53,9 +55,17 @@ export function FanSeat({
   role: string | null;
   net: number;
   compact: boolean;
+  /** A card may be dropped on them (data-drop). */
+  drop?: string | undefined;
 } & Flags) {
   return (
-    <div className="g-pseat" data-pid={id} style={{ left: at.x, top: at.y }} {...flagsOf(flags)}>
+    <div
+      className="g-pseat"
+      data-pid={id}
+      data-drop={drop}
+      style={{ left: at.x, top: at.y }}
+      {...flagsOf(flags)}
+    >
       <span className="g-pseat-cards g-fan">
         {Array.from({ length: Math.min(cards, 5) }, (_, k) => (
           // biome-ignore lint/suspicious/noArrayIndexKey: a fan of backs
@@ -95,7 +105,12 @@ export function MePlate({
   );
 }
 
-/** My hand: the cards in a row, overlapping to fit; the ones I may play stand out. */
+/**
+ * My hand: the cards in a row, overlapping to fit; the ones I may play stand out. A finger slid
+ * along it lifts the card under it (so a big hand is easy to aim at) and, let go there, picks it;
+ * drawn up, that card follows the finger, and let go over a place (`data-drop`: the table, a card
+ * on it, a player) it is played — let go anywhere well above the hand counts as the table.
+ */
 export function Hand({
   cards,
   width,
@@ -104,8 +119,9 @@ export function Hand({
   label,
   face,
   onTap,
+  onDrop,
+  onLift,
   size = 44,
-  tapAll = false,
 }: {
   cards: string[];
   width: number;
@@ -113,16 +129,122 @@ export function Hand({
   picked?: string | null;
   label: (card: string) => string;
   face: (card: string) => ReactNode;
+  /** A tap, no drag: picks the card, or tells what it does. */
   onTap: (card: string) => void;
+  /** Let go after a drag: over a place (its data-drop, or "table"), or back in the hand (null). */
+  onDrop: (card: string, target: string | null, at: Spot) => void;
+  /** A drag starts (the card) or ends (null): the screen may show where it may go. */
+  onLift?: (card: string | null) => void;
   /** A card's width. */
   size?: number;
-  /** Every card may be tapped (to read what it does), not just the ones to play. */
-  tapAll?: boolean;
 }) {
+  const row = useRef<HTMLSpanElement>(null);
+  const [touch, setTouch] = useState<number | null>(null);
+  const [drag, setDrag] = useState<{ i: number; card: string; x: number; y: number } | null>(null);
+  // where the finger came down; x where it came onto the card it is on now; whether it slid
+  const start = useRef<{ x: number; y: number; at: number; slid: boolean } | null>(null);
+  const touched = useRef<number | null>(null);
+  const dragging = useRef<{ i: number; card: string } | null>(null);
+  const over = useRef<HTMLElement | null>(null);
   const step = cards.length > 1 ? Math.min(size + 4, (width - size) / (cards.length - 1)) : 0;
   const any = cards.some(playable);
+
+  /** The card under a finger at x (the row's height: a finger a little off it still counts). */
+  const indexAt = (x: number) => {
+    const r = row.current?.getBoundingClientRect();
+    if (!r) return null;
+    const hit = document
+      .elementFromPoint(Math.min(Math.max(x, r.left + 2), r.right - 2), r.bottom - 20)
+      ?.closest<HTMLElement>(".g-hand-card");
+    return hit && row.current?.contains(hit) ? Number(hit.dataset.i) : null;
+  };
+  const pickTouch = (i: number | null) => {
+    touched.current = i;
+    setTouch(i);
+  };
+  const hover = (x: number, y: number) => {
+    const el = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-drop]") ?? null;
+    if (el === over.current) return;
+    over.current?.removeAttribute("data-over");
+    el?.setAttribute("data-over", "");
+    over.current = el;
+  };
+  const end = () => {
+    over.current?.removeAttribute("data-over");
+    over.current = null;
+    start.current = null;
+    dragging.current = null;
+    setDrag(null);
+    pickTouch(null);
+  };
+
   return (
-    <span className="g-hand">
+    <span
+      ref={row}
+      className="g-hand"
+      data-anchor="hand"
+      onPointerDown={(e) => {
+        try {
+          row.current?.setPointerCapture(e.pointerId);
+        } catch {
+          // a pointer already gone: its moves just will not follow outside the row
+        }
+        start.current = { x: e.clientX, y: e.clientY, at: e.clientX, slid: false };
+        pickTouch(indexAt(e.clientX));
+      }}
+      onPointerMove={(e) => {
+        const s = start.current;
+        if (!s) return;
+        const d = dragging.current;
+        if (d) {
+          setDrag({ ...d, x: e.clientX, y: e.clientY });
+          hover(e.clientX, e.clientY);
+          return;
+        }
+        const dx = e.clientX - s.at;
+        const dy = e.clientY - s.y;
+        if (Math.hypot(e.clientX - s.x, dy) >= 10) s.slid = true;
+        const i = touched.current;
+        const card = i === null ? undefined : cards[i];
+        // drawn up (from the card it slid onto): the card under the finger comes along
+        if (i !== null && card && dy < -22 && -dy > Math.abs(dx) * 0.7 && playable(card)) {
+          dragging.current = { i, card };
+          setDrag({ i, card, x: e.clientX, y: e.clientY });
+          onLift?.(card);
+          return;
+        }
+        // slid along: the card under the finger rises
+        const j = indexAt(e.clientX);
+        if (j !== touched.current) {
+          s.at = e.clientX;
+          pickTouch(j);
+        }
+      }}
+      onPointerUp={(e) => {
+        const s = start.current;
+        const d = dragging.current;
+        if (d) {
+          const el = document
+            .elementFromPoint(e.clientX, e.clientY)
+            ?.closest<HTMLElement>("[data-drop]");
+          const top = row.current?.getBoundingClientRect().top ?? 0;
+          const target = el?.dataset.drop ?? (e.clientY < top - 40 ? "table" : null);
+          end();
+          onLift?.(null);
+          onDrop(d.card, target, { x: e.clientX, y: e.clientY });
+          return;
+        }
+        // a tap; or let go after sliding along: the card it stopped on is picked (never played)
+        const i = touched.current;
+        const card = i === null ? undefined : cards[i];
+        if (s && card && (!s.slid || card !== picked)) onTap(card);
+        end();
+      }}
+      onPointerCancel={() => {
+        if (dragging.current) onLift?.(null);
+        end();
+      }}
+    >
       {cards.map((c, i) => (
         <button
           // a hand may hold two cards alike
@@ -130,16 +252,26 @@ export function Hand({
           key={`${c}:${i}`}
           type="button"
           className="g-hand-card"
+          data-i={i}
           style={{ marginLeft: i === 0 ? 0 : step - size }}
           data-dim={(any && !playable(c)) || undefined}
           data-picked={picked === c || undefined}
-          disabled={!tapAll && !playable(c)}
+          data-touched={(touch === i && !drag) || undefined}
+          data-lifted={drag?.i === i || undefined}
           aria-label={label(c)}
-          onClick={() => onTap(c)}
+          // a key (no pointer) presses it: a finger's taps come through the row
+          onClick={(e) => {
+            if (e.detail === 0) onTap(c);
+          }}
         >
           {face(c)}
         </button>
       ))}
+      {drag && (
+        <span className="g-drag-ghost" style={{ left: drag.x, top: drag.y }}>
+          {face(drag.card)}
+        </span>
+      )}
     </span>
   );
 }
