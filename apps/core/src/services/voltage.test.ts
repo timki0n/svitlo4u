@@ -103,21 +103,47 @@ describe("voltage watch", () => {
     expect(events.at(-1)).toBe("stabilized after low: 206 at 165");
   });
 
-  it("a reading near the edge (190–192 V) or low again starts the 2 minutes over", () => {
+  it("after low voltage only 200 V and up is normal again: 190–199 V starts the 2 minutes over", () => {
     const { monitor, events, readings, reading } = setup();
     readings([
       [0, 185],
       [15, 186],
-      [30, 184],
-      [45, 205],
-      [60, 191], // inside the band but within the 3 V margin
-      [75, 205],
-      [120, 206],
-      [180, 205],
+      [30, 184], // alert
+      [45, 195],
+      [100, 198],
+      [165, 199], // 2 minutes of 195–199 V: still low
     ]);
     expect(monitor.state).toBe("alerted-low");
-    reading(195, 206);
-    expect(events.at(-1)).toBe("stabilized after low: 206 at 195"); // 205, 206, 205, 206
+    expect(events).toEqual(["low 185 since 0"]);
+    readings([
+      [180, 200],
+      [195, 205],
+      [240, 199], // starts it over
+      [255, 200],
+      [300, 206],
+      [360, 205],
+    ]);
+    expect(monitor.state).toBe("alerted-low");
+    reading(375, 206);
+    expect(events.at(-1)).toBe("stabilized after low: 204 at 375"); // 200, 206, 205, 206
+    expect(monitor.state).toBe("idle");
+  });
+
+  it("after high voltage 242 V and up starts the 2 minutes over (3 V margin)", () => {
+    const { monitor, events, readings, reading } = setup();
+    readings([
+      [0, 250],
+      [15, 251],
+      [30, 252], // alert
+      [45, 236],
+      [60, 242], // inside the band but within the margin
+      [75, 236],
+      [120, 237],
+      [180, 236],
+    ]);
+    expect(monitor.state).toBe("alerted-high");
+    reading(195, 236);
+    expect(events.at(-1)).toBe("stabilized after high: 236 at 195");
   });
 
   it("high voltage from 245 V works the same way", () => {

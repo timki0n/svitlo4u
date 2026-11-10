@@ -5,9 +5,10 @@
  * `confirmMs` the readings decide — an alert with the average voltage (as soon as
  * `minConfirmSamples` readings in a row are abnormal the same way, or when the minute is over and
  * its average is), or nothing (a single spike). After an alert the plug keeps being read; once the
- * voltage has stayed back inside the normal band (with a small margin against flapping) for a
- * whole `recoverWindowMs`, "stabilized" follows with the average of that window. A power outage
- * ends the episode silently — that is the outage detector's news.
+ * voltage has stayed normal again for a whole `recoverWindowMs`, "stabilized" follows with the
+ * average of that window. Normal again means `lowRecovered` and up after low voltage (190–199 V is
+ * still low), and `margin` below `high` after high voltage. A power outage ends the episode
+ * silently — that is the outage detector's news.
  *
  * Below `critical` the low alert is critical: straight away when the check itself confirms it,
  * or as a second alert of the episode once `minConfirmSamples` readings in a row fall that far.
@@ -25,7 +26,9 @@ export type VoltageWatchConfig = {
   critical: number;
   /** From this up the voltage is high (V). */
   high: number;
-  /** Back to normal needs this far inside the band (V), against flapping at the edge. */
+  /** After low voltage, normal again from this up (V): readings just above `low` are still low. */
+  lowRecovered: number;
+  /** After high voltage, normal again this far below `high` (V), against flapping at the edge. */
   margin: number;
   /** Readings at or below this mean no power at all — the outage detector's business (V). */
   noVoltageMax: number;
@@ -41,6 +44,7 @@ export const DEFAULT_VOLTAGE_WATCH: VoltageWatchConfig = {
   low: 190,
   critical: 170,
   high: 245,
+  lowRecovered: 200,
   margin: 3,
   noVoltageMax: 50,
   confirmMs: 60_000,
@@ -110,10 +114,10 @@ export class VoltageMonitor {
     return null;
   }
 
-  /** Comfortably back inside the normal band. */
+  /** Comfortably back to normal after an episode of `kind`. */
   private stable(v: number): boolean {
-    const { low, high, margin } = this.config;
-    return v >= low + margin && v < high - margin;
+    const { low, lowRecovered, high, margin } = this.config;
+    return v >= (this.kind === "low" ? lowRecovered : low + margin) && v < high - margin;
   }
 
   private onSample(t: number, v: number): void {
