@@ -20,7 +20,7 @@ import type { OutboxItem, Store } from "@svitlo/storage";
 import type { FastifyInstance } from "fastify";
 import { Bot, type Context, GrammyError, HttpError, InputFile, type Transformer } from "grammy";
 import type { Update, UserFromGetMe } from "grammy/types";
-import type { Clock } from "../runtime/clock.ts";
+import type { Clock, Timer } from "../runtime/clock.ts";
 import type { ScheduleImages } from "../services/images.ts";
 import { lastFixedSchedule } from "../services/schedule.ts";
 import type { SiteStateStore } from "../services/state.ts";
@@ -127,6 +127,12 @@ function renderedLength(html: string): number {
   return html.replace(/<[^>]*>/g, "").replace(/&(lt|gt|amp|quot|#39);/g, "_").length;
 }
 const INIT_RETRY_MS = 30_000;
+/**
+ * After a start messages wait until the bot has set up with Telegram (commands, webhook), at most
+ * this long. 2026-11-11 03:11: right after the router rebooted, Telegram answered sends with
+ * 502 yet posted them, and the retries came as duplicates.
+ */
+export const SEND_HOLD_MAX_MS = 2 * 60_000;
 const ADMIN_CACHE_MS = 10 * 60_000;
 const NOTICE_MS = 10_000;
 /** On stop, pending notice deletions get this long before the process goes. */
@@ -156,6 +162,8 @@ class SiteBot {
   readonly bot: Bot;
   readonly secret: string;
   ready = false;
+  /** Set up with Telegram since the start (commands, webhook): the network is good for sends. */
+  connected = false;
   polling = false;
   private nextSendAt = 0;
   private readonly admins = new Map<string, { admin: boolean; until: number }>();
@@ -170,6 +178,7 @@ class SiteBot {
     });
     if (deps.transformer) this.bot.api.config.use(deps.transformer);
     this.ready = deps.botInfo !== undefined;
+    this.connected = this.ready;
   }
 
   /** Space sends so a burst stays under Telegram's limit. */
@@ -207,9 +216,13 @@ export class TelegramChannel {
   /** Uploaded pictures: file → Telegram file_id, so other chats get it without a new upload. */
   private readonly photoIds = new Map<string, string>();
   private stopped = false;
+  /** Until then sends wait for the bot to connect; later they go anyway. */
+  private holdUntil: number;
+  private holdTimer: Timer | null = null;
 
   constructor(deps: TelegramDeps) {
     this.deps = deps;
+    this.holdUntil = deps.clock.now() + SEND_HOLD_MAX_MS;
     for (const site of deps.sites) {
       if (!site.telegram) continue;
       const siteBot = new SiteBot(site, site.telegram, deps);
@@ -230,6 +243,12 @@ export class TelegramChannel {
 
   bot(siteId: string): Bot | null {
     return this.bots.get(siteId)?.bot ?? null;
+  }
+
+  /** The outbox may send for the site: its bot has connected, or waiting for it took too long. */
+  canSend(siteId: string): boolean {
+    const siteBot = this.bots.get(siteId);
+    return !siteBot || siteBot.connected || this.deps.clock.now() >= this.holdUntil;
   }
 
   /** Queue a message for the site's chats and subscribers (only the admin chat in shadow mode). */
@@ -639,11 +658,20 @@ export class TelegramChannel {
   /** Connect bots in the background: getMe, commands menu, webhook or polling. Never blocks. */
   start(): void {
     this.stopped = false;
+    const { clock, outbox } = this.deps;
+    this.holdUntil = clock.now() + SEND_HOLD_MAX_MS;
+    clock.clearTimer(this.holdTimer);
+    this.holdTimer = clock.setTimer(this.holdUntil, () => {
+      this.holdTimer = null;
+      outbox.resume();
+    });
     for (const siteBot of this.bots.values()) void this.connect(siteBot);
   }
 
   async stop(): Promise<void> {
     this.stopped = true;
+    this.deps.clock.clearTimer(this.holdTimer);
+    this.holdTimer = null;
     for (const timer of this.retryTimers) clearTimeout(timer);
     this.retryTimers.clear();
     const cleanups = [...this.cleanups].map(([timer, run]) => {
@@ -671,6 +699,7 @@ export class TelegramChannel {
       siteBot.ready = true;
       if (!config.commands || updates === "off") {
         log.info({ site: site.id, bot: bot.botInfo.username }, "telegram bot ready (send only)");
+        this.markConnected(siteBot);
         return;
       }
       await bot.api.setMyCommands(COMMANDS);
@@ -700,10 +729,17 @@ export class TelegramChannel {
           });
         log.info({ site: site.id, bot: bot.botInfo.username }, "telegram polling started");
       }
+      this.markConnected(siteBot);
     } catch (err) {
       log.warn({ site: site.id, err: String(err) }, "telegram bot not connected, retrying in 30 s");
       this.retry(siteBot);
     }
+  }
+
+  private markConnected(siteBot: SiteBot): void {
+    if (siteBot.connected) return;
+    siteBot.connected = true;
+    this.deps.outbox.resume();
   }
 
   /** Run a cleanup later (or at once on stop). */

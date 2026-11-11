@@ -173,6 +173,17 @@ describe("PowerService", () => {
     expect(Math.max(...minutes.map((m) => m.maxGapMs))).toBe(11_000);
   });
 
+  it("saves its state at least once a minute even with no packets (the core's sign of life)", () => {
+    // 2026-11-11: the last save before a 03:09 reboot was the 19:22 outage start, so the startup
+    // alert said the core had been down for 7 h 48 min instead of 2 min.
+    const service = setup(() => false);
+    for (const minutes of [5, 30, 90]) {
+      clock.advanceTo(T0 + minutes * 60_000);
+      expect(store.detector.savedAt("4u")).toBeGreaterThanOrEqual(clock.now() - 60_000);
+    }
+    service.stop();
+  });
+
   it("after a restart the detector continues from the stored state (no event if uptime continued)", () => {
     const first = setup(() => true);
     clock.advanceTo(T0 + 1000);

@@ -4,7 +4,10 @@
  * is down and nothing is resent after a restart. Rules:
  * - one target gets its messages in order: a later message waits for the earlier one;
  * - when a send to a site's channel succeeds (connectivity is back), its waiting retries go now;
- * - permanent errors (4xx except 429) are not retried — the channel decides whether to alert.
+ * - permanent errors (4xx except 429) are not retried — the channel decides whether to alert;
+ * - a channel that is not ready (the bot has not set up with Telegram since the start) holds its
+ *   items without attempts: a reply that fails may still have been delivered, so sending into a
+ *   half-up network and retrying makes duplicates. resume() sends them once it is ready.
  */
 import type { OutboxItem, Store } from "@svitlo/storage";
 import type { Clock, Timer } from "../runtime/clock.ts";
@@ -31,6 +34,8 @@ export type OutboxDeps = {
   /** Called once per item that will not be delivered (permanent error or expired). */
   onUndelivered?: (item: OutboxItem, error: string) => void;
   onSent?: (item: OutboxItem, sentAt: number) => void;
+  /** False: the channel holds this site's items for now (call resume() when that changes). */
+  ready?: (siteId: string, channel: string) => boolean;
   log?: { warn: (obj: object, msg: string) => void; error: (obj: object, msg: string) => void };
 };
 
@@ -88,6 +93,11 @@ export class Outbox {
     this.settle();
   }
 
+  /** A channel became ready: send what waited for it. */
+  resume(): void {
+    this.kick();
+  }
+
   /** Resolves when nothing is being sent and nothing is due (tests, shutdown). */
   idle(): Promise<void> {
     if (this.inFlight.size === 0 && !this.kickQueued) return Promise.resolve();
@@ -129,6 +139,7 @@ export class Outbox {
     let nextAt: number | null = null;
     for (const [key, item] of heads) {
       if (this.inFlight.has(key)) continue;
+      if (this.deps.ready && !this.deps.ready(item.siteId, item.channel)) continue;
       if (item.nextAttemptAt > now) {
         nextAt = nextAt === null ? item.nextAttemptAt : Math.min(nextAt, item.nextAttemptAt);
         continue;

@@ -29,6 +29,8 @@ export const ZIGBEE_OFFLINE_ALERT_MS = 60_000;
 export const REJECT_ALERT_EVERY_MS = 6 * 3_600_000;
 export const YASNO_ALERT_AFTER = 3;
 export const NETWORK_GAP_ALERT_MS = 2 * 60_000;
+/** The startup alert waits this long: the detector settles the power state first. */
+export const STARTUP_ALERT_DELAY_MS = 30_000;
 const DAY = 86_400_000;
 
 export type NotifierDeps = {
@@ -56,6 +58,7 @@ export class Notifier {
   private readonly unsubscribe: (() => void)[] = [];
   private zigbeeOnline: boolean | null = null;
   private zigbeeTimer: Timer | null = null;
+  private startTimer: Timer | null = null;
   private zigbeeAlerted = false;
   private yasnoAlerted = false;
   private backupAlerted = false;
@@ -160,14 +163,28 @@ export class Notifier {
     for (const off of this.unsubscribe.splice(0)) off();
     this.deps.clock.clearTimer(this.zigbeeTimer);
     this.zigbeeTimer = null;
+    this.deps.clock.clearTimer(this.startTimer);
+    this.startTimer = null;
   }
 
-  /** Admin alert on start; mentions how long the core was down (e.g. the Pi lost power). */
+  /**
+   * Admin alert `STARTUP_ALERT_DELAY_MS` after the start, with the power state the detector has
+   * settled by then; mentions how long the core was down (e.g. the Pi lost power).
+   */
   coreStarted(previousRunAt: number | null): void {
-    const { clock, sites, state, version } = this.deps;
-    const now = clock.now();
+    const { clock } = this.deps;
+    const startedAt = clock.now();
+    clock.clearTimer(this.startTimer);
+    this.startTimer = clock.setTimer(startedAt + STARTUP_ALERT_DELAY_MS, () => {
+      this.startTimer = null;
+      this.sendCoreStarted(previousRunAt, startedAt);
+    });
+  }
+
+  private sendCoreStarted(previousRunAt: number | null, startedAt: number): void {
+    const { sites, state, version } = this.deps;
     const lines = [`🟢 Ядро svitlo4u ${escapeHtml(version)} запущено.`];
-    const down = previousRunAt !== null ? now - previousRunAt : 0;
+    const down = previousRunAt !== null ? startedAt - previousRunAt : 0;
     const tz = sites[0]?.tz ?? "Europe/Kyiv";
     if (previousRunAt !== null && down >= 2 * 60_000) {
       lines.push(

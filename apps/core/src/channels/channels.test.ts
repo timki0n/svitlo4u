@@ -12,7 +12,9 @@ import { loadConfig } from "../config.ts";
 import type { CoreEvents } from "../runtime/bus.ts";
 import { ManualClock } from "../runtime/clock.ts";
 import type { ScheduleImages } from "../services/images.ts";
-import { webhookSecret } from "./telegram.ts";
+import { powerLabel } from "./messages.ts";
+import { STARTUP_ALERT_DELAY_MS } from "./notifier.ts";
+import { SEND_HOLD_MAX_MS, webhookSecret } from "./telegram.ts";
 
 const LIVE = readFileSync(
   fileURLToPath(
@@ -47,12 +49,12 @@ type Reply =
 /** Bot API stand-in: records calls; `respond` may fail a call, everything else succeeds. */
 function fakeTelegram() {
   const calls: Call[] = [];
-  let respond: (call: Call) => Reply | "network" | undefined = () => undefined;
+  let respond: (call: Call) => Reply | "network" | undefined | Promise<Reply> = () => undefined;
   let messageId = 1;
   const transformer = (async (_prev, method, payload) => {
     const call = { method, payload: payload as Record<string, unknown> };
     calls.push(call);
-    const custom = respond(call);
+    const custom = await respond(call);
     if (custom === "network") throw new Error("connect ECONNREFUSED");
     if (custom) return custom;
     if (method === "sendMessage")
@@ -114,6 +116,8 @@ async function start(
     listen?: boolean;
     tg?: ReturnType<typeof fakeTelegram>;
     images?: ScheduleImages | null;
+    /** Connect like in production: getMe, commands, webhook through the fake. */
+    getMe?: boolean;
   } = {},
 ) {
   const tg = options.tg ?? fakeTelegram();
@@ -132,7 +136,12 @@ async function start(
     env: { ESP_4U_SECRET: "s", TG_4U_TOKEN: TOKEN },
     fetch: fakeYasno,
     listen: options.listen ?? false,
-    telegram: { transformer: tg.transformer, botInfo: BOT_INFO, paceMs: 0, noticeMs: 0 },
+    telegram: {
+      transformer: tg.transformer,
+      ...(options.getMe ? {} : { botInfo: BOT_INFO }),
+      paceMs: 0,
+      noticeMs: 0,
+    },
     ...(options.images !== undefined ? { images: options.images } : {}),
   });
   await core.outbox.idle();
@@ -193,7 +202,7 @@ async function postUpdate(c: Core, update: object, secret = webhookSecret(TOKEN)
 
 describe("Telegram channel", () => {
   it("registers the webhook with a secret and the command menu on start; says hello to the admin", async () => {
-    const { tg } = await start(LIVE_CHATS);
+    const { core: c, tg, clock } = await start(LIVE_CHATS);
     await vi.waitFor(() => expect(tg.calls.some((c) => c.method === "setWebhook")).toBe(true));
     const webhook = tg.calls.find((c) => c.method === "setWebhook");
     expect(webhook?.payload).toMatchObject({
@@ -203,7 +212,62 @@ describe("Telegram channel", () => {
     });
     expect(tg.calls.some((c) => c.method === "setMyCommands")).toBe(true);
     expect(tg.calls.some((c) => c.method === "setChatMenuButton")).toBe(false);
-    expect(tg.sentTo(ADMIN)[0]?.payload.text).toMatch(/Ядро svitlo4u .* запущено/);
+    // The hello waits until the detector has settled the power state.
+    const hello = () =>
+      tg
+        .sentTo(ADMIN)
+        .map((m) => String(m.payload.text))
+        .filter((t) => t.includes("запущено"));
+    expect(hello()).toEqual([]);
+    clock.advanceBy(STARTUP_ALERT_DELAY_MS);
+    await flush(c);
+    expect(hello()).toHaveLength(1);
+    expect(hello()[0]).toMatch(/Ядро svitlo4u .* запущено/);
+    expect(hello()[0]).toContain(`ЖК 4U: світло ${powerLabel(c.state.get("4u").power)}`);
+  });
+
+  it("after a start messages wait until the bot has set up with Telegram", async () => {
+    // 2026-11-11 03:11: right after a router reboot Telegram answered 502 yet posted the messages,
+    // and the retries came as duplicates. Sends start once commands and webhook are set.
+    const tg = fakeTelegram();
+    let webhookUp = () => {};
+    const webhook = new Promise<Reply>((resolve) => {
+      webhookUp = () => resolve({ ok: true, result: true });
+    });
+    tg.respondWith((call) => {
+      if (call.method === "getMe") return { ok: true, result: BOT_INFO };
+      if (call.method === "setWebhook") return webhook;
+      return undefined;
+    });
+    const { core: c, clock } = await start(LIVE_CHATS, { tg, getMe: true });
+    clock.advanceBy(STARTUP_ALERT_DELAY_MS);
+    await flush(c);
+    expect(tg.calls.some((call) => call.method === "getMe")).toBe(true);
+    expect(tg.sent()).toHaveLength(0);
+    const held = c.store.outbox.pending();
+    expect(held.length).toBeGreaterThan(0);
+    expect(held.every((item) => item.attempts === 0)).toBe(true); // waiting, not failing
+
+    webhookUp();
+    await vi.waitFor(() => expect(tg.sentTo(ADMIN)).toHaveLength(held.length));
+    expect(tg.sentTo(ADMIN).some((m) => String(m.payload.text).includes("запущено"))).toBe(true);
+  });
+
+  it("…but not longer than 2 minutes", async () => {
+    const tg = fakeTelegram();
+    tg.respondWith((call) => {
+      if (call.method === "getMe") return { ok: true, result: BOT_INFO };
+      if (call.method === "setWebhook") return new Promise<Reply>(() => {});
+      return undefined;
+    });
+    const { core: c, clock } = await start(LIVE_CHATS, { tg, getMe: true });
+    clock.advanceBy(STARTUP_ALERT_DELAY_MS);
+    await flush(c);
+    expect(tg.sent()).toHaveLength(0);
+    clock.advanceBy(SEND_HOLD_MAX_MS - STARTUP_ALERT_DELAY_MS);
+    await vi.waitFor(() =>
+      expect(tg.sentTo(ADMIN).some((m) => String(m.payload.text).includes("запущено"))).toBe(true),
+    );
   });
 
   it("puts the web app on the menu button when webApp is configured", async () => {
@@ -617,7 +681,7 @@ describe("Telegram commands (webhook)", () => {
     await postUpdate(c, message(group, "/health"));
     await postUpdate(c, message(admin, "/health"));
     await postUpdate(c, message(admin, "/stats"));
-    await vi.waitFor(() => expect(tg.sentTo(ADMIN).length).toBeGreaterThanOrEqual(3));
+    await vi.waitFor(() => expect(tg.sentTo(ADMIN).length).toBeGreaterThanOrEqual(2));
     const texts = tg.sentTo(ADMIN).map((m) => String(m.payload.text));
     expect(texts.some((t) => t.startsWith("🩺 <b>svitlo4u</b>"))).toBe(true);
     expect(texts.some((t) => t.startsWith("📊 <b>ЖК 4U</b>"))).toBe(true);
@@ -698,10 +762,16 @@ describe("admin alerts", () => {
     await start(LIVE_CHATS, { clock });
     await core?.stop(); // saves the detector state at T0
     core = null;
-    const { tg } = await start(LIVE_CHATS, { clock: new ManualClock(T0 + 21 * 3_600_000) });
-    expect(String(tg.sentTo(ADMIN)[0]?.payload.text)).toMatch(
-      /Перерва в роботі: 21 год\. \(з 12:00 06\.11\)/,
-    );
+    const later = new ManualClock(T0 + 21 * 3_600_000);
+    const { core: c, tg } = await start(LIVE_CHATS, { clock: later });
+    later.advanceBy(STARTUP_ALERT_DELAY_MS); // the alert waits, the downtime is still up to the start
+    await flush(c);
+    expect(
+      tg
+        .sentTo(ADMIN)
+        .map((m) => String(m.payload.text))
+        .join("\n"),
+    ).toMatch(/Перерва в роботі: 21 год\. \(з 12:00 06\.11\)/);
   });
 });
 

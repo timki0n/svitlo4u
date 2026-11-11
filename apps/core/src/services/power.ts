@@ -20,6 +20,8 @@ import type { SiteConfig } from "../sites-config.ts";
 import type { SiteStateStore } from "./state.ts";
 
 const PERSIST_EVERY_MS = 5_000;
+/** Saved at least this often even with nothing new (an outage): the core's last sign of life. */
+const ALIVE_EVERY_MS = 60_000;
 const MINUTE = 60_000;
 
 type MinuteStats = { minute: number; packets: number; maxGapMs: number; reboots: number };
@@ -41,6 +43,7 @@ export class PowerService {
   private wakeTimer: Timer | null = null;
   private persistTimer: Timer | null = null;
   private dirty = false;
+  private savedAt = Number.NEGATIVE_INFINITY;
   private readonly heartbeat = new Map<
     string,
     MinuteStats & { lastT: number | null; lastUp: number | null; lastBoot: string | null }
@@ -179,18 +182,16 @@ export class PowerService {
 
   private schedulePersist(): void {
     this.persistTimer = this.deps.clock.setTimer(this.deps.clock.now() + PERSIST_EVERY_MS, () => {
-      if (this.dirty) this.persist();
+      if (this.dirty || this.deps.clock.now() - this.savedAt >= ALIVE_EVERY_MS) this.persist();
       this.flushHeartbeat(false);
       this.schedulePersist();
     });
   }
 
   private persist(): void {
-    this.deps.store.detector.save(
-      this.siteId,
-      persistDetector(this.detector),
-      this.deps.clock.now(),
-    );
+    const now = this.deps.clock.now();
+    this.deps.store.detector.save(this.siteId, persistDetector(this.detector), now);
+    this.savedAt = now;
     this.dirty = false;
   }
 

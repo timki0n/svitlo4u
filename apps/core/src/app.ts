@@ -54,7 +54,8 @@ export type CoreDeps = {
   /** Tests: answer Telegram Bot API calls without the network. */
   telegram?: {
     transformer: Transformer;
-    botInfo: UserFromGetMe;
+    /** Skip getMe (absent: the bot connects through `transformer` like in production). */
+    botInfo?: UserFromGetMe;
     paceMs?: number;
     noticeMs?: number;
   };
@@ -112,7 +113,8 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
     });
   }
 
-  // ≈ when the core last ran (the detector state is saved every few seconds).
+  // ≈ when the core last ran (the detector state is saved every few seconds, at least once a
+  // minute even during an outage).
   const previousRunAt = sites.reduce<number | null>((latest, site) => {
     const savedAt = store.detector.savedAt(site.id);
     return savedAt === null ? latest : Math.max(latest ?? 0, savedAt);
@@ -139,11 +141,14 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
           })
         : null;
   let notifier: Notifier | null = null;
+  let telegramChannel: TelegramChannel | null = null;
   const outbox = new Outbox({
     store,
     clock,
     senders,
     log,
+    // After a start the bot sends once it has set up with Telegram (no repeats into a half-up net).
+    ready: (siteId, channel) => channel !== TELEGRAM || (telegramChannel?.canSend(siteId) ?? true),
     onUndelivered: (item, error) => notifier?.onUndelivered(item, error),
     onSent: (item, sentAt) =>
       log.info(
@@ -168,12 +173,13 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
     ...(deps.telegram
       ? {
           transformer: deps.telegram.transformer,
-          botInfo: deps.telegram.botInfo,
+          ...(deps.telegram.botInfo ? { botInfo: deps.telegram.botInfo } : {}),
           ...(deps.telegram.paceMs !== undefined ? { paceMs: deps.telegram.paceMs } : {}),
           ...(deps.telegram.noticeMs !== undefined ? { noticeMs: deps.telegram.noticeMs } : {}),
         }
       : {}),
   });
+  telegramChannel = telegram;
   senders.set(TELEGRAM, telegram.send);
   const notifierInstance = new Notifier({
     bus,
