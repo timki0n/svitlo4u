@@ -13,7 +13,7 @@ import type { CoreEvents } from "../runtime/bus.ts";
 import { ManualClock } from "../runtime/clock.ts";
 import type { ScheduleImages } from "../services/images.ts";
 import { powerLabel } from "./messages.ts";
-import { STARTUP_ALERT_DELAY_MS } from "./notifier.ts";
+import { PLUG_SILENT_ALERT_MS, STARTUP_ALERT_DELAY_MS, ZIGBEE_START_ALERT_MS } from "./notifier.ts";
 import { SEND_HOLD_MAX_MS, webhookSecret } from "./telegram.ts";
 
 const LIVE = readFileSync(
@@ -711,9 +711,77 @@ describe("admin alerts", () => {
     c.bus.emit("zigbee.bridge", { online: true });
     await flush(c);
     expect(alerts().filter((t) => t.includes("zigbee2mqtt"))).toEqual([
-      "⚠️ zigbee2mqtt offline понад хвилину — розетка не підтверджує стан світла.",
+      "⚠️ zigbee2mqtt offline понад хвилину — розетка не підтверджує стан світла й не міряє напругу.",
       "✅ zigbee2mqtt знову online.",
     ]);
+  });
+
+  it("zigbee2mqtt never up since the start: alert after 3 minutes, then on recovery", async () => {
+    // 2026-11-11: after a power loss the MQTT broker did not start; no alert for 14 hours.
+    const { core: c, tg, clock } = await start(LIVE_CHATS);
+    const alerts = () =>
+      tg
+        .sentTo(ADMIN)
+        .map((m) => String(m.payload.text))
+        .filter((t) => t.includes("zigbee2mqtt"));
+    c.notifier.watchZigbee(["4u"]);
+    clock.advanceBy(ZIGBEE_START_ALERT_MS - 1_000);
+    await flush(c);
+    expect(alerts()).toEqual([]);
+    clock.advanceBy(1_000);
+    await flush(c);
+    expect(alerts()).toEqual([
+      "⚠️ Немає зв'язку з zigbee2mqtt 3 хв від запуску ядра — розетка не підтверджує стан світла й не міряє напругу. Перевір контейнери mosquitto і zigbee2mqtt.",
+    ]);
+    c.bus.emit("zigbee.bridge", { online: true });
+    await flush(c);
+    expect(alerts().at(-1)).toBe("✅ zigbee2mqtt знову online.");
+  });
+
+  it("zigbee2mqtt up within 3 minutes of the start: no alert", async () => {
+    const { core: c, tg, clock } = await start(LIVE_CHATS);
+    c.notifier.watchZigbee(["4u"]);
+    clock.advanceBy(20_000);
+    c.bus.emit("zigbee.bridge", { online: true });
+    clock.advanceBy(ZIGBEE_START_ALERT_MS);
+    await flush(c);
+    expect(tg.sentTo(ADMIN).some((m) => String(m.payload.text).includes("zigbee2mqtt"))).toBe(
+      false,
+    );
+  });
+
+  it("a plug silent for 10 minutes while there is power: alert, then on recovery; none without power", async () => {
+    // 2026-11-11: zigbee2mqtt lost the plug from its database in a power loss; no voltage all day.
+    const { core: c, tg, clock } = await start(LIVE_CHATS);
+    const alerts = () =>
+      tg
+        .sentTo(ADMIN)
+        .map((m) => String(m.payload.text))
+        .filter((t) => t.includes("розетка"));
+    c.notifier.watchZigbee(["4u"]);
+    c.bus.emit("zigbee.bridge", { online: true });
+    c.state.update("4u", { power: "off", since: clock.now(), lastPlugAt: clock.now() });
+    clock.advanceBy(30 * 60_000); // no power, no answers: as it should be
+    await flush(c);
+    expect(alerts()).toEqual([]);
+
+    c.state.update("4u", { power: "on", since: clock.now() });
+    clock.advanceBy(PLUG_SILENT_ALERT_MS - 60_000);
+    await flush(c);
+    expect(alerts()).toEqual([]);
+    clock.advanceBy(60_000);
+    await flush(c);
+    expect(alerts()).toEqual([
+      "⚠️ ЖК 4U: розетка мовчить 10 хв, хоча світло є — напруга не міряється, світло видно лише по ESP. Перевір розетку в zigbee2mqtt.",
+    ]);
+    clock.advanceBy(30 * 60_000);
+    await flush(c);
+    expect(alerts()).toHaveLength(1); // once
+
+    c.state.update("4u", { lastPlugAt: clock.now() });
+    clock.advanceBy(60_000);
+    await flush(c);
+    expect(alerts().at(-1)).toBe("✅ ЖК 4U: розетка знову на зв'язку.");
   });
 
   it("Yasno: alert after 3 failures in a row and on recovery; rejected packets at most every 6 h", async () => {

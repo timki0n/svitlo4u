@@ -250,6 +250,17 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
       onPlug: (event) => power.get(event.siteId)?.onPlug(event),
       onBridgeState: (online) => bus.emit("zigbee.bridge", { online }),
     });
+    // The broker gone means zigbee2mqtt is gone for us too (its "offline" never reaches us).
+    let mqttConnected = false;
+    mqtt.on("connect", () => {
+      mqttConnected = true;
+    });
+    mqtt.on("close", () => {
+      if (!mqttConnected) return;
+      mqttConnected = false;
+      bus.emit("zigbee.bridge", { online: false });
+    });
+    notifierInstance.watchZigbee(plugs.map((p) => p.siteId));
   } else if (plugs.length > 0) {
     log.warn(
       "plugs configured but MQTT_URL / MQTT_CORE_PASSWORD missing — plug confirmation disabled",

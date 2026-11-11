@@ -65,6 +65,12 @@ Notes from measuring the real plug: `get voltage` is not supported, so the core 
 2.5–3 s. The plug ignores reporting settings and can stay silent for an hour, so the core reads it
 every minute. zigbee2mqtt availability does not notice the plug disappearing — the core's reads do.
 
+After a power loss zigbee2mqtt may lose a device from `zigbee2mqtt/database.db` (log: `Corrupted
+database line`, `Currently 0 devices are joined`, then `Entity '4u-plug' is unknown`). The plug
+stays paired in the coordinator, so its record is enough: stop zigbee2mqtt, keep the broken file
+aside, copy the last good `database.db.tmp.<time>` (zigbee2mqtt renames a leftover temp file so on
+start) over `database.db`, start zigbee2mqtt. Pair the plug again only without such a copy.
+
 ### Cloudflare Tunnel
 
 Cloudflare dashboard → Zero Trust → Networks → Tunnels → **Create tunnel** (Cloudflared) → name `svitlo4u`
@@ -114,8 +120,9 @@ docker compose exec core node apps/core/src/cli/render.ts 4u tomorrow /tmp/tomor
 ```
 
 Undelivered messages are retried for 30 minutes (5 s → 3 min backoff) and survive restarts;
-the admin chat hears about chats that reject messages, Yasno failures, zigbee2mqtt going offline,
-rejected heartbeats and core restarts (with the downtime).
+the admin chat hears about chats that reject messages, Yasno failures, zigbee2mqtt going offline
+(or not up 3 minutes after the start, e.g. no MQTT broker), a plug silent for 10 minutes while
+there is power, rejected heartbeats and core restarts (with the downtime).
 
 ### Core: sites and history
 
@@ -165,3 +172,13 @@ curl -s http://127.0.0.1:8090/health
 ```
 
 Rollback: set `CORE_TAG=sha-<previous commit sha>` in `.env` and `docker compose up -d`.
+
+### Start after a boot
+
+`restart: unless-stopped` is not enough after a power loss: on 2026-11-11 Docker started every
+container but mosquitto. A line in the user's crontab (`crontab -e`, no sudo) starts whatever is
+missing a minute after every boot; running containers are left as they are:
+
+```cron
+@reboot sleep 60 && cd $HOME/svitlo4u/deploy && docker compose up -d >> $HOME/svitlo4u/deploy/boot-up.log 2>&1
+```

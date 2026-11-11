@@ -26,6 +26,14 @@ import {
 import type { AdminReports, TelegramChannel } from "./telegram.ts";
 
 export const ZIGBEE_OFFLINE_ALERT_MS = 60_000;
+/**
+ * No word from zigbee2mqtt this long after the start → alert. 2026-11-11: after a power loss the
+ * MQTT broker did not start, and nobody knew for 14 hours.
+ */
+export const ZIGBEE_START_ALERT_MS = 3 * 60_000;
+/** The plug answers probes every 30 s while there is power: silent this long → alert. */
+export const PLUG_SILENT_ALERT_MS = 10 * 60_000;
+const PLUG_CHECK_EVERY_MS = 60_000;
 export const REJECT_ALERT_EVERY_MS = 6 * 3_600_000;
 export const YASNO_ALERT_AFTER = 3;
 export const NETWORK_GAP_ALERT_MS = 2 * 60_000;
@@ -59,6 +67,10 @@ export class Notifier {
   private zigbeeOnline: boolean | null = null;
   private zigbeeTimer: Timer | null = null;
   private startTimer: Timer | null = null;
+  /** Sites whose plug is watched (MQTT configured), the check timer, alerted sites → when. */
+  private plugSites: readonly string[] = [];
+  private plugTimer: Timer | null = null;
+  private readonly plugAlerted = new Map<string, number>();
   private zigbeeAlerted = false;
   private yasnoAlerted = false;
   private backupAlerted = false;
@@ -165,6 +177,60 @@ export class Notifier {
     this.zigbeeTimer = null;
     this.deps.clock.clearTimer(this.startTimer);
     this.startTimer = null;
+    this.deps.clock.clearTimer(this.plugTimer);
+    this.plugTimer = null;
+  }
+
+  /**
+   * Watch zigbee2mqtt and the sites' plugs (MQTT is configured): alert when zigbee2mqtt has not
+   * come up since the start, and when a plug stays silent while there is power.
+   */
+  watchZigbee(siteIds: readonly string[]): void {
+    this.plugSites = siteIds;
+    if (this.zigbeeOnline !== true && !this.zigbeeTimer) {
+      this.armZigbeeAlert(
+        ZIGBEE_START_ALERT_MS,
+        `⚠️ Немає зв'язку з zigbee2mqtt ${Math.round(ZIGBEE_START_ALERT_MS / 60_000)} хв від запуску ядра — розетка не підтверджує стан світла й не міряє напругу. Перевір контейнери mosquitto і zigbee2mqtt.`,
+      );
+    }
+    this.schedulePlugCheck();
+  }
+
+  private schedulePlugCheck(): void {
+    const { clock } = this.deps;
+    clock.clearTimer(this.plugTimer);
+    this.plugTimer = clock.setTimer(clock.now() + PLUG_CHECK_EVERY_MS, () => {
+      this.plugTimer = null;
+      this.checkPlugs();
+      this.schedulePlugCheck();
+    });
+  }
+
+  /** The plug answers every probe while there is power; a long silence means it is lost. */
+  private checkPlugs(): void {
+    const { clock, state, telegram } = this.deps;
+    const now = clock.now();
+    for (const siteId of this.plugSites) {
+      const current = state.get(siteId);
+      const name = escapeHtml(state.site(siteId).name);
+      const alertedAt = this.plugAlerted.get(siteId);
+      if (alertedAt !== undefined) {
+        if (current.lastPlugAt !== null && current.lastPlugAt > alertedAt) {
+          this.plugAlerted.delete(siteId);
+          telegram.alert(null, `✅ ${name}: розетка знову на зв'язку.`, { silent: true });
+        }
+        continue;
+      }
+      // zigbee2mqtt itself is down: its own alert says so.
+      if (current.power !== "on" || this.zigbeeOnline !== true) continue;
+      const quietSince = Math.max(current.lastPlugAt ?? 0, current.since ?? 0, this.startedAt);
+      if (now - quietSince < PLUG_SILENT_ALERT_MS) continue;
+      this.plugAlerted.set(siteId, now);
+      telegram.alert(
+        null,
+        `⚠️ ${name}: розетка мовчить ${Math.round((now - quietSince) / 60_000)} хв, хоча світло є — напруга не міряється, світло видно лише по ESP. Перевір розетку в zigbee2mqtt.`,
+      );
+    }
   }
 
   /**
@@ -342,14 +408,19 @@ export class Notifier {
     }
     if (previous === false || this.zigbeeTimer) return;
     // Restarts of zigbee2mqtt take seconds: alert only when it stays offline.
-    this.zigbeeTimer = clock.setTimer(clock.now() + ZIGBEE_OFFLINE_ALERT_MS, () => {
+    this.armZigbeeAlert(
+      ZIGBEE_OFFLINE_ALERT_MS,
+      "⚠️ zigbee2mqtt offline понад хвилину — розетка не підтверджує стан світла й не міряє напругу.",
+    );
+  }
+
+  private armZigbeeAlert(ms: number, text: string): void {
+    const { clock, telegram } = this.deps;
+    this.zigbeeTimer = clock.setTimer(clock.now() + ms, () => {
       this.zigbeeTimer = null;
-      if (this.zigbeeOnline !== false) return;
+      if (this.zigbeeOnline === true) return;
       this.zigbeeAlerted = true;
-      telegram.alert(
-        null,
-        "⚠️ zigbee2mqtt offline понад хвилину — розетка не підтверджує стан світла.",
-      );
+      telegram.alert(null, text);
     });
   }
 }

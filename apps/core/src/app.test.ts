@@ -166,6 +166,21 @@ describe("core (integration)", () => {
     expect(event.detectedAt - event.at).toBeLessThan(800);
   });
 
+  it("the MQTT broker gone means zigbee2mqtt is offline for the core (once per loss)", async () => {
+    const mqtt = new FakeMqtt();
+    const c = await start(sitesYaml(true), new ManualClock(Date.UTC(2026, 10, 11, 1, 0, 0)), mqtt);
+    const bridge: boolean[] = [];
+    c.bus.on("zigbee.bridge", (e) => {
+      bridge.push(e.online);
+    });
+    mqtt.emit("close"); // never connected yet: nothing to lose
+    mqtt.emit("connect");
+    mqtt.emit("message", "zigbee2mqtt/bridge/state", Buffer.from('{"state":"online"}'));
+    mqtt.emit("close");
+    mqtt.emit("close"); // reconnect attempts keep failing
+    expect(bridge).toEqual([true, false]);
+  });
+
   it("starts without a sites file (degraded, health still answers)", async () => {
     const config = {
       ...loadConfig({ LOG_LEVEL: "silent" }),
