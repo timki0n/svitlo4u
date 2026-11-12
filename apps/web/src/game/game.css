@@ -2958,3 +2958,99 @@
     display: none;
   }
 }
+
+/* Запам'яталка: dark windows; one tapped turns over and lights up with the thing behind it; a pair
+   alike stays lit and glows, two not alike go red and dark again */
+.g-memo {
+  display: grid;
+  grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
+  gap: 8px;
+  width: min(100%, 340px);
+  padding: 12px;
+  border-radius: 20px;
+  background: var(--well);
+  box-shadow: var(--inset);
+  touch-action: manipulation;
+}
+
+.g-memo-card {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  padding: 0;
+  border: 0;
+  background: none;
+  perspective: 600px;
+  cursor: pointer;
+}
+
+.g-memo-card:disabled {
+  cursor: default;
+}
+
+.g-memo-inner {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  transition: transform 0.32s ease;
+}
+
+.g-memo-card[data-open] .g-memo-inner {
+  transform: rotateY(180deg);
+}
+
+.g-memo-back,
+.g-memo-face {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+/* a window in the dark: its frame and the cross of its bars */
+.g-memo-back {
+  background:
+    linear-gradient(#2e3037, #2e3037) center / 2px 100% no-repeat,
+    linear-gradient(#2e3037, #2e3037) center / 100% 2px no-repeat,
+    #16171a;
+  box-shadow: inset 0 0 0 3px #2e3037;
+}
+
+.g-memo-face {
+  transform: rotateY(180deg);
+  background: linear-gradient(180deg, #ffd690, #ff9a3d);
+  box-shadow: inset 0 0 0 3px rgba(26, 18, 8, 0.25);
+  color: #1a1208;
+}
+
+.g-memo-card[data-done] .g-memo-face {
+  box-shadow:
+    inset 0 0 0 3px rgba(26, 18, 8, 0.25),
+    0 0 14px rgba(255, 154, 61, 0.55);
+}
+
+.g-memo-card[data-miss] .g-memo-face {
+  background: linear-gradient(180deg, #ffa595, #ff6b57);
+}
+
+.g-memo-card[data-hit] {
+  animation: g-memo-hit 0.42s ease-out;
+}
+
+@keyframes g-memo-hit {
+  50% {
+    transform: scale(1.08);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .g-memo-inner {
+    transition: none;
+  }
+
+  .g-memo-card[data-hit] {
+    animation: none;
+  }
+}

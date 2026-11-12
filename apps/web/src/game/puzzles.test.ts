@@ -26,11 +26,14 @@ import {
   jigsawPuzzle,
   MAX_CHARGE_SOLUTIONS,
   MAX_PACK_SOLUTIONS,
+  MEMO_TIERS,
+  MEMO_TWINS,
   MIN_BATTERY_MOVES,
   MIN_BEAM_FLIPS,
   MIN_CHAIN_TAPS,
   MIN_SLIDE_MOVES,
   MIN_UNTANGLE_CROSSINGS,
+  memoPuzzle,
   packPuzzle,
   packShapeOf,
   packSolutions,
@@ -107,6 +110,7 @@ describe("window games", () => {
       sudokuPuzzle,
       sparkPuzzle,
       storePuzzle,
+      memoPuzzle,
     ])
       for (const t of TIERS) expect(make(rngOf(`k${t}`), t)).toEqual(make(rngOf(`k${t}`), t));
     expect(slidePuzzle(rngOf("k"), 1)).toEqual(slidePuzzle(rngOf("k"), 1));
@@ -640,5 +644,20 @@ describe("difficulty: no puzzle is a tap or two away", () => {
         },
       ),
     ).toBe(true);
+  });
+
+  it("Запам'яталка: every thing behind two windows; look-alikes only on the hard level, both of each", () => {
+    for (const k of keys(80))
+      for (const t of TIERS) {
+        const p = memoPuzzle(rngOf(k), t);
+        const tier = MEMO_TIERS[t];
+        expect([p.cols, p.rows, p.misses]).toEqual([tier.cols, tier.rows, tier.misses]);
+        expect(p.cards).toHaveLength(p.cols * p.rows);
+        const count = new Map<string, number>();
+        for (const c of p.cards) count.set(c, (count.get(c) ?? 0) + 1);
+        expect([...count.values()].every((v) => v === 2)).toBe(true);
+        const both = MEMO_TWINS.filter(([a, b]) => count.has(a) && count.has(b));
+        expect(both).toHaveLength(tier.twins);
+      }
   });
 });

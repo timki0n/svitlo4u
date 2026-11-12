@@ -23,6 +23,7 @@ import {
   jigsawEdge,
   jigsawGroup,
   jigsawOutline,
+  type MemoPuzzle,
   type Mirror,
   type PackPuzzle,
   type PetsPuzzle,
@@ -3410,4 +3411,91 @@ export function mountStore(root: HTMLElement, p: StorePuzzle, ctx: GameCtx): Cle
   draw();
   report();
   return undefined;
+}
+
+// ── Запам'яталка ────────────────────────────────────────────────────────────────────────────
+
+export function mountMemo(root: HTMLElement, p: MemoPuzzle, ctx: GameCtx): Cleanup {
+  const total = p.cards.length / 2;
+  const grid = document.createElement("div");
+  grid.className = "g-memo";
+  grid.style.setProperty("--cols", String(p.cols));
+  root.appendChild(grid);
+  const cards = p.cards.map((thing, i) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "g-memo-card";
+    b.setAttribute("aria-label", `Вікно ${i + 1}`);
+    b.innerHTML = `<span class="g-memo-inner"><span class="g-memo-back"></span><span class="g-memo-face">${icon(thing, 30)}</span></span>`;
+    b.addEventListener("click", () => open(i));
+    grid.appendChild(b);
+    return b;
+  });
+  /** The windows lit that are not a pair yet (one, or two not alike, about to go dark). */
+  let shown: number[] = [];
+  const found = new Set<number>();
+  let misses = 0;
+  let over = false;
+  let won = false;
+  let dark = 0;
+
+  const status = () => {
+    const left = Math.max(0, p.misses - misses);
+    ctx.say(
+      `Знайди пари: тапни два вікна · пар ${found.size / 2} з ${total} · можна помилитися ще ${left}`,
+      over ? "помилок забагато, почни спочатку" : undefined,
+    );
+  };
+  const paint = () => {
+    cards.forEach((b, i) => {
+      b.toggleAttribute("data-open", found.has(i) || shown.includes(i) || over);
+      b.toggleAttribute("data-done", found.has(i));
+      b.disabled = won || over;
+    });
+  };
+  /** The two lit that were not alike go dark again. */
+  const close = () => {
+    window.clearTimeout(dark);
+    for (const i of shown) cards[i]?.removeAttribute("data-miss");
+    shown = [];
+    paint();
+  };
+
+  function open(i: number) {
+    if (won || over || found.has(i) || shown.includes(i)) return;
+    if (shown.length === 2) close();
+    shown.push(i);
+    if (shown.length === 2) {
+      const [a, b] = shown as [number, number];
+      if (p.cards[a] === p.cards[b]) {
+        found.add(a);
+        found.add(b);
+        shown = [];
+        for (const k of [a, b]) {
+          const card = cards[k];
+          card?.removeAttribute("data-hit");
+          void card?.offsetWidth;
+          card?.setAttribute("data-hit", "");
+        }
+        navigator.vibrate?.(15);
+        if (found.size === p.cards.length) {
+          won = true;
+          ctx.done(`усі ${total} пар · помилок ${misses}`);
+        }
+      } else {
+        misses++;
+        for (const k of shown) cards[k]?.setAttribute("data-miss", "");
+        if (misses > p.misses) {
+          over = true;
+          navigator.vibrate?.([30, 40, 30]);
+        } else dark = window.setTimeout(close, 900);
+      }
+    }
+    paint();
+    status();
+  }
+
+  paint();
+  status();
+  return () => window.clearTimeout(dark);
 }

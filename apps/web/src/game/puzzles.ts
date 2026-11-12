@@ -3,6 +3,7 @@
  * in a window during an outage. Each puzzle keeps its own solution (tests check it is reachable).
  */
 import { type GameTier, gameTier } from "../../../../packages/domain/src/game.ts";
+import type { GameIcon } from "./icons.ts";
 import { type Rng, ri, shuffle } from "./rng.ts";
 
 /** Difficulty from the floor (shared with the core, which scores by it). */
@@ -3099,4 +3100,81 @@ export function storePuzzle(rng: Rng, tier: Tier): StorePuzzle {
     if (boxed.size === t.boxes && !ready) return last;
   }
   return last as StorePuzzle;
+}
+
+// ── «Запам'яталка»: dark windows, a thing behind each; two alike and they stay lit ───────────────
+
+export type MemoPuzzle = {
+  cols: number;
+  rows: number;
+  /** What is behind each window, row by row: every thing twice. */
+  cards: GameIcon[];
+  /** How many pairs may be opened that are not alike before it is over. */
+  misses: number;
+};
+
+/** Things alike enough to mix up: on the hard level they come together. */
+export const MEMO_TWINS: readonly (readonly [GameIcon, GameIcon])[] = [
+  ["phone", "tablet"],
+  ["cat", "dog"],
+  ["laptop", "tv"],
+  ["cell", "bank"],
+  ["candle", "flashlight"],
+  ["speaker", "radio"],
+];
+/** Things that look like nothing else here. */
+const MEMO_SINGLES: readonly GameIcon[] = [
+  "man",
+  "lamp",
+  "router",
+  "headphones",
+  "camera",
+  "aid",
+  "water",
+  "food",
+  "blanket",
+  "clothes",
+  "thermos",
+  "book",
+  "plug",
+  "accu",
+  "station",
+  "generator",
+  "match",
+  "garland",
+  "docs",
+  "cash",
+];
+
+/** Per tier: the windows across and down, the look-alike pairs of things put in, the misses allowed. */
+export const MEMO_TIERS = [
+  { cols: 4, rows: 3, twins: 0, misses: 10 },
+  { cols: 4, rows: 4, twins: 0, misses: 12 },
+  { cols: 5, rows: 4, twins: 3, misses: 15 },
+] as const;
+
+/**
+ * Windows of their own: the things picked (on the hard level a few look-alikes, both of each),
+ * every one put behind two windows, shuffled.
+ */
+export function memoPuzzle(rng: Rng, tier: Tier): MemoPuzzle {
+  const t = MEMO_TIERS[tier];
+  const pairs = (t.cols * t.rows) / 2;
+  const twins = shuffle(rng, MEMO_TWINS);
+  const chosen: GameIcon[] = twins.slice(0, t.twins).flat();
+  // the rest look like nothing else chosen: of each look-alike pair left, one at most
+  const rest = shuffle(rng, [
+    ...MEMO_SINGLES,
+    ...twins.slice(t.twins).map((pair) => pair[ri(rng, 2)] as GameIcon),
+  ]);
+  chosen.push(...rest.slice(0, pairs - chosen.length));
+  return {
+    cols: t.cols,
+    rows: t.rows,
+    cards: shuffle(
+      rng,
+      chosen.flatMap((icon) => [icon, icon]),
+    ),
+    misses: t.misses,
+  };
 }
