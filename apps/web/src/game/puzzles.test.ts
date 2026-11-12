@@ -34,6 +34,15 @@ import {
   tierOf,
   traceBeam,
   untanglePuzzle,
+  VOLT_CORNER,
+  VOLT_SIZES,
+  VOLT_STRAIGHT,
+  VOLT_TARGET,
+  type VoltBlock,
+  type VoltCell,
+  voltPuzzle,
+  voltTrace,
+  voltTurns,
 } from "./puzzles.ts";
 import { rngOf } from "./rng.ts";
 
@@ -65,6 +74,7 @@ describe("window games", () => {
       chargePuzzle,
       packPuzzle,
       batteryPuzzle,
+      voltPuzzle,
     ])
       for (const t of TIERS) expect(make(rngOf(`k${t}`), t)).toEqual(make(rngOf(`k${t}`), t));
     expect(slidePuzzle(rngOf("k"), 1)).toEqual(slidePuzzle(rngOf("k"), 1));
@@ -183,5 +193,84 @@ describe("difficulty: no puzzle is a tap or two away", () => {
         if (moves !== -1) expect(moves).toBeGreaterThanOrEqual(MIN_BATTERY_MOVES[t]);
         expect(moves).not.toBe(Number.POSITIVE_INFINITY);
       }
+  });
+
+  it("Точна напруга: as made, the numbered blocks light the lamp at exactly its voltage; spares look like needed ones", () => {
+    for (const k of keys(150))
+      for (const t of TIERS) {
+        const p = voltPuzzle(rngOf(k), t);
+        const s = VOLT_SIZES[t];
+        const count = (kind: VoltCell["kind"]) => p.cells.filter((c) => c.kind === kind).length;
+        expect(s.n).toBeLessThanOrEqual(5);
+        expect(p.cells).toHaveLength(s.n * s.n);
+        expect([count("source"), count("lamp")]).toEqual([1, 1]);
+        expect(count("block")).toBe(s.fixed + s.fixedOff);
+        expect(count("lock")).toBe(s.locks);
+        expect(p.blocks).toHaveLength(p.solution.length + s.spare);
+        // every block one gets is numbered, a straight wire or a corner
+        for (const b of p.blocks) {
+          expect(b.value).not.toBe(0);
+          expect([...VOLT_STRAIGHT, ...VOLT_CORNER]).toContain(b.ports);
+        }
+        // the way it was made: each block on a free cell, only turned
+        const laid = new Map<number, VoltBlock>();
+        for (const x of p.solution) {
+          const block = p.blocks[x.block] as VoltBlock;
+          expect(p.cells[x.cell]?.kind).toBe("free");
+          expect(voltTurns(block.ports)).toContain(x.ports);
+          laid.set(x.cell, { ports: x.ports, value: block.value });
+        }
+        expect(new Set(p.solution.map((x) => x.block)).size).toBe(p.solution.length);
+        const trace = voltTrace(p, laid);
+        expect(trace).toMatchObject({ lit: true, sum: p.target });
+        // it runs through the fixed blocks put on the way
+        expect(trace.path.filter((c) => p.cells[c]?.kind === "block")).toHaveLength(s.fixed);
+        expect(voltTrace(p, new Map()).lit).toBe(false);
+        // a spare: shaped like a needed block, numbered otherwise
+        const used = new Set(p.solution.map((x) => x.block));
+        const needed = [...used].map((i) => p.blocks[i] as VoltBlock);
+        for (const [i, b] of p.blocks.entries())
+          if (!used.has(i))
+            expect(
+              needed.some((x) => voltTurns(x.ports) === voltTurns(b.ports) && x.value !== b.value),
+            ).toBe(true);
+        if (t > 0) {
+          // some number on the way takes voltage away
+          const onWay = trace.path.map((c) => {
+            const cell = p.cells[c];
+            return cell?.kind === "block" ? cell.value : (laid.get(c)?.value ?? 0);
+          });
+          expect(onWay.some((v) => v < 0)).toBe(true);
+          expect(p.target).toBeGreaterThanOrEqual(VOLT_TARGET[0]);
+          expect(p.target).toBeLessThanOrEqual(VOLT_TARGET[1]);
+        }
+      }
+  });
+
+  it("Точна напруга: the current runs from the generator through joined cells, adding their numbers", () => {
+    // a 3 × 3 board: the generator on the left of the middle row, the lamp on its right, a fixed
+    // +2 on top
+    const cells: VoltCell[] = Array.from({ length: 9 }, () => ({ kind: "free" }));
+    cells[3] = { kind: "source", ports: 2 };
+    cells[5] = { kind: "lamp", ports: 8 };
+    cells[1] = { kind: "block", ports: 2 | 8, value: 2 };
+    const p = { n: 3, cells };
+    // a −1 straight across: lit, −1
+    expect(voltTrace(p, new Map([[4, { ports: 2 | 8, value: -1 }]]))).toMatchObject({
+      lit: true,
+      sum: -1,
+      path: [3, 4, 5],
+    });
+    // turned the wrong way: the current stops at the generator
+    expect(voltTrace(p, new Map([[4, { ports: 1 | 4, value: -1 }]]))).toMatchObject({
+      lit: false,
+      path: [3],
+    });
+    // a corner up to the +2, whose wire runs across: it stops at the corner, having added its 3
+    expect(voltTrace(p, new Map([[4, { ports: 8 | 1, value: 3 }]]))).toMatchObject({
+      lit: false,
+      sum: 3,
+      path: [3, 4],
+    });
   });
 });

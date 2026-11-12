@@ -2621,3 +2621,78 @@
   gap: 10px;
   font-size: 13px;
 }
+
+/* «Точна напруга»: two plates over the board — what the current carries now, what the lamp needs */
+.g-volt-meters {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+  max-width: 320px;
+}
+
+.g-volt-meter {
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 10px;
+  border-radius: 14px;
+  background: var(--well);
+  box-shadow: var(--inset-sm);
+  color: var(--text);
+  transition:
+    color 0.2s ease,
+    background 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.g-volt-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.g-volt-value {
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.g-volt-arrow {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.g-volt-meter[data-need] .g-volt-value {
+  color: var(--light);
+}
+
+/* now under what is needed: cool; over it: red; even: light; the lamp alight: lit up */
+.g-volt-meter[data-state="low"] {
+  color: #9db8ff;
+  box-shadow:
+    var(--inset-sm),
+    0 0 0 1.5px rgba(157, 184, 255, 0.55);
+}
+
+.g-volt-meter[data-state="high"] {
+  color: var(--warn);
+  box-shadow:
+    var(--inset-sm),
+    0 0 0 1.5px var(--warn);
+}
+
+.g-volt-meter[data-state="even"] {
+  color: var(--light);
+}
+
+.g-volt-meter[data-state="ok"] {
+  background: var(--light);
+  box-shadow: 0 0 18px rgba(255, 154, 61, 0.45);
+  color: #1a1208;
+}
+
+.g-volt-meter[data-state="ok"] .g-volt-label {
+  color: rgba(26, 18, 8, 0.7);
+}

@@ -28,6 +28,10 @@ import {
   slideGrid,
   traceBeam,
   type UntanglePuzzle,
+  type VoltBlock,
+  type VoltPuzzle,
+  voltTrace,
+  voltTurns,
 } from "./puzzles.ts";
 
 export type GameCtx = {
@@ -396,9 +400,9 @@ export function mountFuse(root: HTMLElement, p: FusePuzzle, ctx: GameCtx): Clean
   /** The fuse has just burnt: the needle stands still until the run starts over. */
   let burnt = false;
   let restart = 0;
-  const show = (note?: string) => {
+  const show = () => {
     ctx.say(
-      `Тапни, коли стрілка в помаранчевій зоні: ${need} ${need >= 5 ? "разів" : "рази"} поспіль, без промаху · ${hits} з ${need}${attempt > 1 ? ` · спроба ${attempt}` : ""}${note ? ` · ${note}` : ""}`,
+      `Тапни, коли стрілка в помаранчевій зоні: ${need} ${need >= 5 ? "разів" : "рази"} поспіль, без промаху · ${hits} з ${need}${attempt > 1 ? ` · спроба ${attempt}` : ""}`,
     );
     const z = p.zones[hits];
     zone.setAttribute("d", z ? arc(z[0], z[1], R) : "");
@@ -474,7 +478,7 @@ export function mountFuse(root: HTMLElement, p: FusePuzzle, ctx: GameCtx): Clean
       ctx.done(attempt === 1 ? "з першої спроби" : `зі спроби ${attempt}`);
       return;
     }
-    show("є!");
+    show();
   };
   // the finger coming down anywhere on the board inserts it — at once, not when it lifts, and
   // no need to reach for the button; the button still works from the keyboard
@@ -916,6 +920,63 @@ function svgIcon(parent: Element, name: GameIcon, cx: number, cy: number, size: 
   s.innerHTML = iconPaths(name);
 }
 
+/**
+ * Next to a board every piece has its own square slot, big enough whichever way it is turned, in
+ * rows from `top`; the slots, and the height of it all.
+ */
+function shelfOf(
+  shapes: readonly (readonly (readonly [number, number])[])[],
+  vw: number,
+  top: number,
+  ts: number,
+) {
+  const slots: { x: number; y: number; side: number }[] = [];
+  let x = 8;
+  let y = top;
+  let rowH = 0;
+  for (const cells of shapes) {
+    const side = (Math.max(...cells.map(([r]) => r), ...cells.map(([, c]) => c)) + 1) * ts;
+    if (x + side > vw - 8) {
+      x = 8;
+      y += rowH + 12;
+      rowH = 0;
+    }
+    slots.push({ x, y, side });
+    x += side + 12;
+    rowH = Math.max(rowH, side);
+  }
+  return { slots, vh: y + rowH + 6 };
+}
+
+/**
+ * Solved: the shelf under the board folds away (the SVG's view from `from` high to `to`), so what
+ * comes after is in reach without scrolling past it; the screen then fits the board again. Returns
+ * the cancel for the cleanup.
+ */
+function foldShelf(svg: SVGSVGElement, vw: number, from: number, to: number, ctx: GameCtx) {
+  let raf = 0;
+  const set = (height: number) => {
+    svg.setAttribute("viewBox", `0 0 ${vw} ${height}`);
+    svg.setAttribute("height", String(height));
+  };
+  const still =
+    document.hidden || (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
+  if (still) {
+    set(to);
+    ctx.fit?.();
+    return () => {};
+  }
+  const t0 = performance.now();
+  const step = (now: number) => {
+    const k = Math.min(1, (now - t0) / 420);
+    set(from + (to - from) * (1 - (1 - k) ** 3));
+    if (k < 1) raf = requestAnimationFrame(step);
+    else ctx.fit?.();
+  };
+  raf = requestAnimationFrame(step);
+  return () => cancelAnimationFrame(raf);
+}
+
 export function mountPack(root: HTMLElement, p: PackPuzzle, ctx: GameCtx): Cleanup {
   const { w, h } = p;
   const bag = new Set(p.bag);
@@ -932,24 +993,12 @@ export function mountPack(root: HTMLElement, p: PackPuzzle, ctx: GameCtx): Clean
   const by = 6;
   // next to the bag every item has its own square slot, big enough whichever way it is turned
   const ts = Math.round(cs * 0.6);
-  const { slots, vh } = (() => {
-    const out: { x: number; y: number; side: number }[] = [];
-    let x = 8;
-    let y = by + h * cs + 20;
-    let rowH = 0;
-    for (const it of items) {
-      const side = (Math.max(...it.cells.map(([r]) => r), ...it.cells.map(([, c]) => c)) + 1) * ts;
-      if (x + side > vw - 8) {
-        x = 8;
-        y += rowH + 12;
-        rowH = 0;
-      }
-      out.push({ x, y, side });
-      x += side + 12;
-      rowH = Math.max(rowH, side);
-    }
-    return { slots: out, vh: y + rowH + 6 };
-  })();
+  const { slots, vh } = shelfOf(
+    items.map((it) => it.cells),
+    vw,
+    by + h * cs + 20,
+    ts,
+  );
   const svg = svgRoot(root, vw, vh, "g-drag");
   /** Where an item lying next to the bag starts: centred in its slot. */
   const slotOrigin = (i: number): [number, number] => {
@@ -1106,7 +1155,8 @@ export function mountPack(root: HTMLElement, p: PackPuzzle, ctx: GameCtx): Clean
     draw();
     if (!won && packed()) {
       won = true;
-      fold();
+      // all packed: the shelf under the bag folds away
+      unfold = foldShelf(svg, vw, vh, by + h * cs + 6, ctx);
       ctx.done("усе влізло");
     }
   };
@@ -1115,35 +1165,503 @@ export function mountPack(root: HTMLElement, p: PackPuzzle, ctx: GameCtx): Clean
     drag = null;
     draw();
   });
-
-  // all packed: the shelf under the bag folds away, so what comes after is in reach without
-  // scrolling down past it
-  let raf = 0;
-  const fold = () => {
-    const end = by + h * cs + 6;
-    const set = (height: number) => {
-      svg.setAttribute("viewBox", `0 0 ${vw} ${height}`);
-      svg.setAttribute("height", String(height));
-    };
-    const still =
-      document.hidden || (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
-    if (still) {
-      set(end);
-      ctx.fit?.();
-      return;
-    }
-    const t0 = performance.now();
-    const step = (now: number) => {
-      const k = Math.min(1, (now - t0) / 420);
-      set(vh + (end - vh) * (1 - (1 - k) ** 3));
-      if (k < 1) raf = requestAnimationFrame(step);
-      else ctx.fit?.();
-    };
-    raf = requestAnimationFrame(step);
-  };
+  let unfold = () => {};
 
   draw();
-  return () => cancelAnimationFrame(raf);
+  return () => unfold();
+}
+
+// ── Точна напруга ───────────────────────────────────────────────────────────────────────────
+
+/** Numbered blocks: fixed ones flat and bolted, those one lays raised; adding warm, taking cool. */
+const FIX_PLUS = "#3a2e1f";
+const FIX_MINUS = "#1f2938";
+const MOVE_PLUS = "#5b4627";
+const MOVE_MINUS = "#2d3f5a";
+/** A wire the current does not run through. */
+const WIRE_OFF = "rgba(242, 239, 234, 0.45)";
+/** The sparks of the current running along the wire. */
+const SPARK = "#fff3d6";
+const PILLAR = "#0f1013";
+const SOURCE_CELL = "#4a3218";
+
+/** A minus as on the blocks, not a hyphen. */
+const volts = (v: number) => (v < 0 ? `−${-v}` : String(v));
+/** A block's number, with its sign. */
+const signed = (v: number) => (v > 0 ? `+${v}` : volts(v));
+
+export function mountVolt(root: HTMLElement, p: VoltPuzzle, ctx: GameCtx): Cleanup {
+  const { n, cells, target } = p;
+  /** The blocks one gets: as turned now, and the cell each lies on (null: next to the board). */
+  const blocks = p.blocks.map((b) => ({
+    ports: b.ports,
+    value: b.value,
+    at: null as number | null,
+  }));
+  let won = false;
+  const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+
+  // over the board, two plates: what the current carries now, and what the lamp needs
+  const meters = document.createElement("div");
+  meters.className = "g-volt-meters";
+  const nowPlate = document.createElement("div");
+  nowPlate.className = "g-volt-meter";
+  nowPlate.setAttribute("aria-live", "polite");
+  const needPlate = document.createElement("div");
+  needPlate.className = "g-volt-meter";
+  needPlate.dataset.need = "";
+  needPlate.innerHTML = `<span class="g-volt-label">Потрібно</span><b class="g-volt-value">${volts(target)} В</b>`;
+  meters.append(nowPlate, needPlate);
+  root.appendChild(meters);
+
+  const vw = 320;
+  const cs = Math.min(54, Math.floor((vw - 8) / n));
+  const ox = (vw - n * cs) / 2;
+  const oy = 4;
+  // under the board, each block one gets has its own place
+  const ts = 44;
+  const gap = 8;
+  const perRow = Math.floor((vw - 8 + gap) / (ts + gap));
+  const rows = Math.ceil(blocks.length / perRow);
+  const trayY = oy + n * cs + 16;
+  const slot = (i: number): [number, number] => {
+    const row = Math.floor(i / perRow);
+    const inRow = Math.min(perRow, blocks.length - row * perRow);
+    const x0 = (vw - (inRow * ts + (inRow - 1) * gap)) / 2;
+    return [x0 + (i % perRow) * (ts + gap), trayY + row * (ts + gap)];
+  };
+  const vh = trayY + rows * (ts + gap) + 4;
+  const svg = svgRoot(root, vw, vh, "g-drag");
+  const line = Math.max(3, cs * 0.13);
+  /** A block carried is drawn above the finger, so the finger does not hide it. */
+  const lift = cs * 0.7;
+
+  /** The blocks on the board, but those `skip` leaves out: cell → the block there. */
+  const laid = (skip?: (i: number) => boolean) => {
+    const out = new Map<number, VoltBlock>();
+    blocks.forEach((b, i) => {
+      if (b.at !== null && !skip?.(i)) out.set(b.at, { ports: b.ports, value: b.value });
+    });
+    return out;
+  };
+  const cellAt = (x: number, y: number) => {
+    const c = Math.floor((x - ox) / cs);
+    const r = Math.floor((y - oy) / cs);
+    return c < 0 || r < 0 || c >= n || r >= n ? -1 : r * n + c;
+  };
+  const centre = (i: number): [number, number] => [
+    ox + ((i % n) + 0.5) * cs,
+    oy + (Math.floor(i / n) + 0.5) * cs,
+  ];
+  const portsAt = (i: number, on: ReadonlyMap<number, VoltBlock>) => {
+    const c = cells[i];
+    if (!c || c.kind === "lock") return 0;
+    return c.kind === "free" ? (on.get(i)?.ports ?? 0) : c.ports;
+  };
+
+  /**
+   * The turn of block `i` on `cell` that joins the most of what is around it — the current's end
+   * above all — reckoned without it (nor a block it would push off that cell) on the board.
+   */
+  const bestTurn = (cell: number, i: number) => {
+    const ports = (blocks[i] as (typeof blocks)[number]).ports;
+    const on = laid((j) => j === i || blocks[j]?.at === cell);
+    const t = voltTrace(p, on);
+    const end = t.path[t.path.length - 1];
+    let best = ports;
+    let score = -1;
+    for (const turn of voltTurns(ports)) {
+      let sc = 0;
+      for (const [dx, dy, bit, back] of DIRS) {
+        if (!(turn & bit)) continue;
+        const x = (cell % n) + dx;
+        const y = Math.floor(cell / n) + dy;
+        if (x < 0 || y < 0 || x >= n || y >= n) continue;
+        const next = y * n + x;
+        if (portsAt(next, on) & back) sc += next === end ? 3 : 1;
+      }
+      if (sc > score) {
+        score = sc;
+        best = turn;
+      }
+    }
+    return best;
+  };
+
+  const text = (
+    parent: Element,
+    x: number,
+    y: number,
+    value: string,
+    size: number,
+    color: string,
+  ) => {
+    const t = svgEl(
+      "text",
+      {
+        x,
+        y: y + size * 0.36,
+        "text-anchor": "middle",
+        style: `fill:${color};font:800 ${size}px Manrope Variable, sans-serif`,
+      },
+      parent,
+    );
+    t.textContent = value;
+  };
+
+  /**
+   * A numbered block: its wire comes in from each side it joins to the number in the middle. A
+   * fixed one lies flat, bolted down; one laid stands raised.
+   */
+  const drawBlock = (
+    x: number,
+    y: number,
+    s: number,
+    ports: number,
+    value: number,
+    color: string,
+    fixed: boolean,
+    extra = "",
+    /** How far the wire reaches out: to the edge on the board, short of it off the board. */
+    reach = 0.5,
+  ) => {
+    const g = svgEl("g", { style: extra }, svg);
+    const fill = fixed ? (value > 0 ? FIX_PLUS : FIX_MINUS) : value > 0 ? MOVE_PLUS : MOVE_MINUS;
+    svgEl(
+      "rect",
+      {
+        x: x + 2,
+        y: y + 2,
+        width: s - 4,
+        height: s - 4,
+        rx: s * 0.18,
+        style: fixed
+          ? `fill:${fill}`
+          : `fill:${fill};stroke:rgba(255, 255, 255, 0.2);stroke-width:1.5`,
+      },
+      g,
+    );
+    if (fixed)
+      for (const [bx, by] of [
+        [0.16, 0.16],
+        [0.84, 0.16],
+        [0.16, 0.84],
+        [0.84, 0.84],
+      ] as const)
+        svgEl(
+          "circle",
+          {
+            cx: x + bx * s,
+            cy: y + by * s,
+            r: Math.max(1.5, s * 0.035),
+            style: "fill:rgba(255,255,255,0.28)",
+          },
+          g,
+        );
+    const cx = x + s / 2;
+    const cy = y + s / 2;
+    for (const [dx, dy, bit] of DIRS)
+      if (ports & bit)
+        svgEl(
+          "line",
+          {
+            x1: cx + dx * s * 0.27,
+            y1: cy + dy * s * 0.27,
+            x2: cx + dx * s * reach,
+            y2: cy + dy * s * reach,
+            style: `stroke:${color};stroke-width:${Math.max(3, s * 0.13)};stroke-linecap:round`,
+          },
+          g,
+        );
+    text(g, cx, cy, signed(value), Math.max(13, Math.round(s * 0.36)), TEXT);
+    return g;
+  };
+
+  let drag: {
+    i: number;
+    x: number;
+    y: number;
+    sx: number;
+    sy: number;
+    moved: boolean;
+  } | null = null;
+  /** Where a block carried would land: a free cell (another block there goes back), else -1. */
+  const landing = (x: number, y: number) => {
+    const cell = cellAt(x, y - lift);
+    return cell >= 0 && cells[cell]?.kind === "free" ? cell : -1;
+  };
+
+  const draw = () => {
+    svg.replaceChildren();
+    const on = laid();
+    const t = voltTrace(p, on);
+    const ok = t.lit && t.sum === target;
+    const path = new Set(t.path);
+    // the plates: under what is needed, over it, even (not yet at the lamp), the lamp alight
+    const state = ok ? "ok" : t.sum < target ? "low" : t.sum > target ? "high" : "even";
+    nowPlate.dataset.state = state;
+    const say = {
+      ok: "лампа світить",
+      low: "менше, ніж потрібно",
+      high: "більше, ніж потрібно",
+      even: "рівно, ще до лампи",
+    }[state];
+    const arrow = { ok: "✓", low: "▼", high: "▲", even: "=" }[state];
+    nowPlate.innerHTML = `<span class="g-volt-label">Зараз</span><b class="g-volt-value">${volts(t.sum)} В</b><span class="g-volt-arrow" aria-hidden="true">${arrow}</span><span class="sr-only">${say}</span>`;
+    ctx.say(
+      "Обери блоки з числами й прокладай дріт від генератора до лампи · тап повертає блок, винеси за поле — прибереш",
+      t.lit && !ok ? "до лампи доходить не та напруга" : undefined,
+    );
+
+    cells.forEach((cell, i) => {
+      const x = ox + (i % n) * cs;
+      const y = oy + Math.floor(i / n) * cs;
+      const [cx, cy] = centre(i);
+      const color = cell.kind === "source" || path.has(i) ? LIGHT : WIRE_OFF;
+      if (cell.kind === "block") {
+        drawBlock(x, y, cs, cell.ports, cell.value, color, true);
+        return;
+      }
+      const fill = cell.kind === "lock" ? PILLAR : cell.kind === "source" ? SOURCE_CELL : TILE;
+      svgEl(
+        "rect",
+        { x: x + 1.5, y: y + 1.5, width: cs - 3, height: cs - 3, rx: 8, style: `fill:${fill}` },
+        svg,
+      );
+      if (cell.kind === "lock") {
+        // locked: nothing goes here
+        svgEl("circle", { cx, cy, r: cs * 0.18, style: `fill:${BOX}` }, svg);
+        return;
+      }
+      if (cell.kind === "free") return;
+      for (const [dx, dy, bit] of DIRS)
+        if (cell.ports & bit)
+          svgEl(
+            "line",
+            {
+              x1: cx,
+              y1: cy,
+              x2: cx + (dx * cs) / 2,
+              y2: cy + (dy * cs) / 2,
+              style: `stroke:${cell.kind === "lamp" ? (t.lit ? LIGHT : WIRE_OFF) : LIGHT};stroke-width:${line};stroke-linecap:round`,
+            },
+            svg,
+          );
+      if (cell.kind === "source") {
+        // the generator: a battery, always on
+        const bw = cs * 0.34;
+        const bh = cs * 0.5;
+        svgEl(
+          "rect",
+          { x: cx - bw / 2, y: cy - bh / 2, width: bw, height: bh, rx: 3, style: `fill:${LIGHT}` },
+          svg,
+        );
+        svgEl(
+          "rect",
+          {
+            x: cx - bw / 4,
+            y: cy - bh / 2 - 3,
+            width: bw / 2,
+            height: 4,
+            rx: 1.5,
+            style: `fill:${LIGHT}`,
+          },
+          svg,
+        );
+        text(svg, cx, cy, "+", 14, INK);
+      } else {
+        // the lamp with the voltage it needs; alight once it gets exactly that
+        svgEl(
+          "circle",
+          {
+            cx,
+            cy,
+            r: cs * 0.3,
+            style: `fill:${ok ? LIGHT : TILE};stroke:${ok ? LIGHT : WIRE_OFF};stroke-width:2`,
+          },
+          svg,
+        );
+        text(svg, cx, cy, volts(target), 14, ok ? INK : TEXT);
+      }
+    });
+    // the blocks laid on the board (one carried away leaves its cell empty)
+    blocks.forEach((b, i) => {
+      if (b.at === null || (drag?.moved && drag.i === i)) return;
+      const x = ox + (b.at % n) * cs;
+      const y = oy + Math.floor(b.at / n) * cs;
+      drawBlock(x, y, cs, b.ports, b.value, path.has(b.at) ? LIGHT : WIRE_OFF, false);
+    });
+
+    // the current running along the wire: sparks from the generator's edge on (to the lamp's
+    // edge once there), under the numbers of the blocks it runs through
+    if (t.path.length > 1) {
+      const period = cs * 0.34;
+      const points = t.path.map(centre);
+      const mid = (a: [number, number], b: [number, number]) =>
+        [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2] as [number, number];
+      points[0] = mid(points[0] as [number, number], points[1] as [number, number]);
+      if (t.lit)
+        points[points.length - 1] = mid(
+          points[points.length - 1] as [number, number],
+          points[points.length - 2] as [number, number],
+        );
+      const flow = svgEl(
+        "polyline",
+        {
+          points: points.map((pt) => pt.join(",")).join(" "),
+          style: `fill:none;stroke:${SPARK};stroke-width:${line * 0.55};stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:0.1 ${period}`,
+        },
+        svg,
+      );
+      if (!still)
+        flow.animate([{ strokeDashoffset: period }, { strokeDashoffset: 0 }], {
+          duration: 420,
+          iterations: Number.POSITIVE_INFINITY,
+        });
+      for (const i of t.path) {
+        const cell = cells[i];
+        const block = cell?.kind === "block" ? cell : on.get(i);
+        if (!block || cell?.kind === "lamp" || cell?.kind === "source") continue;
+        const fixed = cell?.kind === "block";
+        const [cx, cy] = centre(i);
+        svgEl(
+          "rect",
+          {
+            x: cx - cs * 0.26,
+            y: cy - cs * 0.22,
+            width: cs * 0.52,
+            height: cs * 0.44,
+            rx: 6,
+            style: `fill:${fixed ? (block.value > 0 ? FIX_PLUS : FIX_MINUS) : block.value > 0 ? MOVE_PLUS : MOVE_MINUS}`,
+          },
+          svg,
+        );
+        text(svg, cx, cy, signed(block.value), Math.max(13, Math.round(cs * 0.36)), TEXT);
+      }
+    }
+
+    // next to the board: each block one gets in its place (an empty place: it lies on the board)
+    blocks.forEach((b, i) => {
+      const [x, y] = slot(i);
+      if (b.at !== null || (drag?.moved && drag.i === i)) {
+        svgEl(
+          "rect",
+          {
+            x: x + 2,
+            y: y + 2,
+            width: ts - 4,
+            height: ts - 4,
+            rx: ts * 0.18,
+            style: "fill:none;stroke:rgba(242,239,234,0.12);stroke-width:1.5;stroke-dasharray:4 4",
+          },
+          svg,
+        );
+        return;
+      }
+      drawBlock(x, y, ts, b.ports, b.value, WIRE_OFF, false, "", 0.42);
+    });
+
+    // a block carried: where it would land — shown faintly there, turned as it would lie (turned
+    // to join what is around it; put back where it was, as it was) — and the block itself, turned
+    // so too, above the finger
+    if (drag?.moved) {
+      const b = blocks[drag.i] as (typeof blocks)[number];
+      const cell = landing(drag.x, drag.y);
+      const ports = cell >= 0 && cell !== b.at ? bestTurn(cell, drag.i) : b.ports;
+      if (cell >= 0) {
+        const [x, y] = centre(cell);
+        drawBlock(x - cs / 2, y - cs / 2, cs, ports, b.value, WIRE_OFF, false, "opacity:0.4");
+        svgEl(
+          "rect",
+          {
+            x: x - cs / 2 + 2,
+            y: y - cs / 2 + 2,
+            width: cs - 4,
+            height: cs - 4,
+            rx: 8,
+            style: `fill:none;stroke:${LIGHT};stroke-width:2;stroke-dasharray:5 4`,
+          },
+          svg,
+        );
+      }
+      drawBlock(
+        drag.x - cs / 2,
+        drag.y - lift - cs / 2,
+        cs,
+        ports,
+        b.value,
+        WIRE_OFF,
+        false,
+        "opacity:0.92;filter:drop-shadow(0 8px 10px rgba(0,0,0,0.5))",
+        0.42,
+      );
+    }
+  };
+
+  const check = () => {
+    const t = voltTrace(p, laid());
+    if (!won && t.lit && t.sum === target) {
+      won = true;
+      ctx.done(`рівно ${target} В`);
+    }
+  };
+
+  /** The block under the finger: one laid on the board, else one in its place next to it. */
+  const blockAt = (x: number, y: number) => {
+    const cell = cellAt(x, y);
+    if (cell >= 0) return blocks.findIndex((b) => b.at === cell);
+    return blocks.findIndex((b, i) => {
+      if (b.at !== null) return false;
+      const [sx, sy] = slot(i);
+      return x >= sx && x <= sx + ts && y >= sy && y <= sy + ts;
+    });
+  };
+
+  svg.addEventListener("pointerdown", (e) => {
+    if (won) return;
+    const [x, y] = pointIn(svg, e, vw, vh);
+    const i = blockAt(x, y);
+    if (i < 0) return;
+    drag = { i, x, y, sx: x, sy: y, moved: false };
+    svg.setPointerCapture(e.pointerId);
+  });
+  svg.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    const [x, y] = pointIn(svg, e, vw, vh);
+    drag.x = x;
+    drag.y = y;
+    if (!drag.moved && Math.hypot(x - drag.sx, y - drag.sy) > 6) drag.moved = true;
+    if (drag.moved) draw();
+  });
+  svg.addEventListener("pointerup", () => {
+    if (!drag) return;
+    const d = drag;
+    drag = null;
+    const b = blocks[d.i] as (typeof blocks)[number];
+    if (!d.moved) {
+      // a tap turns the block, wherever it lies
+      const turns = voltTurns(b.ports);
+      b.ports = turns[(turns.indexOf(b.ports) + 1) % turns.length] as number;
+    } else {
+      const cell = landing(d.x, d.y);
+      if (cell >= 0) {
+        // laid there, turned to join what is around it (put back where it was, as it was); a
+        // block that lay there goes back next to the board
+        if (cell !== b.at) b.ports = bestTurn(cell, d.i);
+        for (const o of blocks) if (o !== b && o.at === cell) o.at = null;
+        b.at = cell;
+      } else if (cellAt(d.x, d.y - lift) < 0) b.at = null;
+    }
+    draw();
+    check();
+  });
+  svg.addEventListener("pointercancel", () => {
+    drag = null;
+    draw();
+  });
+
+  draw();
+  return undefined;
 }
 
 // ── Батарейки по зарядках ───────────────────────────────────────────────────────────────────

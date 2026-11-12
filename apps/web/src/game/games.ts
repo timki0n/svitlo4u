@@ -14,6 +14,7 @@ import {
   mountPets,
   mountSlide,
   mountUntangle,
+  mountVolt,
 } from "./mount.ts";
 import {
   batteryPuzzle,
@@ -27,6 +28,7 @@ import {
   type Tier,
   tierOf,
   untanglePuzzle,
+  voltPuzzle,
 } from "./puzzles.ts";
 import { type Rng, ri, rngOf } from "./rng.ts";
 
@@ -59,6 +61,7 @@ export const GAMES: readonly GameDef[] = [
   game("charge", "Розклади заряд", chargePuzzle, mountCharge),
   game("pack", "Тривожна валізка", packPuzzle, mountPack),
   game("batteries", "Батарейки по зарядках", batteryPuzzle, mountBatteries),
+  game("volt", "Точна напруга", voltPuzzle, mountVolt),
 ];
 
 export const TIER_LABEL = ["легкий рівень", "середній рівень", "важкий рівень"] as const;

@@ -1247,3 +1247,262 @@ export function batteryPuzzle(rng: Rng, tier: Tier): BatteryPuzzle {
   }
   return (best as { p: BatteryPuzzle }).p;
 }
+
+// ── «Точна напруга»: numbered blocks from the generator to the lamp, exactly what it needs ────
+
+/**
+ * A cell of the board: free for a block, locked, or fixed in place — the generator (one port),
+ * the lamp (one port), a numbered block of its own. `ports`: the sides a cell joins, as in
+ * «Ланцюг» (N E S W bits).
+ */
+export type VoltCell =
+  | { kind: "free" }
+  | { kind: "lock" }
+  | { kind: "source"; ports: number }
+  | { kind: "lamp"; ports: number }
+  | { kind: "block"; ports: number; value: number };
+/** A block one lays: a straight wire or a corner, and the number it adds (or takes away). */
+export type VoltBlock = { ports: number; value: number };
+export type VoltPuzzle = {
+  /** A square board, n × n. */
+  n: number;
+  cells: VoltCell[];
+  /** The voltage the lamp needs. */
+  target: number;
+  /** The blocks next to the board, each turned some way; above the easy floors, not all needed. */
+  blocks: VoltBlock[];
+  /** How it was made: which block lies on which free cell, turned how. */
+  solution: { block: number; cell: number; ports: number }[];
+};
+/** Where the current went from the generator: the cells in order, what the blocks added. */
+export type VoltTrace = { path: number[]; sum: number; lit: boolean };
+
+/** A straight wire's two turns, a corner's four. */
+export const VOLT_STRAIGHT: readonly number[] = [E | W, N | S];
+export const VOLT_CORNER: readonly number[] = [N | E, E | S, S | W, W | N];
+
+/**
+ * Per tier: the board, the wire's run (cells), fixed blocks on it and off it, locked cells, blocks
+ * handed over not needed.
+ */
+export const VOLT_SIZES = [
+  { n: 4, len: [4, 6], fixed: 1, fixedOff: 0, locks: 1, spare: 1 },
+  { n: 5, len: [5, 8], fixed: 1, fixedOff: 1, locks: 2, spare: 2 },
+  { n: 5, len: [7, 10], fixed: 2, fixedOff: 1, locks: 2, spare: 3 },
+] as const;
+/** What a block may carry: on the easy floors only additions, higher up some that take away. */
+const VOLT_VALUES = [
+  [1, 2, 3],
+  [-2, -1, 1, 2, 3],
+  [-3, -2, -1, 1, 2, 3, 4],
+] as const;
+/** Above the easy floors the lamp needs 1–9. */
+export const VOLT_TARGET = [1, 9] as const;
+
+/** The other turns of the same kind of wire: straight stays straight, a corner a corner. */
+export const voltTurns = (ports: number): readonly number[] =>
+  VOLT_STRAIGHT.includes(ports) ? VOLT_STRAIGHT : VOLT_CORNER;
+
+/**
+ * Where the current goes: out of the generator's port, into each next cell joined back to it and
+ * out of its other side, adding the numbers of the blocks it runs through (fixed ones and those
+ * laid) — until the lamp, or a side nothing joins. `laid`: free cell → the block on it.
+ */
+export function voltTrace(
+  p: Pick<VoltPuzzle, "n" | "cells">,
+  laid: ReadonlyMap<number, VoltBlock>,
+): VoltTrace {
+  const { n, cells } = p;
+  const portsOf = (i: number) => {
+    const c = cells[i];
+    if (!c || c.kind === "lock") return 0;
+    return c.kind === "free" ? (laid.get(i)?.ports ?? 0) : c.ports;
+  };
+  const source = cells.findIndex((c) => c.kind === "source");
+  const path = [source];
+  let sum = 0;
+  let at = source;
+  let came = 0;
+  for (let guard = 0; guard < n * n; guard++) {
+    const out = portsOf(at) & ~came;
+    const dir = DIRS.find(([, , bit]) => out & bit);
+    if (!dir) break;
+    const [dx, dy, , back] = dir;
+    const x = (at % n) + dx;
+    const y = Math.floor(at / n) + dy;
+    if (x < 0 || y < 0 || x >= n || y >= n) break;
+    const next = y * n + x;
+    if (!(portsOf(next) & back) || path.includes(next)) break;
+    path.push(next);
+    const c = cells[next] as VoltCell;
+    if (c.kind === "lamp") return { path, sum, lit: true };
+    sum += c.kind === "block" ? c.value : (laid.get(next)?.value ?? 0);
+    at = next;
+    came = back;
+  }
+  return { path, sum, lit: false };
+}
+
+/** The side of `a` that faces `b`, a neighbour. */
+function voltSide(n: number, a: number, b: number): number {
+  const dx = (b % n) - (a % n);
+  const dy = Math.floor(b / n) - Math.floor(a / n);
+  return (DIRS.find(([x, y]) => x === dx && y === dy) as Dir)[2];
+}
+
+/** A cell on the board's edge (not a corner) facing in: the cell, its port, the one inside. */
+function voltEdge(rng: Rng, n: number): [cell: number, port: number, inner: number] {
+  const k = 1 + ri(rng, n - 2);
+  const side = ri(rng, 4);
+  if (side === 0) return [k, S, n + k];
+  if (side === 1) return [k * n + n - 1, W, k * n + n - 2];
+  if (side === 2) return [(n - 1) * n + k, N, (n - 2) * n + k];
+  return [k * n, E, k * n + 1];
+}
+
+/** A run of `len` cells from `a` to `b`, wandering, keeping off `avoid`; or none. */
+function voltRun(rng: Rng, n: number, a: number, b: number, len: number, avoid: Set<number>) {
+  const dist = (cell: number) =>
+    Math.abs(Math.floor(cell / n) - Math.floor(b / n)) + Math.abs((cell % n) - (b % n));
+  const run = [a];
+  const seen = new Set([...avoid, a]);
+  let budget = 4000;
+  const go = (): boolean => {
+    if (budget-- <= 0) return false;
+    const cell = run[run.length - 1] as number;
+    if (run.length === len) return cell === b;
+    if (cell === b) return false;
+    for (const [dx, dy] of shuffle(rng, DIRS)) {
+      const x = (cell % n) + dx;
+      const y = Math.floor(cell / n) + dy;
+      const next = y * n + x;
+      if (x < 0 || y < 0 || x >= n || y >= n || seen.has(next)) continue;
+      // still able to reach the lamp in the steps left
+      if (dist(next) > len - run.length - 1) continue;
+      seen.add(next);
+      run.push(next);
+      if (go()) return true;
+      run.pop();
+      seen.delete(next);
+    }
+    return false;
+  };
+  return go() ? run : null;
+}
+
+/**
+ * The generator and the lamp on the board's edge, a wire's run between them made of numbered
+ * blocks whose numbers add up to what the lamp needs: some of them fixed on the board (one builds
+ * round them), the rest handed over — with more next to them: alike in shape but numbered otherwise,
+ * so one chooses by the number. Above the easy floors some numbers take away; fixed blocks off the
+ * run stand as temptations or in the way, and some cells are locked.
+ */
+export function voltPuzzle(rng: Rng, tier: Tier): VoltPuzzle {
+  const s = VOLT_SIZES[tier] as (typeof VOLT_SIZES)[number];
+  const { n } = s;
+  const values = VOLT_VALUES[tier] as readonly number[];
+  const pick = () => values[ri(rng, values.length)] as number;
+  for (;;) {
+    const [source, sourcePort, a] = voltEdge(rng, n);
+    const [lamp, lampPort, b] = voltEdge(rng, n);
+    if (lamp === source || a === b || a === lamp || b === source) continue;
+    const least = Math.abs(Math.floor(a / n) - Math.floor(b / n)) + Math.abs((a % n) - (b % n)) + 1;
+    const lengths: number[] = [];
+    for (let len = s.len[0]; len <= s.len[1]; len++)
+      if (len >= least && (len - least) % 2 === 0) lengths.push(len);
+    if (lengths.length === 0) continue;
+    const run = voltRun(
+      rng,
+      n,
+      a,
+      b,
+      lengths[ri(rng, lengths.length)] as number,
+      new Set([source, lamp]),
+    );
+    if (!run) continue;
+    // each cell of the run joins the one before it and the one after
+    const ports = run.map(
+      (cell, i) =>
+        voltSide(n, cell, i === 0 ? source : (run[i - 1] as number)) |
+        voltSide(n, cell, i === run.length - 1 ? lamp : (run[i + 1] as number)),
+    );
+    // the run's numbers: on the easy floors any, the lamp needing their sum; above, some negative
+    // and the lamp needing 1–9
+    let vals: number[] = [];
+    for (let v = 0; v < 40 && vals.length === 0; v++) {
+      const tried = run.map(pick);
+      const sum = tried.reduce((x, y) => x + y, 0);
+      if (
+        tier === 0 ||
+        (tried.some((x) => x < 0) && sum >= VOLT_TARGET[0] && sum <= VOLT_TARGET[1])
+      )
+        vals = tried;
+    }
+    if (vals.length === 0) continue;
+    const target = vals.reduce((x, y) => x + y, 0);
+    // fixed blocks on the run, off its ends (the current would read them at once)
+    const inner = shuffle(
+      rng,
+      run.map((_, i) => i).filter((i) => i > 0 && i < run.length - 1),
+    );
+    if (inner.length < s.fixed) continue;
+    const fixed = inner.slice(0, s.fixed);
+    const cells: VoltCell[] = Array.from({ length: n * n }, () => ({ kind: "free" }));
+    cells[source] = { kind: "source", ports: sourcePort };
+    cells[lamp] = { kind: "lamp", ports: lampPort };
+    for (const i of fixed)
+      cells[run[i] as number] = {
+        kind: "block",
+        ports: ports[i] as number,
+        value: vals[i] as number,
+      };
+    // off the run: fixed blocks near it first, then locked cells
+    const onRun = new Set(run);
+    const near = (cell: number) =>
+      run.some(
+        (r) =>
+          Math.abs(Math.floor(r / n) - Math.floor(cell / n)) + Math.abs((r % n) - (cell % n)) === 1,
+      );
+    const off = shuffle(
+      rng,
+      cells.map((_, i) => i).filter((i) => !onRun.has(i) && cells[i]?.kind === "free"),
+    ).sort((x, y) => Number(near(y)) - Number(near(x)));
+    for (const cell of off.slice(0, s.fixedOff))
+      cells[cell] = { kind: "block", ports: VOLT_STRAIGHT[ri(rng, 2)] as number, value: pick() };
+    for (const cell of shuffle(rng, off.slice(s.fixedOff)).slice(0, s.locks))
+      cells[cell] = { kind: "lock" };
+    // the blocks one gets: those of the run, and spares shaped like some of them, numbered otherwise
+    const needed = run.flatMap((cell, i) =>
+      fixed.includes(i) ? [] : [{ cell, ports: ports[i] as number, value: vals[i] as number }],
+    );
+    const spares = shuffle(rng, needed)
+      .slice(0, s.spare)
+      .map((like) => {
+        let value = pick();
+        while (value === like.value) value = pick();
+        return { ports: like.ports, value };
+      });
+    const all = [...needed.map(({ ports: q, value }) => ({ ports: q, value })), ...spares];
+    const order = shuffle(rng, [...all.keys()]);
+    const blocks = order.map((i) => {
+      const block = all[i] as VoltBlock;
+      const turns = voltTurns(block.ports);
+      return { ports: turns[ri(rng, turns.length)] as number, value: block.value };
+    });
+    const solution = needed.map((x, i) => ({
+      block: order.indexOf(i),
+      cell: x.cell,
+      ports: x.ports,
+    }));
+    const p: VoltPuzzle = { n, cells, target, blocks, solution };
+    const laid = new Map(
+      solution.map((x) => [
+        x.cell,
+        { ports: x.ports, value: (blocks[x.block] as VoltBlock).value },
+      ]),
+    );
+    const trace = voltTrace(p, laid);
+    if (!trace.lit || trace.sum !== target) continue;
+    return p;
+  }
+}
