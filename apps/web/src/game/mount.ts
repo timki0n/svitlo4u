@@ -30,6 +30,9 @@ import {
   type Point,
   rotate,
   type SlidePuzzle,
+  SNAKE_CLEAR,
+  SNAKE_DIRS,
+  type SnakePuzzle,
   type SparkPuzzle,
   STORE_LEVELS,
   STORE_NAMES,
@@ -38,6 +41,9 @@ import {
   type SudokuPuzzle,
   slideFits,
   slideGrid,
+  snakeSpot,
+  snakeStart,
+  snakeStep,
   sparkDistance,
   sparkPath,
   sparkSnap,
@@ -52,6 +58,7 @@ import {
   voltTrace,
   voltTurns,
 } from "./puzzles.ts";
+import { rngOf } from "./rng.ts";
 
 export type GameCtx = {
   /** The line above the board; `warn` is shown after it in red. */
@@ -3498,4 +3505,542 @@ export function mountMemo(root: HTMLElement, p: MemoPuzzle, ctx: GameCtx): Clean
   paint();
   status();
   return () => window.clearTimeout(dark);
+}
+
+// ── Змійка ──────────────────────────────────────────────────────────────────────────────────
+
+/** A bolt's outline, on a cell from -0.5 to 0.5 both ways. */
+const BOLT = [
+  [0.14, -0.46],
+  [-0.22, 0.06],
+  [0.02, 0.06],
+  [-0.12, 0.46],
+  [0.26, -0.1],
+  [0.02, -0.1],
+  [0.2, -0.46],
+] as const;
+
+export function mountSnake(root: HTMLElement, p: SnakePuzzle, ctx: GameCtx): Cleanup {
+  const canvas = document.createElement("canvas");
+  canvas.className = "g-snake-board";
+  canvas.setAttribute("aria-label", "Дріт повзе полем; свайп або стрілки повертають його");
+  root.appendChild(canvas);
+  const g = canvas.getContext("2d");
+  if (!g) return undefined;
+  const { cols, rows } = p;
+  const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+
+  type Mode = "ready" | "run" | "out" | "won";
+  let mode: Mode = "ready";
+  let since = performance.now();
+  let attempt = 1;
+  let rng = rngOf(p.seed);
+  let s = snakeStart(p, rng);
+  /** Where the wire lay before its last step: it is drawn sliding from there. */
+  let before = s.body.slice();
+  /** Turns asked for, taken one a step. */
+  let turns: number[] = [];
+  let lastStep = since;
+  let lastPuddle = since;
+  /** When the bolt came, and when it goes if not eaten (it waits at the start). */
+  let boltFrom = since;
+  let boltUntil = Number.POSITIVE_INFINITY;
+  let died: "wall" | "self" | "puddle" | null = null;
+  let reported = false;
+  let raf = 0;
+  let lastFrame = since;
+  let said = "";
+  type Bit = {
+    x: number;
+    y: number;
+    vx: number;
+    vy: number;
+    age: number;
+    life: number;
+    color: string;
+  };
+  let bits: Bit[] = [];
+
+  const stepMs = () => 1000 / (p.speed + p.speedup * s.score);
+  const say = (warn?: string) => {
+    const tries = attempt > 1 ? ` · спроба ${attempt}` : "";
+    // the count and the tries on a line of their own
+    const text = `Свайпай і дріт поповзе в напрямок свайпу. Збирай блискавки, калюжі оминай\n${s.score} з ${p.goal}${tries}`;
+    if (text + (warn ?? "") === said) return;
+    said = text + (warn ?? "");
+    ctx.say(text, warn);
+  };
+  const burst = (cell: number, count: number, colors: string[], speed: number) => {
+    const x = (cell % cols) + 0.5;
+    const y = Math.floor(cell / cols) + 0.5;
+    for (let k = 0; k < count; k++) {
+      const a = Math.random() * Math.PI * 2;
+      const v = speed * (0.4 + Math.random() * 0.8);
+      bits.push({
+        x,
+        y,
+        vx: Math.cos(a) * v,
+        vy: Math.sin(a) * v,
+        age: 0,
+        life: 0.35 + Math.random() * 0.4,
+        color: colors[k % colors.length] as string,
+      });
+    }
+  };
+
+  const turn = (d: number) => {
+    if (mode === "ready") {
+      if ((d + 2) % 4 === s.dir) return;
+      mode = "run";
+      const now = performance.now();
+      since = now;
+      lastStep = now;
+      lastPuddle = now;
+      boltFrom = now;
+      boltUntil = now + p.boltLife * 1000;
+      turns = [d];
+      say();
+      return;
+    }
+    if (mode !== "run") return;
+    const last = turns.at(-1) ?? s.dir;
+    if (d === last || (d + 2) % 4 === last || turns.length >= 2) return;
+    turns.push(d);
+  };
+
+  const step = (now: number) => {
+    const d = turns.shift() ?? s.dir;
+    const next = snakeStep(p, s, d, rng);
+    if (next.died) {
+      died = next.died;
+      mode = "out";
+      since = now;
+      s = next.state;
+      before = s.body.slice();
+      burst(s.body[0] as number, 30, ["#fff3c0", "#ffb347", "#ff6b57"], 6);
+      if (died === "puddle") burst(s.body[0] as number, 16, ["#9fd0ff", "#4da3ff"], 4);
+      navigator.vibrate?.([30, 40, 30]);
+      say(
+        died === "wall"
+          ? "дріт врізався в стіну"
+          : died === "self"
+            ? "дріт заплутався сам у собі"
+            : "вода й струм: коротке замикання",
+      );
+      return;
+    }
+    before = s.body.slice();
+    if (next.ate) {
+      before.push(before.at(-1) as number);
+      burst(s.bolt, 14, ["#fff3c0", "#ffd27a"], 4);
+      navigator.vibrate?.(12);
+    }
+    s = next.state;
+    if (next.ate) {
+      boltFrom = now;
+      boltUntil = now + p.boltLife * 1000;
+      say();
+    }
+    if (s.score >= p.goal) {
+      mode = "won";
+      since = now;
+      burst(s.body[0] as number, 50, ["#fff3c0", "#ffd27a", "#ff9a3d"], 7);
+    }
+  };
+
+  // ── drawing ──
+  let cw = 0;
+  let u = 0;
+  const cx = (cell: number) => ((cell % cols) + 0.5) * u;
+  const cy = (cell: number) => (Math.floor(cell / cols) + 0.5) * u;
+  const glow = (x: number, y: number, r: number, stops: [number, string][]) => {
+    const grad = g.createRadialGradient(x, y, 0, x, y, r);
+    for (const [at, color] of stops) grad.addColorStop(at, color);
+    g.fillStyle = grad;
+    g.beginPath();
+    g.arc(x, y, r, 0, Math.PI * 2);
+    g.fill();
+  };
+
+  const draw = (now: number) => {
+    const w = Math.round(canvas.clientWidth);
+    if (!w) return;
+    if (w !== cw) {
+      cw = w;
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      canvas.width = Math.round(cw * dpr);
+      canvas.height = Math.round(((cw * rows) / cols) * dpr);
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      u = cw / cols;
+    }
+    const ch = u * rows;
+    g.fillStyle = "#16171b";
+    g.fillRect(0, 0, cw, ch);
+    g.fillStyle = "rgba(242, 239, 234, 0.06)";
+    for (let c = 0; c < cols * rows; c++) {
+      g.beginPath();
+      g.arc(cx(c), cy(c), 1.1, 0, Math.PI * 2);
+      g.fill();
+    }
+    // the bolt, its glow breathing; like a puddle it grows in, a ring round it runs out, it
+    // blinks before it goes (waiting at the start, it stays, its ring full)
+    if (s.bolt >= 0) {
+      const bx = cx(s.bolt);
+      const by = cy(s.bolt);
+      const born = Math.min(1, (now - boltFrom) / 250);
+      const left = Number.isFinite(boltUntil)
+        ? Math.max(0, (boltUntil - now) / (boltUntil - boltFrom))
+        : 1;
+      const blink =
+        boltUntil - now < 900 && !still ? 0.45 + 0.55 * Math.abs(Math.sin(now / 90)) : 1;
+      g.globalAlpha = blink;
+      g.globalCompositeOperation = "lighter";
+      glow(bx, by, u * (0.8 + 0.1 * Math.sin(now / 250)) * born, [
+        [0, "rgba(255, 210, 122, 0.45)"],
+        [1, "rgba(255, 160, 60, 0)"],
+      ]);
+      g.globalCompositeOperation = "source-over";
+      g.fillStyle = "#ffd27a";
+      g.beginPath();
+      BOLT.forEach(([x, y], k) => {
+        if (k) g.lineTo(bx + x * u * 0.9 * born, by + y * u * 0.9 * born);
+        else g.moveTo(bx + x * u * 0.9 * born, by + y * u * 0.9 * born);
+      });
+      g.closePath();
+      g.fill();
+      g.strokeStyle = "rgba(255, 210, 122, 0.6)";
+      g.lineWidth = 2;
+      g.beginPath();
+      g.arc(bx, by, u * 0.47, -Math.PI / 2, -Math.PI / 2 + left * Math.PI * 2);
+      g.stroke();
+      g.globalAlpha = 1;
+    }
+    // the puddles: a drop of water each, a ring round it running out, blinking at the end
+    for (const w of s.puddles) {
+      const born = Math.min(1, (now - w.from) / 250);
+      const left = Math.max(0, (w.until - now) / (w.until - w.from));
+      const blink = w.until - now < 900 ? 0.45 + 0.55 * Math.abs(Math.sin(now / 90)) : 1;
+      const x = cx(w.cell);
+      const y = cy(w.cell);
+      const k = u * 0.82 * born;
+      g.globalAlpha = blink;
+      g.fillStyle = "rgba(77, 163, 255, 0.18)";
+      g.beginPath();
+      g.ellipse(x, y + u * 0.22, u * 0.42 * born, u * 0.14 * born, 0, 0, Math.PI * 2);
+      g.fill();
+      g.fillStyle = "#4da3ff";
+      g.beginPath();
+      g.moveTo(x, y - 0.44 * k);
+      g.bezierCurveTo(
+        x + 0.18 * k,
+        y - 0.18 * k,
+        x + 0.32 * k,
+        y + 0.02 * k,
+        x + 0.32 * k,
+        y + 0.14 * k,
+      );
+      g.arc(x, y + 0.14 * k, 0.32 * k, 0, Math.PI);
+      g.bezierCurveTo(x - 0.32 * k, y + 0.02 * k, x - 0.18 * k, y - 0.18 * k, x, y - 0.44 * k);
+      g.fill();
+      g.fillStyle = "rgba(255, 255, 255, 0.55)";
+      g.beginPath();
+      g.arc(x - 0.11 * k, y + 0.08 * k, 0.07 * k, 0, Math.PI * 2);
+      g.fill();
+      g.strokeStyle = "rgba(77, 163, 255, 0.55)";
+      g.lineWidth = 2;
+      g.beginPath();
+      g.arc(x, y, u * 0.47, -Math.PI / 2, -Math.PI / 2 + left * Math.PI * 2);
+      g.stroke();
+      g.globalAlpha = 1;
+    }
+    // the cable: a round white cord, its shadow on the board, shaded and lit like a tube, a bare
+    // copper end at its tail. It slides along a track that stays put — through the middle of each
+    // cell it lies on (and the one its tail is leaving), each corner a quarter circle — so its bends
+    // hold their shape as it goes (moving each cell's point on its own made them shake)
+    const t = mode === "run" ? Math.min(1, (now - lastStep) / stepMs()) : 1;
+    const track = [...s.body, before.at(-1) ?? (s.body.at(-1) as number)].map(
+      (c) => [cx(c), cy(c)] as const,
+    );
+    const n = track.length - 1;
+    const mid = (k: number) => {
+      const [ax, ay] = track[k] as readonly [number, number];
+      const [bx, by] = track[k + 1] as readonly [number, number];
+      return [(ax + bx) / 2, (ay + by) / 2] as const;
+    };
+    const line = (a: readonly [number, number], b: readonly [number, number], f: number) =>
+      [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f] as const;
+    /** The point `q` cells along the track from its head end. */
+    const along = (q: number): readonly [number, number] => {
+      if (q <= 0.5) return line(track[0] as readonly [number, number], mid(0), q / 0.5);
+      if (q >= n - 0.5)
+        return line(mid(n - 1), track[n] as readonly [number, number], (q - (n - 0.5)) / 0.5);
+      // round cell k: from the middle of its edge on one side to the middle of the other
+      const k = Math.round(q);
+      const f = q - (k - 0.5);
+      const a = mid(k - 1);
+      const b = mid(k);
+      const [px, py] = track[k] as readonly [number, number];
+      if (Math.abs((a[0] - px) * (b[1] - py) - (a[1] - py) * (b[0] - px)) < 1e-6)
+        return line(a, b, f);
+      // a corner: a quarter circle about the cell's corner between the two
+      const qx = a[0] + b[0] - px;
+      const qy = a[1] + b[1] - py;
+      const a0 = Math.atan2(a[1] - qy, a[0] - qx);
+      let turn = Math.atan2(b[1] - qy, b[0] - qx) - a0;
+      if (turn > Math.PI) turn -= Math.PI * 2;
+      if (turn < -Math.PI) turn += Math.PI * 2;
+      const r = Math.hypot(a[0] - qx, a[1] - qy);
+      return [qx + Math.cos(a0 + turn * f) * r, qy + Math.sin(a0 + turn * f) * r] as const;
+    };
+    // the head is `1 - t` cells down the track, the tail `n - t`: the length never changes
+    const q0 = 1 - t;
+    const q1 = n - t;
+    const points: (readonly [number, number])[] = [];
+    for (let q = q0; q < q1; q += 0.125) points.push(along(q));
+    points.push(along(q1));
+    const fade = mode === "out" ? Math.max(0.25, 1 - (now - since) / 700) : 1;
+    g.globalAlpha = fade;
+    g.lineJoin = "round";
+    g.lineCap = "round";
+    const cord = (ox = 0, oy = 0) => {
+      g.beginPath();
+      points.forEach(([x, y], k) => {
+        if (k) g.lineTo(x + ox, y + oy);
+        else g.moveTo(x + ox, y + oy);
+      });
+    };
+    const thick = u * 0.46;
+    cord(1.5, 2.5);
+    g.strokeStyle = "rgba(0, 0, 0, 0.45)";
+    g.lineWidth = thick + 2;
+    g.stroke();
+    const [tx, ty] = along(q1);
+    const [px, py] = along(Math.max(q0, q1 - 0.1));
+    const tl = Math.hypot(tx - px, ty - py) || 1;
+    g.strokeStyle = "#c98a4b";
+    g.lineWidth = thick * 0.4;
+    g.beginPath();
+    g.moveTo(tx, ty);
+    g.lineTo(tx + ((tx - px) / tl) * u * 0.34, ty + ((ty - py) / tl) * u * 0.34);
+    g.stroke();
+    cord();
+    g.strokeStyle = mode === "won" ? "#c9762c" : "#8b8f99";
+    g.lineWidth = thick;
+    g.stroke();
+    g.strokeStyle = mode === "won" ? "#ffb35c" : "#d3d6dd";
+    g.lineWidth = thick * 0.74;
+    g.stroke();
+    cord(-thick * 0.14, -thick * 0.14);
+    g.strokeStyle = "rgba(255, 255, 255, 0.7)";
+    g.lineWidth = thick * 0.18;
+    g.stroke();
+    if (mode === "won") {
+      g.globalCompositeOperation = "lighter";
+      cord();
+      g.strokeStyle = `rgba(255, 170, 70, ${0.25 + 0.15 * Math.sin(now / 200)})`;
+      g.lineWidth = u * 1.1;
+      g.stroke();
+      g.globalCompositeOperation = "source-over";
+    }
+    // the head: a white plug turned the way it goes, two pins ahead, a light on it
+    const [hx, hy] = along(q0);
+    const [nx, ny] = along(Math.min(q1, q0 + 0.1));
+    const [dx, dy] = SNAKE_DIRS[s.dir] as readonly [number, number];
+    const ang = hx === nx && hy === ny ? Math.atan2(dy, dx) : Math.atan2(hy - ny, hx - nx);
+    const rounded = (x: number, y: number, w2: number, h2: number, r: number) => {
+      g.beginPath();
+      g.moveTo(x + r, y);
+      g.arcTo(x + w2, y, x + w2, y + h2, r);
+      g.arcTo(x + w2, y + h2, x, y + h2, r);
+      g.arcTo(x, y + h2, x, y, r);
+      g.arcTo(x, y, x + w2, y, r);
+      g.closePath();
+    };
+    const plug = (ox: number, oy: number, shadow: boolean) => {
+      g.save();
+      g.translate(hx + ox, hy + oy);
+      g.rotate(ang);
+      if (shadow) {
+        g.fillStyle = "rgba(0, 0, 0, 0.45)";
+        rounded(-0.52 * u, -0.3 * u, 0.82 * u, 0.6 * u, 0.13 * u);
+        g.fill();
+        g.restore();
+        return;
+      }
+      // the pins
+      for (const side of [-1, 1]) {
+        const pin = g.createLinearGradient(
+          0,
+          side * 0.13 * u - 0.05 * u,
+          0,
+          side * 0.13 * u + 0.05 * u,
+        );
+        pin.addColorStop(0, "#f4f5f8");
+        pin.addColorStop(1, "#8d929c");
+        g.fillStyle = pin;
+        rounded(0.2 * u, side * 0.13 * u - 0.045 * u, 0.32 * u, 0.09 * u, 0.04 * u);
+        g.fill();
+      }
+      // where the cord goes in, narrowing
+      g.fillStyle = "#a3a7b0";
+      g.beginPath();
+      g.moveTo(-0.32 * u, -0.19 * u);
+      g.lineTo(-0.52 * u, -0.14 * u);
+      g.lineTo(-0.52 * u, 0.14 * u);
+      g.lineTo(-0.32 * u, 0.19 * u);
+      g.closePath();
+      g.fill();
+      // the body
+      const shell = g.createLinearGradient(0, -0.3 * u, 0, 0.3 * u);
+      shell.addColorStop(0, "#f6f7f9");
+      shell.addColorStop(1, "#b4b8c2");
+      g.fillStyle = mode === "won" ? "#ffcf8a" : shell;
+      rounded(-0.34 * u, -0.3 * u, 0.56 * u, 0.6 * u, 0.13 * u);
+      g.fill();
+      g.strokeStyle = "#7d818b";
+      g.lineWidth = 1;
+      g.stroke();
+      g.restore();
+    };
+    plug(1.5, 2.5, true);
+    plug(0, 0, false);
+    // its light: orange waiting and running, red when it is over, bright at the end
+    const lx = hx + Math.cos(ang) * -0.08 * u;
+    const ly = hy + Math.sin(ang) * -0.08 * u;
+    const lit = mode === "out" ? "255, 107, 87" : mode === "won" ? "255, 236, 170" : "255, 154, 61";
+    const pulse = mode === "ready" && !still ? 0.55 + 0.45 * Math.abs(Math.sin(now / 400)) : 1;
+    g.globalCompositeOperation = "lighter";
+    glow(lx, ly, u * 0.45, [
+      [0, `rgba(${lit}, ${0.6 * pulse})`],
+      [1, `rgba(${lit}, 0)`],
+    ]);
+    g.globalCompositeOperation = "source-over";
+    g.fillStyle = `rgba(${lit}, ${pulse})`;
+    g.beginPath();
+    g.arc(lx, ly, u * 0.07, 0, Math.PI * 2);
+    g.fill();
+    g.globalAlpha = 1;
+    // sparks
+    g.globalCompositeOperation = "lighter";
+    for (const b of bits) {
+      const f = b.age / b.life;
+      g.strokeStyle = b.color;
+      g.globalAlpha = 1 - f;
+      g.lineWidth = 1.6;
+      g.beginPath();
+      g.moveTo(b.x * u, b.y * u);
+      g.lineTo((b.x - b.vx * 0.03) * u, (b.y - b.vy * 0.03) * u);
+      g.stroke();
+    }
+    g.globalAlpha = 1;
+    g.globalCompositeOperation = "source-over";
+  };
+
+  const frame = (now: number) => {
+    raf = requestAnimationFrame(frame);
+    if (mode === "run") {
+      // a bolt not eaten in time goes, and another comes elsewhere
+      if (s.bolt >= 0 && now >= boltUntil) {
+        s = { ...s, bolt: snakeSpot(p, s, rng, 3) ?? s.bolt };
+        boltFrom = now;
+        boltUntil = now + p.boltLife * 1000;
+      }
+      // puddles dry up; new ones come, never by the head
+      s.puddles = s.puddles.filter((w) => w.until > now);
+      if (now - lastPuddle >= p.every * 1000) {
+        lastPuddle = now;
+        if (s.puddles.length < p.puddles) {
+          const cell = snakeSpot(p, s, rng, SNAKE_CLEAR);
+          if (cell !== null) s.puddles.push({ cell, from: now, until: now + p.life * 1000 });
+        }
+      }
+      // a long pause (the screen away): carry on from now, not all the steps missed at once
+      if (now - lastStep > 500) lastStep = now - stepMs();
+      while (mode === "run" && now - lastStep >= stepMs()) {
+        lastStep += stepMs();
+        step(lastStep);
+      }
+    } else if (mode === "out" && now - since > 1200) {
+      // all over again, the same bolts and puddles
+      attempt++;
+      rng = rngOf(p.seed);
+      s = snakeStart(p, rng);
+      before = s.body.slice();
+      boltFrom = now;
+      boltUntil = Number.POSITIVE_INFINITY;
+      turns = [];
+      died = null;
+      mode = "ready";
+      since = now;
+      say();
+    } else if (mode === "won" && !reported && now - since > 900) {
+      reported = true;
+      ctx.done(`${p.goal} блискавок з ${attempt}-ї спроби`);
+    }
+    const dt = Math.max(0, Math.min(0.05, (now - lastFrame) / 1000));
+    lastFrame = now;
+    for (const b of bits) {
+      b.age += dt;
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      b.vx *= Math.exp(-3 * dt);
+      b.vy *= Math.exp(-3 * dt);
+    }
+    bits = bits.filter((b) => b.age < b.life);
+    draw(now);
+  };
+
+  // a swipe on the board turns it (several in one stroke, too); a tap starts it as it lies
+  let swipe: { x: number; y: number } | null = null;
+  canvas.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    swipe = { x: e.clientX, y: e.clientY };
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!swipe) return;
+    const dx = e.clientX - swipe.x;
+    const dy = e.clientY - swipe.y;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < 18) return;
+    turn(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 1 : 3) : dy > 0 ? 2 : 0);
+    swipe = { x: e.clientX, y: e.clientY };
+  });
+  const lift = (e: PointerEvent) => {
+    if (swipe && mode === "ready" && Math.hypot(e.clientX - swipe.x, e.clientY - swipe.y) < 18)
+      turn(s.dir);
+    swipe = null;
+  };
+  canvas.addEventListener("pointerup", lift);
+  canvas.addEventListener("pointercancel", () => {
+    swipe = null;
+  });
+  const KEYS: Record<string, number> = {
+    ArrowUp: 0,
+    ArrowRight: 1,
+    ArrowDown: 2,
+    ArrowLeft: 3,
+    w: 0,
+    d: 1,
+    s: 2,
+    a: 3,
+  };
+  const onKey = (e: KeyboardEvent) => {
+    const d = KEYS[e.key] ?? KEYS[e.key.toLowerCase()];
+    if (d === undefined) {
+      if (e.key === " " && mode === "ready") {
+        e.preventDefault();
+        turn(s.dir);
+      }
+      return;
+    }
+    e.preventDefault();
+    turn(d);
+  };
+  document.addEventListener("keydown", onKey);
+
+  say();
+  raf = requestAnimationFrame(frame);
+  return () => {
+    cancelAnimationFrame(raf);
+    document.removeEventListener("keydown", onKey);
+  };
 }

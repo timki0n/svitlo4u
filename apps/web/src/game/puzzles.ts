@@ -3178,3 +3178,146 @@ export function memoPuzzle(rng: Rng, tier: Tier): MemoPuzzle {
     misses: t.misses,
   };
 }
+
+// ── «Змійка»: a wire crawling about the board, eating bolts, keeping off puddles ─────────────────
+
+export type SnakePuzzle = {
+  cols: number;
+  rows: number;
+  /** Bolts to eat. */
+  goal: number;
+  /** Cells a second at the start, and more for each bolt eaten. */
+  speed: number;
+  speedup: number;
+  /** Puddles at once at most, a new one every so many seconds, each lasting so long. */
+  puddles: number;
+  every: number;
+  life: number;
+  /** How long a bolt waits to be eaten before it goes, and another comes elsewhere (seconds). */
+  boltLife: number;
+  /** Where the bolts and puddles come: the same for everyone at this window, every try. */
+  seed: string;
+};
+
+/** Up, right, down, left: a step across and down. */
+export const SNAKE_DIRS = [
+  [0, -1],
+  [1, 0],
+  [0, 1],
+  [-1, 0],
+] as const;
+/** A puddle comes no nearer the head than this (steps across plus down). */
+export const SNAKE_CLEAR = 5;
+
+export const SNAKE_TIERS = [
+  {
+    cols: 12,
+    rows: 12,
+    goal: 10,
+    speed: 5.5,
+    speedup: 0.08,
+    puddles: 1,
+    every: 3,
+    life: 5,
+    boltLife: 9,
+  },
+  {
+    cols: 14,
+    rows: 14,
+    goal: 15,
+    speed: 6.5,
+    speedup: 0.1,
+    puddles: 2,
+    every: 2.2,
+    life: 5,
+    boltLife: 7.5,
+  },
+  {
+    cols: 15,
+    rows: 15,
+    goal: 20,
+    speed: 7.5,
+    speedup: 0.12,
+    puddles: 3,
+    every: 1.6,
+    life: 4.5,
+    boltLife: 6.5,
+  },
+] as const;
+
+export function snakePuzzle(rng: Rng, tier: Tier): SnakePuzzle {
+  const t = SNAKE_TIERS[tier];
+  return { ...t, seed: `snake:${Math.floor(rng() * 1e9)}` };
+}
+
+export type SnakeState = {
+  /** The cells it lies on, row by row, the head first. */
+  body: number[];
+  /** Which way it goes (SNAKE_DIRS). */
+  dir: number;
+  /** The bolt's cell. */
+  bolt: number;
+  /** The puddles: where, from when and until when (ms). */
+  puddles: { cell: number; from: number; until: number }[];
+  score: number;
+};
+
+/** A free cell (not under the wire, the bolt or a puddle), at least `clear` steps from the head. */
+export function snakeSpot(
+  p: Pick<SnakePuzzle, "cols" | "rows">,
+  s: Pick<SnakeState, "body" | "bolt" | "puddles">,
+  rng: Rng,
+  clear: number,
+): number | null {
+  const head = s.body[0] as number;
+  const hx = head % p.cols;
+  const hy = Math.floor(head / p.cols);
+  const taken = new Set([...s.body, s.bolt, ...s.puddles.map((w) => w.cell)]);
+  const free: number[] = [];
+  for (let c = 0; c < p.cols * p.rows; c++)
+    if (
+      !taken.has(c) &&
+      Math.abs((c % p.cols) - hx) + Math.abs(Math.floor(c / p.cols) - hy) >= clear
+    )
+      free.push(c);
+  return free.length ? (free[ri(rng, free.length)] as number) : null;
+}
+
+/** Three cells long across the middle, heading right; the first bolt a little way off. */
+export function snakeStart(p: Pick<SnakePuzzle, "cols" | "rows">, rng: Rng): SnakeState {
+  const y = Math.floor(p.rows / 2);
+  const x = Math.floor(p.cols / 2);
+  const body = [y * p.cols + x, y * p.cols + x - 1, y * p.cols + x - 2];
+  const s: SnakeState = { body, dir: 1, bolt: -1, puddles: [], score: 0 };
+  s.bolt = snakeSpot(p, s, rng, 3) as number;
+  return s;
+}
+
+/**
+ * One step the way `dir` (turning straight back is not a turn): off the board, into itself or a
+ * puddle, it is over; onto the bolt, it eats it, grows a cell and a new bolt comes.
+ */
+export function snakeStep(
+  p: Pick<SnakePuzzle, "cols" | "rows" | "goal">,
+  s: SnakeState,
+  dir: number,
+  rng: Rng,
+): { state: SnakeState; ate: boolean; died: "wall" | "self" | "puddle" | null } {
+  const d = (dir + 2) % 4 === s.dir ? s.dir : dir;
+  const head = s.body[0] as number;
+  const [dx, dy] = SNAKE_DIRS[d] as readonly [number, number];
+  const x = (head % p.cols) + dx;
+  const y = Math.floor(head / p.cols) + dy;
+  if (x < 0 || x >= p.cols || y < 0 || y >= p.rows)
+    return { state: { ...s, dir: d }, ate: false, died: "wall" };
+  const cell = y * p.cols + x;
+  if (s.puddles.some((w) => w.cell === cell))
+    return { state: { ...s, dir: d }, ate: false, died: "puddle" };
+  const ate = cell === s.bolt;
+  const body = [cell, ...s.body];
+  if (!ate) body.pop();
+  if (body.indexOf(cell, 1) > 0) return { state: { ...s, dir: d }, ate: false, died: "self" };
+  const state: SnakeState = { ...s, body, dir: d, score: s.score + (ate ? 1 : 0) };
+  if (ate) state.bolt = state.score >= p.goal ? -1 : (snakeSpot(p, state, rng, 2) ?? -1);
+  return { state, ate, died: null };
+}

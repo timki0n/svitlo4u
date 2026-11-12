@@ -94,6 +94,8 @@
   line-height: 1.45;
   color: var(--muted);
   text-align: center;
+  /* a game may put its count on a line of its own */
+  white-space: pre-line;
 }
 
 .g-warn {
@@ -3053,4 +3055,16 @@
   .g-memo-card[data-hit] {
     animation: none;
   }
+}
+
+/* Змійка: the board, the wire, the bolts and puddles, drawn on a canvas */
+.g-snake-board {
+  display: block;
+  width: min(100%, 340px);
+  aspect-ratio: 1;
+  border-radius: 16px;
+  background: #16171b;
+  box-shadow: 0 0 0 1px rgba(242, 239, 234, 0.08);
+  touch-action: none;
+  cursor: pointer;
 }

@@ -38,6 +38,9 @@ import {
   packShapeOf,
   packSolutions,
   petsPuzzle,
+  SNAKE_CLEAR,
+  SNAKE_TIERS,
+  type SnakeState,
   SPARK_REACH,
   SPARK_SNAP,
   SPARK_TIERS,
@@ -48,6 +51,10 @@ import {
   SUDOKU_TIERS,
   slideMinMoves,
   slidePuzzle,
+  snakePuzzle,
+  snakeSpot,
+  snakeStart,
+  snakeStep,
   sparkDistance,
   sparkPath,
   sparkPuzzle,
@@ -111,6 +118,7 @@ describe("window games", () => {
       sparkPuzzle,
       storePuzzle,
       memoPuzzle,
+      snakePuzzle,
     ])
       for (const t of TIERS) expect(make(rngOf(`k${t}`), t)).toEqual(make(rngOf(`k${t}`), t));
     expect(slidePuzzle(rngOf("k"), 1)).toEqual(slidePuzzle(rngOf("k"), 1));
@@ -660,4 +668,73 @@ describe("difficulty: no puzzle is a tap or two away", () => {
         expect(both).toHaveLength(tier.twins);
       }
   });
+
+  it("Змійка: it crawls, turns but not straight back, eats and grows; walls, itself and puddles end it", () => {
+    for (const t of TIERS) {
+      const p = snakePuzzle(rngOf(`snake${t}`), t);
+      expect(p.goal).toBe(SNAKE_TIERS[t].goal);
+      const s = snakeStart(p, rngOf("a"));
+      expect(s.body).toHaveLength(3);
+      expect(s.body).not.toContain(s.bolt);
+    }
+    // 5 × 5, row by row: the head at (1, 1) heading up, the wire bent round below it
+    const p = { cols: 5, rows: 5, goal: 2 };
+    const at = (x: number, y: number) => y * 5 + x;
+    const s: SnakeState = {
+      body: [at(1, 1), at(1, 2), at(2, 2), at(2, 1), at(2, 0)],
+      dir: 0,
+      bolt: at(1, 0),
+      puddles: [],
+      score: 0,
+    };
+    const rng = rngOf("b");
+    // straight back down is no turn: it goes on up, onto the bolt, eats it and grows
+    const ate = snakeStep(p, s, 2, rng);
+    expect(ate.died).toBeNull();
+    expect(ate.ate).toBe(true);
+    expect(ate.state.body).toEqual([at(1, 0), ...s.body]);
+    expect(ate.state.score).toBe(1);
+    expect(ate.state.body).not.toContain(ate.state.bolt);
+    // right, into its own side
+    expect(snakeStep(p, s, 1, rng).died).toBe("self");
+    // into where the tail is just leaving: fine
+    const short: SnakeState = { ...s, body: s.body.slice(0, 4), bolt: at(4, 4) };
+    expect(snakeStep(p, short, 1, rng).died).toBeNull();
+    // left, into a puddle
+    expect(
+      snakeStep(p, { ...s, puddles: [{ cell: at(0, 1), from: 0, until: 1 }] }, 3, rng).died,
+    ).toBe("puddle");
+    // up twice: the bolt, then the wall
+    expect(snakeStep(p, ate.state, 0, rng).died).toBe("wall");
+    // the last bolt eaten: no new one
+    expect(snakeStep({ ...p, goal: 1 }, s, 0, rng).state.bolt).toBe(-1);
+  });
+
+  it("Змійка: a puddle (or a bolt) comes on a free cell, never close to the head", () => {
+    for (const k of keys(40)) {
+      const rng = rngOf(k);
+      const p = { cols: 14, rows: 14 };
+      let s = snakeStart(p, rng);
+      for (let i = 0; i < 40; i++) {
+        const next = snakeStep({ ...p, goal: 99 }, s, ri4(rng), rng);
+        if (next.died) break;
+        s = next.state;
+        const c = snakeSpot(p, s, rng, SNAKE_CLEAR);
+        if (c === null) continue;
+        expect(s.body).not.toContain(c);
+        expect(c).not.toBe(s.bolt);
+        const head = s.body[0] as number;
+        const far =
+          Math.abs((c % 14) - (head % 14)) + Math.abs(Math.floor(c / 14) - Math.floor(head / 14));
+        expect(far).toBeGreaterThanOrEqual(SNAKE_CLEAR);
+        s = { ...s, puddles: [...s.puddles, { cell: c, from: 0, until: 1 }].slice(-3) };
+      }
+    }
+    // no room far enough: none
+    expect(
+      snakeSpot({ cols: 3, rows: 3 }, { body: [4], bolt: 0, puddles: [] }, rngOf("c"), 5),
+    ).toBeNull();
+  });
 });
+
+const ri4 = (rng: () => number) => Math.floor(rng() * 4);
