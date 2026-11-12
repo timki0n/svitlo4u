@@ -1765,7 +1765,8 @@ export function mountJigsaw(root: HTMLElement, p: JigsawPuzzle, ctx: GameCtx): C
 
   // the picture, an image every piece shows through its own outline: drawn by the browser once,
   // not shape by shape for each piece (that made a drag stall); a bitmap of it as soon as it is
-  // ready, cheaper still
+  // ready, cheaper still. Both as data: addresses — the site lets images come from nowhere else
+  // (a blob: one was blocked, and the pieces went blank)
   const defs = svgEl("defs", {}, svg);
   const k = Math.min(3, Math.max(2, Math.ceil(window.devicePixelRatio || 1)));
   const vector = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(jigsawPicture(p, k))}`;
@@ -1775,21 +1776,23 @@ export function mountJigsaw(root: HTMLElement, p: JigsawPuzzle, ctx: GameCtx): C
     defs,
   );
   let alive = true;
-  let bitmap = "";
   const raster = new Image();
   raster.onload = () => {
     if (!alive) return;
-    const canvas = document.createElement("canvas");
-    canvas.width = B * k;
-    canvas.height = B * k;
-    const g = canvas.getContext("2d");
-    if (!g) return;
-    g.drawImage(raster, 0, 0, B * k, B * k);
-    canvas.toBlob((blob) => {
-      if (!blob || !alive) return;
-      bitmap = URL.createObjectURL(blob);
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = B * k;
+      canvas.height = B * k;
+      const g = canvas.getContext("2d");
+      if (!g) return;
+      g.drawImage(raster, 0, 0, B * k, B * k);
+      const bitmap = canvas.toDataURL("image/jpeg", 0.92);
+      // should the bitmap not show after all, the vector picture comes back
+      picture.addEventListener("error", () => picture.setAttribute("href", vector), { once: true });
       picture.setAttribute("href", bitmap);
-    });
+    } catch {
+      // a canvas the browser will not read back: the vector picture stays
+    }
   };
   raster.src = vector;
   outlines.forEach((d, i) => {
@@ -2006,7 +2009,6 @@ export function mountJigsaw(root: HTMLElement, p: JigsawPuzzle, ctx: GameCtx): C
   return () => {
     alive = false;
     unfold();
-    if (bitmap) URL.revokeObjectURL(bitmap);
   };
 }
 
