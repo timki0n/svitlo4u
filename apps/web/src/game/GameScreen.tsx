@@ -280,6 +280,7 @@ function Facade({
       state.evenings.doors.map((d) => ({
         door: d.door,
         parts: d.parts.map((by) => by !== null),
+        opening: d.opening.map((ids) => ids.length > 0),
         open: d.open,
         players: d.players.map((id) => ({
           id,
@@ -362,7 +363,11 @@ function SidePanel({ state, lit }: { state: GameState; lit: number }) {
     const first = w.solvers[0];
     if (first) firsts.set(first.id, (firsts.get(first.id) ?? 0) + 1);
   }
-  const online = new Set(state.playing.flatMap((p) => p.ids));
+  // playing a window, or opening a door's part
+  const online = new Set([
+    ...state.playing.flatMap((p) => p.ids),
+    ...state.evenings.doors.flatMap((d) => d.opening.flat()),
+  ]);
   const ids = [...firsts.keys()]
     .sort((a, b) => (firsts.get(b) ?? 0) - (firsts.get(a) ?? 0))
     .slice(0, 6);
@@ -630,16 +635,31 @@ function Play({
   const [round, setRound] = useState(0);
   /** A door's part one may not open (taken, or one's own part is another): said instead of a puzzle. */
   const [refused, setRefused] = useState<string | null>(null);
+  /** The part opened here: its phone stops checking in. */
+  const partDone = useRef(false);
 
-  // the core learns the window is being played (others see it blink) and when it was opened
+  // the core learns the window (or the door's part) is being played — others see it blink — and
+  // when it was opened; the phone checks in while it is, and says when it leaves
   useEffect(() => {
     if (doorNo) {
       setRefused(null);
-      api.partStart(doorNo, partNo).catch((e: unknown) => {
-        const text = e instanceof GameApiError ? PART_REFUSALS[e.code] : undefined;
-        if (text) setRefused(text);
-      });
-      return;
+      partDone.current = false;
+      let refusedHere = false;
+      const ping = () => {
+        if (refusedHere || partDone.current) return;
+        api.partStart(doorNo, partNo).catch((e: unknown) => {
+          const text = e instanceof GameApiError ? PART_REFUSALS[e.code] : undefined;
+          if (!text || partDone.current) return;
+          refusedHere = true;
+          setRefused(text);
+        });
+      };
+      ping();
+      const timer = window.setInterval(ping, HEARTBEAT_MS);
+      return () => {
+        window.clearInterval(timer);
+        if (!partDone.current) api.partLeave(doorNo, partNo).catch(() => {});
+      };
     }
     const ping = () => {
       api.start(win.floor, win.col).catch(() => {});
@@ -655,6 +675,7 @@ function Play({
   const solved = async (note: string, seconds: number) => {
     try {
       if (door) {
+        partDone.current = true;
         const r = await api.partSolve(door.door, door.part);
         setResult({ ok: true, points: r.points, text: `${seconds} с · частину дверей відчинено` });
         navigator.vibrate?.(40);

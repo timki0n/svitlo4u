@@ -81,23 +81,38 @@ export function DoorCard({
             <Bolt size={12} /> кожному.
           </p>
           <ol className="g-parts" aria-label="Частини дверей">
-            {d.parts.map((by, i) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: the three parts never move
-              <li key={i} data-open={by !== null || undefined}>
-                {by !== null ? (
-                  <>
-                    <Avatar id={by} player={state.players[by]} size={22} />
-                    <span className="g-part-name">{playerName(state.players[by])}</span>
-                  </>
-                ) : mine < 0 ? (
-                  <a className="g-part-open" href={`#/game/v/${door}/${i + 1}`}>
-                    Відчинити
-                  </a>
-                ) : (
-                  <span className="g-muted">чекає сусіда</span>
-                )}
-              </li>
-            ))}
+            {d.parts.map((by, i) => {
+              // who has its puzzle open right now, as a window being played shows it
+              const now = by === null ? (d.opening[i] ?? []) : [];
+              return (
+                // biome-ignore lint/suspicious/noArrayIndexKey: the three parts never move
+                <li key={i} data-open={by !== null || undefined}>
+                  {now.length > 0 && (
+                    <span className="g-part-now">
+                      <span className="g-dot" aria-hidden="true" />
+                      <span className="g-part-name">
+                        {now
+                          .map((id) => (id === state.me.id ? "ти" : playerName(state.players[id])))
+                          .join(", ")}
+                      </span>
+                      <span className="sr-only"> відчиняє зараз</span>
+                    </span>
+                  )}
+                  {by !== null ? (
+                    <>
+                      <Avatar id={by} player={state.players[by]} size={22} />
+                      <span className="g-part-name">{playerName(state.players[by])}</span>
+                    </>
+                  ) : mine < 0 ? (
+                    <a className="g-part-open" href={`#/game/v/${door}/${i + 1}`}>
+                      Відчинити
+                    </a>
+                  ) : (
+                    now.length === 0 && <span className="g-muted">чекає сусіда</span>
+                  )}
+                </li>
+              );
+            })}
           </ol>
         </>
       )}

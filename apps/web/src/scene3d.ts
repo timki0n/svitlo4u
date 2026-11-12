@@ -484,6 +484,8 @@ export type FacadeDoor = {
   door: number;
   /** Its three parts: open or not. */
   parts: boolean[];
+  /** Parts someone is opening right now (a puzzle open on their phone): they blink, as windows do. */
+  opening: boolean[];
   open: boolean;
   /** Who sits at its table: a photo link, or a letter on a colour. */
   players: { id: number; avatar: string | null; letter: string; shade: string }[];
@@ -764,7 +766,15 @@ export function createFacade(
       else winMesh.setColorAt(i, on ? lamp : key !== null ? dark : glass);
     });
     if (winMesh.instanceColor) winMesh.instanceColor.needsUpdate = true;
+    // a door's part someone is opening blinks like a window being played
+    doors.forEach((d) => {
+      d.opening.forEach((on, p) => {
+        const m = doorParts[d.door - 1]?.[p];
+        if (m && on && !d.open && !d.parts[p]) m.color.copy(shutColor).lerp(blink, k);
+      });
+    });
   };
+  const anyOpening = () => doors.some((d) => !d.open && d.opening.some(Boolean));
 
   // ── who lives there: a cat or a dog in a window lit twice, a garland under it lit thrice ─────
   const decal = (draw: (g: CanvasRenderingContext2D) => void, w: number, h: number) => {
@@ -1028,7 +1038,7 @@ export function createFacade(
       restPose(goal);
       place(goal);
     }
-    if (playing.size > 0 && !reducedMotion) {
+    if ((playing.size > 0 || anyOpening()) && !reducedMotion) {
       paint(now);
       busy = true;
     }
@@ -1159,6 +1169,7 @@ export function createFacade(
     setDoors(next) {
       doors = next;
       dressDoors();
+      paint();
       wake();
     },
     selectDoor(door) {

@@ -877,6 +877,26 @@
   text-align: center;
 }
 
+/* who is opening a part right now: a blinking dot and their name, as on a window */
+.g-part-now {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.g-part-now .g-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+}
+
+.g-part-now .g-part-name {
+  color: var(--cool);
+}
+
 .g-part-open {
   padding: 7px 12px;
   border-radius: 11px;

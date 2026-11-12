@@ -46,7 +46,7 @@ import {
   startHand,
 } from "../evenings/poker.ts";
 import type { Clock } from "../runtime/clock.ts";
-import type { GamePlayerView, GameService } from "./game.ts";
+import { type GamePlayerView, type GameService, PRESENCE_MS } from "./game.ts";
 import { CALL_MS, HOLD_MS, NOPE_MS, ROUNDS, roundRules } from "./rounds.ts";
 
 export const EVENING_DOORS = 5;
@@ -142,6 +142,8 @@ export type EveningDoor = {
   game: EveningGame;
   /** Who opened each part (null: still closed). */
   parts: (number | null)[];
+  /** Who is opening each part right now (its puzzle open on their phone), as windows show it. */
+  opening: number[][];
   open: boolean;
   /** Seated players, in seat order. */
   players: number[];
@@ -234,6 +236,8 @@ export type EveningsDeps = {
 };
 
 type Seat = EveningSeat & { silent: number };
+/** A part's puzzle on someone's phone: when they first opened it, when the phone last checked in. */
+type Opening = { at: number; seen: number };
 /** A screen on the table: its requests open, when one last opened or closed, the timer to drop it. */
 type Watcher = { open: number; last: number; gone: ReturnType<typeof setTimeout> | null };
 type Table = {
@@ -267,8 +271,8 @@ export class EveningService {
   private readonly deps: EveningsDeps;
   /** site → door → table */
   private readonly tables = new Map<string, Map<number, Table>>();
-  /** site → "door-part" → player → when they opened the part's puzzle */
-  private readonly opened = new Map<string, Map<string, Map<number, number>>>();
+  /** site → "session:door-part" → player → their part's puzzle: when first opened, last seen */
+  private readonly opened = new Map<string, Map<string, Map<number, Opening>>>();
 
   private readonly timings: EveningTimings;
 
@@ -308,10 +312,14 @@ export class EveningService {
         (_, p) => unlocks.find((u) => u.door === door && u.part === p + 1)?.userId ?? null,
       );
       const table = this.tables.get(siteId)?.get(door);
+      const opening = parts.map((by, p) =>
+        by !== null || session === null ? [] : this.opening(siteId, session, door, p + 1, now),
+      );
       return {
         door,
         game: table?.game ?? game,
         parts,
+        opening,
         open: parts.every((p) => p !== null),
         players: table?.seats.map((s) => s.id) ?? [],
         live: table ? this.live(table) : false,
@@ -323,13 +331,32 @@ export class EveningService {
 
   // ── the doors' parts ────────────────────────────────────────────────────────────────────────
 
+  /**
+   * Opened a part's puzzle, or still at it (the phone checks in, as on a window): the others see
+   * the part being opened. The first opening counts for how fast it was solved.
+   */
   partStart(siteId: string, userId: number, door: number, part: number): void {
     const { session } = this.partCheck(siteId, userId, door, part);
-    const parts = this.opened.get(siteId) ?? new Map<string, Map<number, number>>();
+    const parts = this.opened.get(siteId) ?? new Map<string, Map<number, Opening>>();
     this.opened.set(siteId, parts);
-    const players = parts.get(`${session}:${door}-${part}`) ?? new Map<number, number>();
+    const players = parts.get(`${session}:${door}-${part}`) ?? new Map<number, Opening>();
     parts.set(`${session}:${door}-${part}`, players);
-    if (!players.has(userId)) players.set(userId, this.deps.clock.now());
+    const now = this.deps.clock.now();
+    players.set(userId, { at: players.get(userId)?.at ?? now, seen: now });
+  }
+
+  /** Left a part's puzzle unsolved: no longer opening it (the first opening still counts). */
+  partLeave(siteId: string, userId: number, door: number, part: number): void {
+    const session = this.deps.game.session(siteId)?.start;
+    if (session === undefined) return;
+    const mine = this.opened.get(siteId)?.get(`${session}:${door}-${part}`)?.get(userId);
+    if (mine) mine.seen = Number.NEGATIVE_INFINITY;
+  }
+
+  /** Who has a part's puzzle open now: their phone checked in lately. */
+  private opening(siteId: string, session: number, door: number, part: number, now: number) {
+    const players = this.opened.get(siteId)?.get(`${session}:${door}-${part}`);
+    return [...(players ?? [])].filter(([, o]) => now - o.seen <= PRESENCE_MS).map(([id]) => id);
   }
 
   /** The part's puzzle solved: the part opens, 50 points. */
@@ -337,7 +364,7 @@ export class EveningService {
     const { session } = this.partCheck(siteId, userId, door, part);
     const now = this.deps.clock.now();
     const players = this.opened.get(siteId)?.get(`${session}:${door}-${part}`);
-    const started = players?.get(userId);
+    const started = players?.get(userId)?.at;
     if (started === undefined) fail("start_first");
     if (now - (started as number) < PART_MIN_MS) fail("too_fast");
     const { store } = this.deps;

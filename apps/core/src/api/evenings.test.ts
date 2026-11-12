@@ -331,6 +331,29 @@ describe("«Вечорниці»", () => {
     });
   });
 
+  it("who is opening a door's part: seen while their phone checks in, gone once they leave", async () => {
+    const opening = async () => (await overview()).doors[0]?.opening;
+    expect(await opening()).toEqual([[], [], []]);
+    await call("POST", "/evenings/1/parts/2/start", BOB);
+    await call("POST", "/evenings/1/parts/2/start", CAT);
+    expect(await opening()).toEqual([[], [8, 9], []]);
+    // their names come along with the facade
+    const facade = await call<{ players: Record<string, { name: string }> }>("GET", "", ANN);
+    expect(facade.body.players["9"]?.name).toBe("Катя");
+
+    await call("POST", "/evenings/1/parts/2/leave", CAT);
+    expect((await opening())?.[1]).toEqual([8]);
+    clock.advanceBy(31_000); // Bob's phone went quiet
+    expect((await opening())?.[1]).toEqual([]);
+    // back at it: counted from the first opening, so solving now is not too fast
+    await call("POST", "/evenings/1/parts/2/start", BOB);
+    expect((await opening())?.[1]).toEqual([8]);
+    expect((await call("POST", "/evenings/1/parts/2/solve", BOB)).body).toMatchObject({
+      points: 50,
+    });
+    expect((await opening())?.[1]).toEqual([]); // the part is open: nobody is opening it
+  });
+
   it("who watches a table: their ids, with their names, not those sitting at it", async () => {
     const door = await doorOf("durak");
     await openDoor(door);

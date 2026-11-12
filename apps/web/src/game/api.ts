@@ -104,6 +104,9 @@ export function gameApi(siteId: string) {
       call<{ ok: true }>("POST", door(n, `parts/${part}/start`)),
     partSolve: (n: number, part: number) =>
       call<{ ok: true; points: number }>("POST", door(n, `parts/${part}/solve`)),
+    /** Left a part's puzzle unsolved: the others no longer see it being opened. */
+    partLeave: (n: number, part: number) =>
+      call<{ ok: true }>("POST", door(n, `parts/${part}/leave`)),
     join: (n: number, stake: number) =>
       call<{ ok: true }>("POST", door(n, "join"), { body: { stake } }),
     stand: (n: number) => call<{ ok: true }>("POST", door(n, "leave")),

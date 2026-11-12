@@ -13,6 +13,7 @@
  *   GET  /api/v1/sites/:siteId/game/evenings/:door?since=…          the table (waits for a change)
  *   POST /api/v1/sites/:siteId/game/evenings/:door/parts/:part/start opened a part's puzzle
  *   POST /api/v1/sites/:siteId/game/evenings/:door/parts/:part/solve solved it → the part opens
+ *   POST /api/v1/sites/:siteId/game/evenings/:door/parts/:part/leave left it unsolved
  *   POST /api/v1/sites/:siteId/game/evenings/:door/join   { stake }  sit down (or queue)
  *   POST /api/v1/sites/:siteId/game/evenings/:door/leave             stand up
  *   POST /api/v1/sites/:siteId/game/evenings/:door/move   { type… }  a move of the game
@@ -110,6 +111,7 @@ export function registerGame(
     // who opened the doors and who sits at their tables: names and photos too
     const ids = doors.doors.flatMap((d) => [
       ...d.parts.filter((id): id is number => id !== null),
+      ...d.opening.flat(),
       ...d.players,
     ]);
     return {
@@ -145,7 +147,7 @@ export function registerGame(
     );
   });
 
-  for (const action of ["start", "solve"] as const)
+  for (const action of ["start", "solve", "leave"] as const)
     app.post(
       `/api/v1/sites/:siteId/game/evenings/:door/parts/:part/${action}`,
       async (request, reply) => {
@@ -157,7 +159,8 @@ export function registerGame(
         return evening(reply, () => {
           if (action === "solve")
             return { ok: true, ...evenings.partSolve(p.site.id, p.user.id, door, part) };
-          evenings.partStart(p.site.id, p.user.id, door, part);
+          if (action === "leave") evenings.partLeave(p.site.id, p.user.id, door, part);
+          else evenings.partStart(p.site.id, p.user.id, door, part);
           return { ok: true };
         });
       },
