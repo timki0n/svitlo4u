@@ -18,6 +18,12 @@ import {
   degree,
   FUSE_SPEEDUP,
   type FusePuzzle,
+  JIGSAW_SIZE,
+  type JigsawPuzzle,
+  jigsawEdge,
+  jigsawFits,
+  jigsawGroup,
+  jigsawOutline,
   type Mirror,
   type PackPuzzle,
   type PetsPuzzle,
@@ -1662,6 +1668,295 @@ export function mountVolt(root: HTMLElement, p: VoltPuzzle, ctx: GameCtx): Clean
 
   draw();
   return undefined;
+}
+
+// ── Пазл ─────────────────────────────────────────────────────────────────────────────────────
+
+/** Each mount names its picture and pieces apart (two boards on one page never mix them up). */
+let jigsawMounts = 0;
+
+export function mountJigsaw(root: HTMLElement, p: JigsawPuzzle, ctx: GameCtx): Cleanup {
+  const { n } = p;
+  const total = n * n;
+  const B = JIGSAW_SIZE;
+  const s = B / n;
+  const uid = `jig${++jigsawMounts}`;
+  const vw = 320;
+  const bx = (vw - B) / 2;
+  const by = 8;
+  // next to the board, every piece small in its own place (its knobs reach a quarter round it)
+  const box = ([36, 32, 28] as const)[Math.min(2, Math.max(0, n - 4))] ?? 28;
+  const small = box / s;
+  const pitch = Math.round(box * 1.4);
+  const perRow = Math.floor((vw - 8) / pitch);
+  const trayY = by + B + 14 + box * 0.25;
+  const slot = (j: number): [number, number] => {
+    const row = Math.floor(j / perRow);
+    const inRow = Math.min(perRow, total - row * perRow);
+    const x0 = (vw - inRow * pitch) / 2 + (pitch - box) / 2;
+    return [x0 + (j % perRow) * pitch, trayY + row * pitch];
+  };
+  const vh = trayY + Math.ceil(total / perRow) * pitch + 2;
+  const svg = svgRoot(root, vw, vh, "g-drag");
+  /** A piece taken from next to the board is carried above the finger, so it is not hidden. */
+  const lift = s * 0.35;
+  const rowOf = (i: number) => Math.floor(i / n);
+  const colOf = (i: number) => i % n;
+  const outlines = Array.from({ length: total }, (_, i) => jigsawOutline(p, i));
+  // every edge on its own, to draw round a group where nothing is joined to it
+  const curve = (points: [number, number][]) => {
+    const f = (k: number) => {
+      const [x, y] = points[k] as [number, number];
+      return `${+x.toFixed(2)} ${+y.toFixed(2)}`;
+    };
+    let d = `M${f(0)}`;
+    for (let k = 1; k + 2 < points.length; k += 3) d += `C${f(k)} ${f(k + 1)} ${f(k + 2)}`;
+    return d;
+  };
+  const across = Array.from({ length: n + 1 }, (_, r) =>
+    Array.from({ length: n }, (_, c) => curve(jigsawEdge(p, "across", r, c))),
+  );
+  const down = Array.from({ length: n }, (_, r) =>
+    Array.from({ length: n + 1 }, (_, c) => curve(jigsawEdge(p, "down", r, c))),
+  );
+
+  // the picture, drawn once; each piece shows it through its own outline
+  const defs = svgEl("defs", {}, svg);
+  const sky = svgEl("linearGradient", { id: `${uid}-sky`, x1: 0, y1: 0, x2: 0, y2: 1 }, defs);
+  svgEl("stop", { offset: 0, "stop-color": p.sky[0] }, sky);
+  svgEl("stop", { offset: 1, "stop-color": p.sky[1] }, sky);
+  const frame = svgEl("clipPath", { id: `${uid}-frame` }, defs);
+  svgEl("rect", { x: 0, y: 0, width: B, height: B }, frame);
+  const art = svgEl("g", { id: `${uid}-art`, "clip-path": `url(#${uid}-frame)` }, defs);
+  svgEl("rect", { x: 0, y: 0, width: B, height: B, fill: `url(#${uid}-sky)` }, art);
+  for (const a of p.art) {
+    const opacity = a.opacity ?? 1;
+    if (a.kind === "rect")
+      svgEl(
+        "rect",
+        { x: a.x, y: a.y, width: a.w, height: a.h, rx: a.rx ?? 0, fill: a.fill, opacity },
+        art,
+      );
+    else if (a.kind === "circle")
+      svgEl("circle", { cx: a.cx, cy: a.cy, r: a.r, fill: a.fill, opacity }, art);
+    else
+      svgEl(
+        "path",
+        {
+          d: a.d,
+          fill: a.fill,
+          stroke: a.stroke ?? "none",
+          "stroke-width": a.width ?? 1,
+          "stroke-linecap": "round",
+          opacity,
+        },
+        art,
+      );
+  }
+  outlines.forEach((d, i) => {
+    const clip = svgEl("clipPath", { id: `${uid}-p${i}` }, defs);
+    svgEl("path", { d }, clip);
+  });
+  const layer = svgEl("g", {}, svg);
+
+  /** The cell each piece lies on (row by row), or null: next to the board. */
+  const at = new Array<number | null>(total).fill(null);
+  /** A drag: the pieces carried (a group moves whole), the one held, where it is held by. */
+  let drag: {
+    group: number[];
+    i: number;
+    x: number;
+    y: number;
+    sx: number;
+    sy: number;
+    ox: number;
+    oy: number;
+    moved: boolean;
+  } | null = null;
+  /** The pieces carried, drawn over the rest: moved as the finger moves, not drawn again. */
+  let held: SVGElement | null = null;
+  let won = false;
+  let unfold = () => {};
+  let joins = 0;
+
+  /**
+   * Pieces `members` (one, or a group) with the picture's top left at (x, y), `scale` times their
+   * size: the picture through their outlines together, their edge round them all but where they
+   * are joined, so a group is one whole.
+   */
+  const drawSet = (members: readonly number[], x: number, y: number, scale: number, extra = "") => {
+    const g = svgEl(
+      "g",
+      { transform: `translate(${x} ${y}) scale(${scale})`, style: extra },
+      layer,
+    );
+    let clip = `${uid}-p${members[0]}`;
+    if (members.length > 1) {
+      clip = `${uid}-g${joins++}`;
+      const shape = svgEl("clipPath", { id: clip }, g);
+      for (const i of members) svgEl("path", { d: outlines[i] as string }, shape);
+    }
+    const inner = svgEl("g", { "clip-path": `url(#${clip})` }, g);
+    svgEl("use", { href: `#${uid}-art` }, inner);
+    const mine = new Set(members);
+    let d = "";
+    for (const i of members) {
+      const r = rowOf(i);
+      const c = colOf(i);
+      if (r === 0 || !mine.has(i - n)) d += across[r]?.[c] as string;
+      if (r === n - 1 || !mine.has(i + n)) d += across[r + 1]?.[c] as string;
+      if (c === 0 || !mine.has(i - 1)) d += down[r]?.[c] as string;
+      if (c === n - 1 || !mine.has(i + 1)) d += down[r]?.[c + 1] as string;
+    }
+    svgEl(
+      "path",
+      {
+        d,
+        style: `fill:none;stroke:rgba(0,0,0,0.5);stroke-width:${1.2 / scale};stroke-linejoin:round`,
+      },
+      g,
+    );
+    return g;
+  };
+  /** Where the picture's top left is while the pieces are carried. */
+  const heldAt = (d: NonNullable<typeof drag>): [number, number] => [
+    d.x - d.ox - colOf(d.i) * s,
+    d.y - d.oy - rowOf(d.i) * s,
+  ];
+  const status = () =>
+    `Збери картинку: шматки зчіпляються, коли краї сходяться · на полі ${at.filter((c) => c !== null).length} з ${total}`;
+
+  const draw = () => {
+    layer.replaceChildren();
+    joins = 0;
+    held = null;
+    ctx.say(status());
+    // the board: nothing on it to go by
+    svgEl(
+      "rect",
+      { x: bx - 4, y: by - 4, width: B + 8, height: B + 8, rx: 10, style: `fill:${TILE}` },
+      layer,
+    );
+    const carried = new Set(drag?.moved ? drag.group : []);
+    // the pieces on the board, each group as one; once all are home, the picture whole
+    if (won) svgEl("use", { href: `#${uid}-art`, x: bx, y: by }, layer);
+    else {
+      const drawn = new Set<number>();
+      at.forEach((cell, i) => {
+        if (cell === null || drawn.has(i) || carried.has(i)) return;
+        const group = jigsawGroup(n, at, i);
+        for (const j of group) drawn.add(j);
+        drawSet(group, bx + (colOf(cell) - colOf(i)) * s, by + (rowOf(cell) - rowOf(i)) * s, 1);
+      });
+    }
+    // next to the board, each in its place
+    p.order.forEach((i, j) => {
+      if (at[i] !== null || carried.has(i)) return;
+      const [x, y] = slot(j);
+      drawSet([i], x - small * colOf(i) * s, y - small * rowOf(i) * s, small);
+    });
+    // what is carried, full size, over everything
+    if (drag?.moved)
+      held = drawSet(
+        drag.group,
+        ...heldAt(drag),
+        1,
+        "filter:drop-shadow(0 8px 10px rgba(0,0,0,0.5))",
+      );
+  };
+
+  svg.addEventListener("pointerdown", (e) => {
+    if (won) return;
+    const [x, y] = pointIn(svg, e, vw, vh);
+    // a piece on the board under the finger: it, and everything joined to it
+    const R = Math.floor((y - by) / s);
+    const C = Math.floor((x - bx) / s);
+    const i = R >= 0 && R < n && C >= 0 && C < n ? at.indexOf(R * n + C) : -1;
+    if (i >= 0) {
+      drag = {
+        group: jigsawGroup(n, at, i),
+        i,
+        x,
+        y,
+        sx: x,
+        sy: y,
+        ox: x - (bx + C * s),
+        oy: y - (by + R * s),
+        moved: false,
+      };
+    } else {
+      // or one next to the board (the box round it, knobs and all)
+      const pad = box * 0.2;
+      const j = p.order.findIndex((k, idx) => {
+        if (at[k] !== null) return false;
+        const [sx, sy] = slot(idx);
+        return x >= sx - pad && x <= sx + box + pad && y >= sy - pad && y <= sy + box + pad;
+      });
+      if (j < 0) return;
+      const k = p.order[j] as number;
+      drag = { group: [k], i: k, x, y, sx: x, sy: y, ox: s / 2, oy: s / 2 + lift, moved: false };
+    }
+    svg.setPointerCapture(e.pointerId);
+  });
+  svg.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    const [x, y] = pointIn(svg, e, vw, vh);
+    drag.x = x;
+    drag.y = y;
+    if (!drag.moved) {
+      if (Math.hypot(x - drag.sx, y - drag.sy) <= 6) return;
+      drag.moved = true;
+      draw();
+      return;
+    }
+    const [hx, hy] = heldAt(drag);
+    held?.setAttribute("transform", `translate(${hx} ${hy}) scale(1)`);
+  });
+  svg.addEventListener("pointerup", () => {
+    if (!drag) return;
+    const d = drag;
+    drag = null;
+    let misfit = false;
+    if (d.moved) {
+      // the piece held: over the board it clicks onto the nearest cells (the group kept on the
+      // board), if every edge meets its own there; below it, the pieces go back next to the board
+      const left = d.x - d.ox;
+      const top = d.y - d.oy;
+      const over = top + s / 2 <= by + B + s * 0.25;
+      if (!over) for (const j of d.group) at[j] = null;
+      else {
+        const rows = d.group.map(rowOf);
+        const cols = d.group.map(colOf);
+        const dr = Math.max(
+          -Math.min(...rows),
+          Math.min(n - 1 - Math.max(...rows), Math.round((top - by) / s) - rowOf(d.i)),
+        );
+        const dc = Math.max(
+          -Math.min(...cols),
+          Math.min(n - 1 - Math.max(...cols), Math.round((left - bx) / s) - colOf(d.i)),
+        );
+        if (jigsawFits(n, at, d.group, dr, dc)) {
+          for (const j of d.group) at[j] = (rowOf(j) + dr) * n + colOf(j) + dc;
+          navigator.vibrate?.(jigsawGroup(n, at, d.i).length > d.group.length ? 25 : 10);
+        } else misfit = true;
+      }
+    }
+    if (!won && at.every((cell, j) => cell === j)) {
+      won = true;
+      // whole: the shelf folds away, the picture stands alone
+      unfold = foldShelf(svg, vw, vh, by + B + 8, ctx);
+      ctx.done(`усі ${total} шматків на місці`);
+    }
+    draw();
+    if (misfit && !won) ctx.say(status(), "краї не сходяться");
+  });
+  svg.addEventListener("pointercancel", () => {
+    drag = null;
+    draw();
+  });
+
+  draw();
+  return () => unfold();
 }
 
 // ── Батарейки по зарядках ───────────────────────────────────────────────────────────────────

@@ -1506,3 +1506,1082 @@ export function voltPuzzle(rng: Rng, tier: Tier): VoltPuzzle {
     return p;
   }
 }
+
+// ── «Пазл»: a picture cut into knobbed pieces, put back together ────────────────────────────────
+
+/** A shape of the picture (its coordinates on a JIGSAW_SIZE square). */
+export type ArtShape =
+  | {
+      kind: "rect";
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+      fill: string;
+      rx?: number;
+      opacity?: number;
+    }
+  | { kind: "circle"; cx: number; cy: number; r: number; fill: string; opacity?: number }
+  | { kind: "path"; d: string; fill: string; stroke?: string; width?: number; opacity?: number };
+/** An edge between two pieces: which way its knob bulges (0: the board's edge, flat), nudged. */
+export type JigsawEdge = { knob: -1 | 0 | 1; shift: number; scale: number };
+/** What a picture can be of. */
+export const JIGSAW_SCENES = ["street", "village", "pylons", "candle", "winter"] as const;
+export type JigsawScene = (typeof JIGSAW_SCENES)[number];
+export type JigsawPuzzle = {
+  /** The pieces in a square, n × n. */
+  n: number;
+  /** The picture: what it is of, its background (top colour, bottom colour), what is in it. */
+  scene: JigsawScene;
+  sky: [string, string];
+  art: ArtShape[];
+  /** Edges across the board, n + 1 lines of n; down it, n lines of n + 1. */
+  across: JigsawEdge[][];
+  down: JigsawEdge[][];
+  /** The order the pieces lie in next to the board. */
+  order: number[];
+};
+
+/** The picture's side. */
+export const JIGSAW_SIZE = 300;
+/** Pieces in a row, per tier. */
+export const JIGSAW_GRID = [4, 5, 6] as const;
+
+/**
+ * A knob along an edge from (0, 0) to (1, 0), bulging towards +v: the points of the cubic curves
+ * one after another (a straight stretch, the neck, the head, the neck, a straight stretch).
+ */
+const KNOB: readonly (readonly [number, number])[] = [
+  [0, 0],
+  [0.12, 0],
+  [0.24, 0],
+  [0.36, 0],
+  [0.42, 0],
+  [0.44, 0.04],
+  [0.41, 0.09],
+  [0.36, 0.17],
+  [0.42, 0.25],
+  [0.5, 0.25],
+  [0.58, 0.25],
+  [0.64, 0.17],
+  [0.59, 0.09],
+  [0.56, 0.04],
+  [0.58, 0],
+  [0.64, 0],
+  [0.76, 0],
+  [0.88, 0],
+  [1, 0],
+];
+
+/**
+ * An edge's points (cubic curves in turn) on the picture: across the board from left to right
+ * (the line above row `r`, column `c`), or down it from top to bottom (the line left of column
+ * `c`, row `r`). A knob of +1 bulges down (across) or right (down).
+ */
+export function jigsawEdge(
+  p: Pick<JigsawPuzzle, "n" | "across" | "down">,
+  dir: "across" | "down",
+  r: number,
+  c: number,
+): [number, number][] {
+  const s = JIGSAW_SIZE / p.n;
+  const e = (dir === "across" ? p.across[r]?.[c] : p.down[r]?.[c]) as JigsawEdge;
+  return KNOB.map(([u, v], k) => {
+    const along = k === 0 || k === KNOB.length - 1 ? u : u + e.shift;
+    const off = v * e.scale * e.knob;
+    return dir === "across" ? [(c + along) * s, (r + off) * s] : [(c + off) * s, (r + along) * s];
+  });
+}
+
+/** Piece `i`'s outline on the picture (row by row): its four edges round, clockwise. */
+export function jigsawOutline(p: Pick<JigsawPuzzle, "n" | "across" | "down">, i: number): string {
+  const r = Math.floor(i / p.n);
+  const c = i % p.n;
+  const points = [
+    ...jigsawEdge(p, "across", r, c),
+    ...jigsawEdge(p, "down", r, c + 1).slice(1),
+    ...jigsawEdge(p, "across", r + 1, c)
+      .reverse()
+      .slice(1),
+    ...jigsawEdge(p, "down", r, c).reverse().slice(1),
+  ];
+  const f = ([x, y]: [number, number]) => `${+x.toFixed(2)} ${+y.toFixed(2)}`;
+  let d = `M${f(points[0] as [number, number])}`;
+  for (let k = 1; k + 2 < points.length; k += 3)
+    d += `C${f(points[k] as [number, number])} ${f(points[k + 1] as [number, number])} ${f(points[k + 2] as [number, number])}`;
+  return `${d}Z`;
+}
+
+// ── the rules: a piece lies on any cell, but only next to the pieces it is next to in the picture ──
+
+/** Round a cell: up, down, left, right (rows, columns). */
+const AROUND = [
+  [-1, 0],
+  [1, 0],
+  [0, -1],
+  [0, 1],
+] as const;
+
+/** Which piece lies on each cell (`at`: the cell each piece lies on, row by row, or null). */
+function jigsawLying(at: readonly (number | null)[], but?: ReadonlySet<number>) {
+  const on = new Map<number, number>();
+  at.forEach((cell, j) => {
+    if (cell !== null && !but?.has(j)) on.set(cell, j);
+  });
+  return on;
+}
+
+/**
+ * The pieces joined with piece `i` (`at`: the cell each piece lies on, row by row, or null if it
+ * is off the board): those lying next to it the way they are in the picture, theirs in turn.
+ */
+export function jigsawGroup(n: number, at: readonly (number | null)[], i: number): number[] {
+  if (at[i] === null || at[i] === undefined) return [i];
+  const inside = (r: number, c: number) => r >= 0 && r < n && c >= 0 && c < n;
+  const on = jigsawLying(at);
+  const group = [i];
+  const seen = new Set(group);
+  for (let k = 0; k < group.length; k++) {
+    const j = group[k] as number;
+    const cell = at[j] as number;
+    for (const [dr, dc] of AROUND) {
+      const r = Math.floor(j / n) + dr;
+      const c = (j % n) + dc;
+      const R = Math.floor(cell / n) + dr;
+      const C = (cell % n) + dc;
+      if (!inside(r, c) || !inside(R, C)) continue;
+      const m = on.get(R * n + C);
+      if (m === r * n + c && !seen.has(m)) {
+        seen.add(m);
+        group.push(m);
+      }
+    }
+  }
+  return group;
+}
+
+/**
+ * Whether the pieces `moving` (a group, or one piece) can lie shifted (dr, dc) rows and columns
+ * from their places in the picture: all of them on the board, on cells nobody else lies on, and
+ * next to nothing but the pieces they are next to in the picture, so that every edge meets its own.
+ */
+export function jigsawFits(
+  n: number,
+  at: readonly (number | null)[],
+  moving: readonly number[],
+  dr: number,
+  dc: number,
+): boolean {
+  const inside = (r: number, c: number) => r >= 0 && r < n && c >= 0 && c < n;
+  const on = jigsawLying(at, new Set(moving));
+  for (const i of moving) {
+    const r = Math.floor(i / n);
+    const c = i % n;
+    const R = r + dr;
+    const C = c + dc;
+    if (!inside(R, C) || on.has(R * n + C)) return false;
+    for (const [ar, ac] of AROUND) {
+      if (!inside(R + ar, C + ac)) continue;
+      const m = on.get((R + ar) * n + C + ac);
+      if (m !== undefined && !(inside(r + ar, c + ac) && m === (r + ar) * n + c + ac)) return false;
+    }
+  }
+  return true;
+}
+
+// ── the pictures ──────────────────────────────────────────────────────────────────────────────
+
+type Picture = { sky: [string, string]; art: ArtShape[] };
+
+/** A number short enough for a picture. */
+const tenth = (v: number) => Math.round(v * 10) / 10;
+/** A path, its numbers rounded to tenths. */
+const pathD = (parts: TemplateStringsArray, ...values: number[]) =>
+  parts.reduce((s, part, k) => `${s}${tenth(values[k - 1] as number)}${part}`);
+/** A shape through points, closed or not. */
+const pathOf = (points: readonly (readonly [number, number])[], close = true) =>
+  `${points.map(([x, y], k) => `${k ? "L" : "M"}${tenth(x)} ${tenth(y)}`).join("")}${close ? "Z" : ""}`;
+
+/** What a picture is drawn with: shapes laid one over another, and its own randomness. */
+function painter(rng: Rng) {
+  const W = JIGSAW_SIZE;
+  const art: ArtShape[] = [];
+  const seen = (opacity: number) => (opacity < 1 ? { opacity: tenth(opacity * 10) / 10 } : {});
+  const pick = <T>(list: readonly T[]) => list[ri(rng, list.length)] as T;
+  /** Somewhere between `lo` and `hi`. */
+  const span = (lo: number, hi: number) => lo + rng() * (hi - lo);
+  const box = (x: number, y: number, w: number, h: number, fill: string, rx = 0, opacity = 1) => {
+    art.push({
+      kind: "rect",
+      x: tenth(x),
+      y: tenth(y),
+      w: tenth(w),
+      h: tenth(h),
+      fill,
+      ...(rx ? { rx } : {}),
+      ...seen(opacity),
+    });
+  };
+  const dot = (cx: number, cy: number, r: number, fill: string, opacity = 1) => {
+    art.push({ kind: "circle", cx: tenth(cx), cy: tenth(cy), r: tenth(r), fill, ...seen(opacity) });
+  };
+  const fill = (d: string, color: string, opacity = 1) => {
+    art.push({ kind: "path", d, fill: color, ...seen(opacity) });
+  };
+  const line = (d: string, stroke: string, width: number, opacity = 1) => {
+    art.push({ kind: "path", d, fill: "none", stroke, width, ...seen(opacity) });
+  };
+  const oval = (cx: number, cy: number, rx: number, ry: number, color: string, opacity = 1) =>
+    fill(
+      pathD`M${cx - rx} ${cy}A${rx} ${ry} 0 1 0 ${cx + rx} ${cy}A${rx} ${ry} 0 1 0 ${cx - rx} ${cy}Z`,
+      color,
+      opacity,
+    );
+  /** Stars scattered above `low`. */
+  const stars = (count: number, low: number) => {
+    for (let k = 0; k < count; k++)
+      dot(rng() * W, rng() * low, 0.5 + rng() * 1.2, "#ffffff", 0.35 + rng() * 0.6);
+  };
+  /** The full moon: its halo, its face, its seas. */
+  const moon = (cx: number, cy: number, r: number) => {
+    dot(cx, cy, r + 12, "#f6e7b8", 0.12);
+    dot(cx, cy, r, "#f6e7b8");
+    for (let k = 0; k < 3; k++)
+      dot(cx + (rng() - 0.5) * r, cy + (rng() - 0.5) * r, r * (0.12 + rng() * 0.12), "#e2cf98");
+  };
+  /** Hills along `base`, rising up to about `rise` above it, filled down to the bottom. */
+  const hills = (base: number, rise: number, color: string, opacity = 1) => {
+    const k = 3 + ri(rng, 3);
+    let d = pathD`M0 ${base}`;
+    for (let j = 1; j <= k; j++) {
+      const x = (j / k) * W;
+      d += pathD`Q${x - W / k / 2} ${base - rise * (0.5 + rng())} ${x} ${base + (rng() - 0.5) * rise * 0.4}`;
+    }
+    fill(`${d}L${W} ${W}L0 ${W}Z`, color, opacity);
+  };
+  return { art, pick, span, box, dot, fill, line, oval, stars, moon, hills };
+}
+
+const LIT = ["#ffcf6a", "#ffb347", "#ffe08a", "#ffd9a0"];
+const STREET_SKIES: readonly [string, string][] = [
+  ["#0b1430", "#3a2a5c"],
+  ["#0d1b2a", "#1f4a5a"],
+  ["#140f2e", "#5a2f4f"],
+  ["#0a1a33", "#2d3f7a"],
+];
+const STREET_WALLS = ["#2e3550", "#3b2f4a", "#283a3f", "#45372c", "#3a3f52", "#4a3340"];
+const STREET_BULBS = ["#ff6b6b", "#ffd93d", "#6bcb77", "#4d96ff", "#ff9a3d"];
+
+/** A night street: the moon over a far skyline, houses lit here and there, a garland, lamps. */
+function streetScene(rng: Rng): Picture {
+  const W = JIGSAW_SIZE;
+  const a = painter(rng);
+  const sky = a.pick(STREET_SKIES);
+  a.stars(42, W * 0.55);
+  a.moon(a.span(40, W - 40), a.span(30, 80), a.span(18, 28));
+  // the far skyline
+  for (let x = -10; x < W; ) {
+    const w = a.span(18, 44);
+    const top = a.span(140, 210);
+    a.box(x, top, w, W - top, "#1a1f31");
+    x += w - 2;
+  }
+  // the houses near, each its own colour, their windows lit here and there
+  for (let x = a.span(-6, 4); x < W; ) {
+    const w = a.span(46, 80);
+    const top = a.span(110, 200);
+    a.box(x, top, w, W - top, a.pick(STREET_WALLS));
+    // on the roof: a ledge, a water tank or an aerial
+    const roof = ri(rng, 3);
+    if (roof === 0) a.box(x - 2, top - 4, w + 4, 5, "#20253a");
+    else if (roof === 1) a.box(x + w * 0.6, top - 14, 14, 14, "#2a2f45", 3);
+    else {
+      const ax = x + w * 0.3;
+      a.line(pathD`M${ax} ${top}V${top - 22}M${ax - 7} ${top - 16}H${ax + 7}`, "#3a3f55", 1.6);
+    }
+    const cols = Math.max(2, Math.floor((w - 10) / 13));
+    const gap = (w - cols * 8) / (cols + 1);
+    for (let wy = top + 10; wy < W - 34; wy += 15)
+      for (let k = 0; k < cols; k++)
+        a.box(x + gap + k * (8 + gap), wy, 8, 9, rng() < 0.45 ? a.pick(LIT) : "#151925", 1);
+    x += w + 2 + rng() * 6;
+  }
+  // a garland strung across the street, sagging, its bulbs of all colours
+  const gy = a.span(120, 170);
+  const sag = a.span(18, 40);
+  a.line(pathD`M0 ${gy}Q${W / 2} ${gy + sag * 2} ${W} ${gy}`, "#0c0d12", 1.5);
+  for (let k = 1; k < 14; k++) {
+    const t = k / 14;
+    const y = (1 - t) * (1 - t) * gy + 2 * (1 - t) * t * (gy + sag * 2) + t * t * gy;
+    const bulb = STREET_BULBS[k % STREET_BULBS.length] as string;
+    a.dot(W * t, y + 3, 7, bulb, 0.2);
+    a.dot(W * t, y + 3, 3, bulb);
+  }
+  // the street, two lamps glowing over it
+  a.box(0, W - 22, W, 22, "#101219");
+  for (const lx of [a.span(30, 100), a.span(180, 260)]) {
+    a.box(lx - 1.5, W - 70, 3, 50, "#2b2f3a");
+    a.dot(lx, W - 72, 16, "#ffd27a", 0.2);
+    a.dot(lx, W - 72, 4, "#ffe7b0");
+  }
+  return { sky, art: a.art };
+}
+
+const VILLAGE_SKIES: readonly [string, string][] = [
+  ["#060a1c", "#1c2a4c"],
+  ["#090d22", "#2a2246"],
+  ["#050f1b", "#1a3848"],
+];
+const VILLAGE_WALLS = ["#3d4763", "#43405c", "#394a58"];
+const VILLAGE_ROOFS = ["#2b2333", "#3a2a2a", "#26303a", "#3a3326"];
+const SHUTTERS = ["#2f5a6a", "#4a6a3a", "#5a3a4a"];
+const LEAVES = ["#13251b", "#17301f", "#10201a", "#1b3424"];
+
+/**
+ * A village house in the dark: the Milky Way and the crescent moon, the house with a window lit
+ * and a Starlink dish on its roof, smoke from the chimney, an apple tree, sunflowers by the fence.
+ */
+function villageScene(rng: Rng): Picture {
+  const W = JIGSAW_SIZE;
+  const a = painter(rng);
+  const sky = a.pick(VILLAGE_SKIES);
+  // the Milky Way: a faint band across, thick with tiny stars
+  const band = a.span(50, 100);
+  const tilt = a.span(-40, 40);
+  a.fill(
+    pathOf([
+      [0, band - 20 - tilt],
+      [W, band - 20 + tilt],
+      [W, band + 24 + tilt],
+      [0, band + 24 - tilt],
+    ]),
+    "#c9d6ff",
+    0.06,
+  );
+  for (let k = 0; k < 60; k++) {
+    const t = rng();
+    const y = band - tilt + 2 * tilt * t + (rng() - 0.5) * 44;
+    a.dot(t * W, y, 0.3 + rng() * 0.6, "#e8eeff", 0.25 + rng() * 0.5);
+  }
+  a.stars(34, 170);
+  // the house on one side, the apple tree on the other, the crescent moon above the tree
+  const left = rng() < 0.5;
+  const hw = a.span(122, 140);
+  const hx = left ? a.span(14, 34) : W - hw - a.span(14, 34);
+  const tx = left ? a.span(215, 250) : a.span(50, 85);
+  const mx = tx + a.span(-20, 20);
+  const my = a.span(30, 60);
+  const mr = a.span(13, 18);
+  a.dot(mx + mr * 0.4, my, mr + 10, "#f3e6b8", 0.1);
+  a.fill(
+    pathD`M${mx} ${my - mr}A${mr} ${mr} 0 1 1 ${mx} ${my + mr}A${mr * 0.6} ${mr} 0 1 0 ${mx} ${my - mr}Z`,
+    "#f3e6b8",
+  );
+  // far hills, a far village's lights on them, poplars
+  a.hills(a.span(172, 186), 30, "#141b2d");
+  for (let k = 0; k < 7; k++)
+    a.dot(rng() * W, a.span(184, 198), 1.1, a.pick(LIT), 0.5 + rng() * 0.5);
+  for (let k = 0; k < 4; k++) {
+    const px = rng() * W;
+    const pb = a.span(196, 206);
+    const ph = a.span(36, 60);
+    a.fill(
+      pathD`M${px} ${pb}Q${px - 7} ${pb - ph / 2} ${px} ${pb - ph}Q${px + 7} ${pb - ph / 2} ${px} ${pb}Z`,
+      "#0b111c",
+    );
+  }
+  a.hills(a.span(204, 214), 18, "#0f1623");
+  a.box(0, 236, W, W - 236, "#0d1611");
+  // the apple tree
+  a.fill(
+    pathOf([
+      [tx - 5, 262],
+      [tx - 3, 200],
+      [tx - 14, 178],
+      [tx - 10, 175],
+      [tx, 190],
+      [tx + 9, 171],
+      [tx + 13, 174],
+      [tx + 3, 200],
+      [tx + 5, 262],
+    ]),
+    "#1d1510",
+  );
+  for (let k = 0; k < 9; k++)
+    a.dot(tx + a.span(-34, 34), a.span(140, 186), a.span(14, 22), a.pick(LEAVES));
+  for (let k = 0; k < 6; k++) a.dot(tx + a.span(-30, 30), a.span(145, 185), 2.3, "#8a2f2a");
+  // the house: the chimney on one slope smoking, the dish on the other
+  const wallTop = a.span(188, 198);
+  const base = 262;
+  const peakX = hx + hw / 2;
+  const peakY = wallTop - a.span(46, 58);
+  const eave = wallTop + 2;
+  const roofAt = (x: number) => peakY + (Math.abs(x - peakX) / (hw / 2 + 10)) * (eave - peakY);
+  const ds = left ? 1 : -1;
+  const chx = peakX - ds * hw * 0.24;
+  const chTop = roofAt(chx) - 18;
+  a.box(chx - 5, chTop, 10, roofAt(chx) - chTop + 8, "#2c2830");
+  a.box(chx - 7, chTop - 3, 14, 4, "#24202a");
+  const drift = a.span(-6, 6);
+  for (let k = 0; k < 4; k++)
+    a.dot(chx + (k + 1) * drift, chTop - 8 - k * 9, 3 + k * 2, "#9aa3b5", 0.16 - k * 0.03);
+  a.box(hx, wallTop, hw, base - wallTop, a.pick(VILLAGE_WALLS));
+  a.box(hx - 3, base - 8, hw + 6, 8, "#262b3a");
+  a.fill(
+    pathOf([
+      [hx - 10, eave],
+      [peakX, peakY],
+      [hx + hw + 10, eave],
+    ]),
+    a.pick(VILLAGE_ROOFS),
+  );
+  let tin = "";
+  for (const t of [0.3, 0.55, 0.8]) {
+    const half = t * (hw / 2 + 10);
+    tin += pathD`M${peakX - half} ${peakY + t * (eave - peakY)}H${peakX + half}`;
+  }
+  a.line(tin, "#000000", 1.2, 0.25);
+  // two windows with shutters, one lit or both; the door towards the yard
+  const along = (t: number) => hx + (left ? t : 1 - t) * hw;
+  const lit = a.pick([
+    [true, false],
+    [false, true],
+    [true, true],
+  ]);
+  const shutter = a.pick(SHUTTERS);
+  [0.2, 0.5].forEach((t, k) => {
+    const cx = along(t);
+    const wy = wallTop + 16;
+    const on = lit[k];
+    const glass = on ? a.pick(LIT) : "#121826";
+    if (on) a.dot(cx, wy + 12, 22, glass, 0.07);
+    a.box(cx - 19, wy - 1, 8, 26, shutter);
+    a.box(cx + 11, wy - 1, 8, 26, shutter);
+    a.box(cx - 11, wy, 22, 24, glass, 1);
+    a.line(pathD`M${cx} ${wy}V${wy + 24}M${cx - 11} ${wy + 9}H${cx + 11}`, "#2a2230", 2);
+    if (on)
+      a.fill(
+        pathOf([
+          [cx - 11, base],
+          [cx + 11, base],
+          [cx + 26, W],
+          [cx - 26, W],
+        ]),
+        glass,
+        0.06,
+      );
+  });
+  const dx = along(0.8);
+  a.box(dx - 9, base - 48, 18, 40, "#2a2026", 2);
+  a.dot(dx - ds * 5, base - 28, 1.4, "#8a7a5a");
+  // the Starlink dish halfway down the other slope: a mast, a flat panel turned to the sky
+  const sx = peakX + ds * hw * 0.25;
+  const sy = roofAt(sx);
+  a.line(pathD`M${sx} ${sy}V${sy - 13}`, "#8a93a3", 2);
+  const tiltA = -ds * a.span(0.3, 0.5);
+  const panel = (
+    [
+      [-13, -5],
+      [13, -5],
+      [13, 5],
+      [-13, 5],
+    ] as const
+  ).map(
+    ([u, v]) =>
+      [
+        sx + u * Math.cos(tiltA) - v * Math.sin(tiltA),
+        sy - 19 + u * Math.sin(tiltA) + v * Math.cos(tiltA),
+      ] as const,
+  );
+  a.fill(pathOf(panel), "#e6ebf2");
+  a.line(
+    pathOf([panel[3] as [number, number], panel[2] as [number, number]], false),
+    "#9aa3b2",
+    1.6,
+  );
+  a.line(pathD`M${sx} ${sy}L${peakX + ds * (hw / 2 + 2)} ${eave + 1}V${base - 30}`, "#111318", 1);
+  // the sunflowers behind the fence, by the tree
+  for (let k = 0; k < 3 + ri(rng, 2); k++) {
+    const fx = tx + a.span(-50, 50);
+    const fy = a.span(226, 242);
+    a.line(pathD`M${fx} 290Q${fx + a.span(-6, 6)} ${(fy + 290) / 2} ${fx} ${fy}`, "#24361f", 2);
+    for (let p = 0; p < 8; p++) {
+      const ang = (p / 8) * Math.PI * 2;
+      a.dot(fx + Math.cos(ang) * 7, fy + Math.sin(ang) * 7, 2.6, "#d4a22e");
+    }
+    a.dot(fx, fy, 5, "#3a2412");
+  }
+  // the fence across the yard, its gate in front of the door
+  a.box(0, 258, W, 3, "#2a221b");
+  a.box(0, 274, W, 3, "#2a221b");
+  for (let x = -3; x < W; x += 9) {
+    const top = 249 + rng() * 4;
+    a.fill(
+      pathOf([
+        [x, 288],
+        [x, top + 4],
+        [x + 3, top],
+        [x + 6, top + 4],
+        [x + 6, 288],
+      ]),
+      Math.abs(x + 3 - dx) < 14 ? "#4a3a2c" : "#3a2f26",
+    );
+  }
+  a.box(0, 288, W, 12, "#0a120d");
+  for (let x = a.span(0, 8); x < W; x += a.span(8, 18))
+    a.line(pathD`M${x} ${W}L${x - 2} ${W - 8}M${x} ${W}L${x + 2} ${W - 9}`, "#1c2c20", 1.2);
+  // fireflies
+  for (let k = 0; k < 6; k++) {
+    const fx = rng() * W;
+    const fy = a.span(200, 285);
+    a.dot(fx, fy, 4, "#d8ff7a", 0.18);
+    a.dot(fx, fy, 1.2, "#eaff9a");
+  }
+  return { sky, art: a.art };
+}
+
+const PYLON_SKIES: readonly [string, string][] = [
+  ["#2a1838", "#f08a4b"],
+  ["#1f2245", "#f2a65a"],
+  ["#381a36", "#ff8a5c"],
+];
+const CLOUDS = ["#f6b07a", "#e98a7a", "#b0607a", "#ffd2a0"];
+const FIELDS = ["#4a3a22", "#3a3424", "#5a4626", "#2f3322", "#6a5428", "#3e2e1e"];
+
+/** A power line at sunset: towers striding off over the fields, birds on the wires, a far village. */
+function pylonScene(rng: Rng): Picture {
+  const W = JIGSAW_SIZE;
+  const a = painter(rng);
+  const sky = a.pick(PYLON_SKIES);
+  const hz = a.span(204, 218);
+  const flip = rng() < 0.5;
+  const mirror = (x: number) => (flip ? W - x : x);
+  // the sun low, its glow, streaks of cloud lit from below
+  const sx = a.span(70, 230);
+  const sr = a.span(20, 30);
+  const sy = hz - a.span(4, 26);
+  a.dot(sx, sy, sr * 2.8, "#ffd27a", 0.08);
+  a.dot(sx, sy, sr * 1.7, "#ffd9a0", 0.14);
+  a.dot(sx, sy, sr, "#ffe6b0");
+  for (let k = 0; k < 7; k++)
+    a.box(
+      a.span(-40, W - 40),
+      a.span(30, hz - 40),
+      a.span(50, 140),
+      a.span(3, 7),
+      a.pick(CLOUDS),
+      3,
+      a.span(0.3, 0.7),
+    );
+  for (let k = 0; k < 5; k++) {
+    const bx = a.span(20, 280);
+    const by = a.span(30, 140);
+    const w = a.span(3, 6);
+    a.line(
+      pathD`M${bx - w} ${by - w * 0.4}Q${bx - w * 0.4} ${by - w * 0.6} ${bx} ${by}Q${bx + w * 0.4} ${by - w * 0.6} ${bx + w} ${by - w * 0.4}`,
+      "#2a1a2a",
+      1.2,
+    );
+  }
+  // far hills, a village on them: little houses, a window lit here and there, a church
+  a.hills(hz - 2, 16, "#3a2238", 0.75);
+  for (let k = 0; k < 7; k++) {
+    const vx = a.span(10, 290);
+    const vw = a.span(7, 13);
+    const vh = a.span(5, 9);
+    a.fill(
+      pathOf([
+        [vx, hz + 2],
+        [vx, hz - vh],
+        [vx + vw / 2, hz - vh - 5],
+        [vx + vw, hz - vh],
+        [vx + vw, hz + 2],
+      ]),
+      "#2a1828",
+    );
+    if (rng() < 0.5) a.dot(vx + vw / 2, hz - vh / 2, 1, a.pick(LIT));
+  }
+  const kx = a.span(30, 270);
+  a.box(kx - 5, hz - 16, 10, 18, "#2a1828");
+  a.dot(kx, hz - 18, 5.5, "#2a1828");
+  a.line(pathD`M${kx} ${hz - 23}V${hz - 31}M${kx - 3} ${hz - 28}H${kx + 3}`, "#2a1828", 1.2);
+  // the fields, their strips running off to where the sun sets, a road through them
+  a.box(0, hz, W, W - hz, "#2b2620");
+  for (let k = -7; k < 7; k++)
+    a.fill(
+      pathOf([
+        [sx, hz],
+        [sx + k * 46, W],
+        [sx + (k + 1) * 46, W],
+      ]),
+      a.pick(FIELDS),
+    );
+  let rows = "";
+  for (let k = -20; k <= 20; k++) rows += pathD`M${sx} ${hz}L${sx + k * 16} ${W}`;
+  a.line(rows, "#000000", 0.6, 0.15);
+  const rx = a.span(90, 210);
+  const bend = (rx + sx) / 2 + a.span(-40, 40);
+  const by = hz + (W - hz) * 0.55;
+  a.fill(
+    pathD`M${rx - 18} ${W}Q${bend - 6} ${by} ${sx - 1} ${hz}L${sx + 1} ${hz}Q${bend + 6} ${by} ${rx + 18} ${W}Z`,
+    "#6a4a34",
+    0.85,
+  );
+  // the towers: lattice legs, braces, two crossarms with the insulators hanging
+  const pylon = (x: number, foot: number, top: number) => {
+    const h = foot - top;
+    const wb = h * 0.17;
+    const wt = h * 0.035;
+    const waist = top + h * 0.3;
+    const half = (y: number) => wt + ((wb - wt) * (y - waist)) / (foot - waist);
+    let d = pathD`M${x - wb} ${foot}L${x - wt} ${waist}L${x - wt} ${top + h * 0.06}L${x} ${top}L${x + wt} ${top + h * 0.06}L${x + wt} ${waist}L${x + wb} ${foot}`;
+    for (let k = 0; k < 6; k++) {
+      const y0 = foot - ((foot - waist) * k) / 6;
+      const y1 = foot - ((foot - waist) * (k + 1)) / 6;
+      d += pathD`M${x - half(y0)} ${y0}L${x + half(y1)} ${y1}M${x + half(y0)} ${y0}L${x - half(y1)} ${y1}M${x - half(y1)} ${y1}H${x + half(y1)}`;
+    }
+    const tips: [number, number][] = [];
+    for (const [ay, arm] of [
+      [top + h * 0.12, h * 0.2],
+      [top + h * 0.26, h * 0.26],
+    ] as const) {
+      d += pathD`M${x - arm} ${ay}H${x + arm}M${x - arm} ${ay}L${x - wt} ${ay + h * 0.05}M${x + arm} ${ay}L${x + wt} ${ay + h * 0.05}`;
+      for (const side of [-1, 1]) {
+        const ix = x + side * arm * 0.92;
+        d += pathD`M${ix} ${ay}V${ay + h * 0.04}`;
+        tips.push([ix, ay + h * 0.04]);
+      }
+    }
+    a.line(d, "#17121d", Math.max(0.8, h * 0.006));
+    return tips;
+  };
+  const x1 = a.span(55, 90);
+  const x2 = x1 + a.span(115, 140);
+  const x3 = x2 + a.span(60, 75);
+  const towers = [
+    pylon(mirror(x1), W + 8, a.span(40, 62)),
+    pylon(mirror(x2), hz + 30, hz - 105),
+    pylon(mirror(x3), hz + 8, hz - 48),
+  ];
+  // the wires, sagging from tower to tower, from behind us and off into the distance
+  const sagged = (p: [number, number], q: [number, number]) =>
+    pathD`Q${(p[0] + q[0]) / 2} ${(p[1] + q[1]) / 2 + Math.abs(q[0] - p[0]) * 0.12} ${q[0]} ${q[1]}`;
+  for (let k = 0; k < 4; k++) {
+    const [p1, p2, p3] = towers.map((tips) => tips[k] as [number, number]) as [
+      [number, number],
+      [number, number],
+      [number, number],
+    ];
+    const from: [number, number] = [mirror(-30), p1[1] - 10];
+    const to: [number, number] = [mirror(W + 40), p3[1] + 4];
+    a.line(
+      `${pathD`M${from[0]} ${from[1]}`}${sagged(from, p1)}${sagged(p1, p2)}${sagged(p2, p3)}${sagged(p3, to)}`,
+      "#17121d",
+      1,
+    );
+  }
+  // birds sat on one of the near wires
+  const [w1, w2] = [towers[0]?.[2], towers[1]?.[2]] as [[number, number], [number, number]];
+  const cx = (w1[0] + w2[0]) / 2;
+  const cy = (w1[1] + w2[1]) / 2 + Math.abs(w2[0] - w1[0]) * 0.12;
+  for (let k = 0; k < 3 + ri(rng, 3); k++) {
+    const t = a.span(0.2, 0.8);
+    const bx = (1 - t) * (1 - t) * w1[0] + 2 * (1 - t) * t * cx + t * t * w2[0];
+    const by2 = (1 - t) * (1 - t) * w1[1] + 2 * (1 - t) * t * cy + t * t * w2[1];
+    const face = rng() < 0.5 ? -1 : 1;
+    a.oval(bx, by2 - 3, 3.2, 2.4, "#17121d");
+    a.dot(bx + face * 2.6, by2 - 5.4, 1.7, "#17121d");
+    a.line(pathD`M${bx - face * 2.5} ${by2 - 2.5}L${bx - face * 6} ${by2 + 1}`, "#17121d", 1.2);
+  }
+  for (let x = a.span(0, 8); x < W; x += a.span(6, 14))
+    a.line(pathD`M${x} ${W}L${x - 2} ${W - 9}M${x} ${W}L${x + 3} ${W - 7}`, "#1c1712", 1.2);
+  return { sky, art: a.art };
+}
+
+const CANDLE_WALLS: readonly [string, string][] = [
+  ["#18121e", "#2e1e18"],
+  ["#121624", "#2c2018"],
+  ["#1c1318", "#33211a"],
+];
+const CURTAINS = ["#5a2434", "#2f4a5a", "#5a4a24", "#3a2a4a"];
+const CATS = ["#0d0a0c", "#3a3a40", "#6a4428"];
+const MUGS = ["#7a8aa8", "#a85a4a", "#5a8a6a", "#c9b48a"];
+const BOOKS = ["#7a2a2a", "#2a4a6a", "#4a6a3a", "#8a6a2a", "#5a3a6a"];
+const TABLES = ["#3a2416", "#2e1e14", "#40291a"];
+
+/**
+ * At home in an outage: a candle on the table and its glow, a mug steaming, a phone charging from
+ * a power bank, books; the window with the cat on its sill, a clock and a picture on the wall.
+ */
+function candleScene(rng: Rng): Picture {
+  const W = JIGSAW_SIZE;
+  const a = painter(rng);
+  const sky = a.pick(CANDLE_WALLS);
+  // the wallpaper's stripes
+  for (let x = a.span(0, 12); x < W; x += 24) a.box(x, 0, 10, 240, "#ffffff", 0, 0.03);
+  // the window: the night outside, the houses across the street dark but for a window or two
+  const right = rng() < 0.5;
+  const ww = a.span(118, 132);
+  const wh = a.span(120, 134);
+  const wx = right ? W - ww - a.span(18, 34) : a.span(18, 34);
+  const wy = a.span(22, 34);
+  const sill = wy + wh;
+  a.box(wx, wy, ww, wh, "#0a1428");
+  for (let k = 0; k < 14; k++)
+    a.dot(wx + rng() * ww, wy + rng() * wh * 0.5, 0.5 + rng(), "#ffffff", 0.4 + rng() * 0.5);
+  a.dot(wx + ww * a.span(0.2, 0.8), wy + a.span(16, 34), a.span(7, 10), "#f3e6b8");
+  for (let x = wx; x < wx + ww - 2; ) {
+    const bw = Math.min(a.span(16, 30), wx + ww - x);
+    const top = wy + wh * a.span(0.35, 0.6);
+    a.box(x, top, bw, sill - top, "#060a15");
+    for (let y = top + 5; y < sill - 6; y += 9)
+      for (let xx = x + 3; xx < x + bw - 4; xx += 7)
+        if (rng() < 0.12) a.box(xx, y, 3, 4, a.pick(LIT));
+    x += bw + 1;
+  }
+  a.line(
+    pathD`M${wx} ${wy}H${wx + ww}V${sill}H${wx}ZM${wx + ww / 2} ${wy + wh * 0.3}V${sill}M${wx} ${wy + wh * 0.3}H${wx + ww}`,
+    "#4a3626",
+    5,
+  );
+  a.box(wx - 10, sill, ww + 20, 8, "#55402f", 2);
+  // a plant in a pot on the sill
+  const px = wx + ww * a.span(0.12, 0.28);
+  for (let k = 0; k < 5; k++) {
+    const ang = -Math.PI / 2 + (k - 2) * 0.45;
+    const lx = px + Math.cos(ang) * 16;
+    const ly = sill - 16 + Math.sin(ang) * 16;
+    a.line(pathD`M${px} ${sill - 16}Q${px + (lx - px) * 0.3} ${ly + 4} ${lx} ${ly}`, "#3a6a3a", 4);
+  }
+  a.fill(
+    pathOf([
+      [px - 9, sill - 16],
+      [px + 9, sill - 16],
+      [px + 7, sill],
+      [px - 7, sill],
+    ]),
+    "#9a4e2e",
+  );
+  // the curtains, drawn back
+  const cloth = a.pick(CURTAINS);
+  for (const [x0, x1, bow] of [
+    [wx - 26, wx + 14, 6],
+    [wx + ww + 26, wx + ww - 14, -6],
+  ] as const) {
+    a.fill(
+      pathD`M${x0} ${wy - 12}L${x1} ${wy - 12}Q${x1 + bow} ${wy + wh * 0.5} ${x1 - bow * 0.3} ${sill + 14}L${x0} ${sill + 14}Z`,
+      cloth,
+    );
+    const mid = (x0 + x1) / 2;
+    a.line(
+      pathD`M${mid} ${wy - 12}Q${mid + 4} ${wy + wh * 0.5} ${mid - 2} ${sill + 14}`,
+      "#000000",
+      1.5,
+      0.25,
+    );
+  }
+  a.line(pathD`M${wx - 34} ${wy - 13}H${wx + ww + 34}`, "#2a1e16", 3);
+  // the cat on the sill, looking out
+  const cx = wx + ww * a.span(0.48, 0.7);
+  const fur = a.pick(CATS);
+  a.fill(
+    pathD`M${cx - 13} ${sill}Q${cx - 16} ${sill - 22} ${cx - 6} ${sill - 30}L${cx + 6} ${sill - 30}Q${cx + 16} ${sill - 22} ${cx + 13} ${sill}Z`,
+    fur,
+  );
+  a.dot(cx, sill - 34, 9, fur);
+  for (const side of [-1, 1])
+    a.fill(
+      pathOf([
+        [cx + side * 8, sill - 37],
+        [cx + side * 7, sill - 48],
+        [cx + side * 2, sill - 41],
+      ]),
+      fur,
+    );
+  a.line(pathD`M${cx + 11} ${sill - 2}Q${cx + 24} ${sill + 2} ${cx + 20} ${sill + 18}`, fur, 4);
+  // on the other wall: a clock and a picture in a frame
+  const ox = right ? a.span(42, 70) : W - a.span(42, 70);
+  const oy = a.span(46, 66);
+  a.dot(ox, oy, 19, "#3a2c22");
+  a.dot(ox, oy, 16, "#d9ceb6");
+  let ticks = "";
+  for (let k = 0; k < 12; k++) {
+    const ang = (k / 12) * Math.PI * 2;
+    ticks += pathD`M${ox + Math.cos(ang) * 12} ${oy + Math.sin(ang) * 12}L${ox + Math.cos(ang) * 14.5} ${oy + Math.sin(ang) * 14.5}`;
+  }
+  a.line(ticks, "#3a2c22", 1.2);
+  const hour = rng() * Math.PI * 2;
+  const minute = rng() * Math.PI * 2;
+  a.line(
+    pathD`M${ox} ${oy}L${ox + Math.sin(hour) * 8} ${oy - Math.cos(hour) * 8}M${ox} ${oy}L${ox + Math.sin(minute) * 12} ${oy - Math.cos(minute) * 12}`,
+    "#1a120c",
+    1.6,
+  );
+  const fw = a.span(46, 58);
+  const fy = oy + a.span(32, 42);
+  a.box(ox - fw / 2 - 4, fy - 4, fw + 8, 46, "#6a4a28", 1);
+  a.box(ox - fw / 2, fy, fw, 38, "#4f7ea6");
+  a.fill(
+    pathD`M${ox - fw / 2} ${fy + 24}Q${ox} ${fy + 10} ${ox + fw / 2} ${fy + 27}V${fy + 38}H${ox - fw / 2}Z`,
+    "#4a7a3a",
+  );
+  a.dot(ox + fw * 0.22, fy + 10, 4, "#ffd27a");
+  // the candle's glow over the wall
+  const ty = a.span(212, 222);
+  const fx = a.span(115, 185);
+  const ct = ty - a.span(50, 62);
+  for (const [r, o] of [
+    [150, 0.05],
+    [95, 0.07],
+    [55, 0.09],
+    [26, 0.16],
+  ] as const)
+    a.dot(fx, ct - 14, r, "#ffb85a", o);
+  // the table, its grain, the light on it
+  a.box(0, ty, W, W - ty, a.pick(TABLES));
+  a.box(0, ty, W, 4, "#ffffff", 0, 0.08);
+  for (let k = 0; k < 5; k++) {
+    const y = ty + 14 + k * 16 + a.span(-4, 4);
+    a.line(
+      pathD`M0 ${y}Q${W / 2} ${y + a.span(-6, 6)} ${W} ${y + a.span(-3, 3)}`,
+      "#000000",
+      1,
+      0.2,
+    );
+  }
+  a.oval(fx, ty + 16, 100, 16, "#ffb85a", 0.1);
+  // the candle in its saucer, the wax run down, the flame
+  a.oval(fx, ty - 4, 22, 6, "#9a7a44");
+  a.box(fx - 7, ct, 14, ty - 6 - ct, "#efe2c4", 1);
+  a.box(fx + 2, ct, 5, ty - 6 - ct, "#d6c6a2");
+  a.fill(
+    pathD`M${fx - 7} ${ct}V${ct + 9}Q${fx - 5} ${ct + 13} ${fx - 3} ${ct + 7}V${ct}Z`,
+    "#f8eed8",
+  );
+  a.line(pathD`M${fx} ${ct}V${ct - 5}`, "#2a1a10", 1.2);
+  a.fill(
+    pathD`M${fx} ${ct - 4}Q${fx - 6} ${ct - 11} ${fx} ${ct - 26}Q${fx + 6} ${ct - 11} ${fx} ${ct - 4}Z`,
+    "#ffab3d",
+  );
+  a.fill(
+    pathD`M${fx} ${ct - 5}Q${fx - 3} ${ct - 10} ${fx} ${ct - 18}Q${fx + 3} ${ct - 10} ${fx} ${ct - 5}Z`,
+    "#fff2b8",
+  );
+  // the mug to one side, steaming
+  const side = rng() < 0.5 ? 1 : -1;
+  const mx = fx + side * a.span(50, 62);
+  const mug = a.pick(MUGS);
+  a.line(
+    pathD`M${mx + side * 12} ${ty - 24}C${mx + side * 22} ${ty - 24} ${mx + side * 22} ${ty - 10} ${mx + side * 12} ${ty - 10}`,
+    mug,
+    3.5,
+  );
+  a.box(mx - 13, ty - 30, 26, 28, mug, 3);
+  a.oval(mx, ty - 30, 13, 3.5, "#000000", 0.35);
+  for (const sx of [mx - 4, mx + 5])
+    a.line(
+      pathD`M${sx} ${ty - 36}Q${sx - 5} ${ty - 46} ${sx} ${ty - 54}Q${sx + 5} ${ty - 62} ${sx} ${ty - 70}`,
+      "#ffffff",
+      1.5,
+      0.2,
+    );
+  // books stacked beyond the mug
+  const bx = Math.min(W - 28, Math.max(28, mx + side * a.span(40, 50)));
+  let top = ty - 2;
+  for (let k = 0; k < 3; k++) {
+    const bw = a.span(38, 50);
+    const bh = a.span(7, 10);
+    top -= bh;
+    const x = bx - bw / 2 + a.span(-4, 4);
+    a.box(x, top, bw, bh, a.pick(BOOKS), 1);
+    a.box(x + bw * 0.12, top + 1.5, 2, bh - 3, "#ffffff", 0, 0.3);
+  }
+  // the phone standing, charging from the power bank on the other side
+  const pb = fx - side * a.span(52, 66);
+  a.box(pb - 22, ty - 12, 44, 12, "#262a32", 3);
+  const charge = 1 + ri(rng, 3);
+  for (let k = 0; k < 4; k++)
+    a.dot(pb - 14 + k * 5, ty - 6, 1.2, k < charge ? "#5cff8a" : "#1a3a22");
+  const phx = Math.min(W - 14, Math.max(14, pb - side * 36));
+  a.line(
+    pathD`M${pb - side * 22} ${ty - 6}Q${(pb - side * 22 + phx) / 2} ${ty + 10} ${phx} ${ty - 2}`,
+    "#d8d8d8",
+    1.2,
+  );
+  a.dot(phx, ty - 22, 26, "#6a9ad8", 0.1);
+  a.box(phx - 10, ty - 38, 20, 36, "#0e0f12", 3);
+  a.box(phx - 8, ty - 35, 16, 28, "#3d6fae", 1);
+  a.box(phx - 4, ty - 27, 8, 13, "#ffffff", 1, 0.85);
+  a.box(phx - 3, ty - 19, 6, 4, "#5cff8a");
+  return { sky, art: a.art };
+}
+
+const WINTER_SKIES: readonly [string, string][] = [
+  ["#0b1530", "#3c5282"],
+  ["#121838", "#4a5a8c"],
+  ["#0a1a2e", "#356a8a"],
+];
+const BLOCKS = ["#1e2846", "#252c4a", "#1c2a3e"];
+const FIRS = ["#183a34", "#1f4a3c", "#16362c"];
+const SCARVES = ["#c0392b", "#2e86c1", "#d4ac0d", "#8e44ad"];
+
+/** A winter evening: blocks of flats lit here and there, firs in snow, a snowman, a lamp, a sledge. */
+function winterScene(rng: Rng): Picture {
+  const W = JIGSAW_SIZE;
+  const a = painter(rng);
+  const sky = a.pick(WINTER_SKIES);
+  a.stars(24, 110);
+  a.moon(a.span(30, 270), a.span(26, 50), a.span(12, 16));
+  // the blocks of flats behind, snow on their roofs, their windows lit here and there
+  for (let x = a.span(-20, 10); x < W; ) {
+    const bw = a.span(56, 84);
+    const top = a.span(66, 120);
+    a.box(x, top, bw, 220 - top, a.pick(BLOCKS));
+    a.box(x - 1, top - 3, bw + 2, 4, "#dfe8f6", 1);
+    for (let y = top + 8; y < 205; y += 13)
+      for (let k = 0; k < Math.floor((bw - 6) / 11); k++) {
+        const r = rng();
+        if (r < 0.6) a.box(x + 6 + k * 11, y, 5, 6, r < 0.3 ? a.pick(LIT) : "#151b33");
+      }
+    x += bw + a.span(14, 34);
+  }
+  // the snow: drifts far and near
+  a.hills(212, 16, "#b9c6dd");
+  a.box(0, 228, W, W - 228, "#d3dcec");
+  for (let k = 0; k < 5; k++)
+    a.oval(a.span(0, W), a.span(240, 295), a.span(30, 60), a.span(4, 8), "#bccae0");
+  // firs, snow on every tier
+  const fir = (fx: number, base: number, h: number) => {
+    a.box(fx - 2.5, base - h * 0.12, 5, h * 0.12, "#3a2a20");
+    const green = a.pick(FIRS);
+    for (let k = 2; k >= 0; k--) {
+      const ay = base - h + k * h * 0.24;
+      const hw = h * (0.16 + k * 0.08);
+      a.fill(
+        pathOf([
+          [fx, ay],
+          [fx + hw, ay + h * 0.4],
+          [fx - hw, ay + h * 0.4],
+        ]),
+        green,
+      );
+      a.fill(
+        pathD`M${fx} ${ay}L${fx + hw * 0.6} ${ay + h * 0.24}Q${fx + hw * 0.2} ${ay + h * 0.19} ${fx} ${ay + h * 0.25}Q${fx - hw * 0.25} ${ay + h * 0.19} ${fx - hw * 0.6} ${ay + h * 0.24}Z`,
+        "#e9f0f8",
+      );
+    }
+  };
+  for (let k = 0; k < 3 + ri(rng, 2); k++) fir(a.span(10, 290), a.span(226, 248), a.span(50, 90));
+  // the lamp, its light falling on the snow
+  const sx = a.span(70, 230);
+  const lx = sx < W / 2 ? a.span(215, 270) : a.span(30, 85);
+  a.fill(
+    pathOf([
+      [lx - 7, 132],
+      [lx + 7, 132],
+      [lx + 40, 262],
+      [lx - 40, 262],
+    ]),
+    "#ffe2a0",
+    0.1,
+  );
+  a.oval(lx, 262, 42, 7, "#ffe2a0", 0.22);
+  a.box(lx - 1.8, 128, 3.6, 134, "#1e2333");
+  a.box(lx - 8, 122, 16, 10, "#1e2333", 2);
+  a.dot(lx, 133, 14, "#ffe2a0", 0.2);
+  a.dot(lx, 133, 4, "#fff0c0");
+  a.box(lx - 9, 119, 18, 3, "#eef3fa", 1);
+  // footprints up to the snowman
+  const fx0 = a.span(40, 260);
+  for (let k = 0; k < 8; k++) {
+    const t = k / 8;
+    a.oval(fx0 + (sx - fx0) * t + (k % 2 ? 4 : -4), W - 4 - k * 4.5, 2.6, 1.4, "#a9b7cf");
+  }
+  // the snowman: three balls, a bucket, a carrot, a scarf, arms of sticks
+  const sb = a.span(262, 274);
+  const ball = (cy: number, r: number) => {
+    a.dot(sx, cy, r, "#c5d1e4");
+    a.dot(sx - r * 0.12, cy - r * 0.1, r * 0.88, "#f3f6fb");
+  };
+  ball(sb - 24, 26);
+  ball(sb - 62, 19);
+  ball(sb - 90, 13);
+  a.line(
+    pathD`M${sx - 17} ${sb - 66}L${sx - 40} ${sb - 82}M${sx - 33} ${sb - 78}L${sx - 38} ${sb - 88}M${sx + 17} ${sb - 66}L${sx + 38} ${sb - 76}M${sx + 32} ${sb - 73}L${sx + 40} ${sb - 68}`,
+    "#4a3020",
+    2,
+  );
+  const look = rng() < 0.5 ? -1 : 1;
+  a.dot(sx - 4, sb - 93, 1.6, "#1a1a1a");
+  a.dot(sx + 4, sb - 93, 1.6, "#1a1a1a");
+  a.fill(
+    pathOf([
+      [sx, sb - 90],
+      [sx + look * 13, sb - 88],
+      [sx, sb - 86.5],
+    ]),
+    "#f07a2a",
+  );
+  for (const y of [sb - 70, sb - 60, sb - 50]) a.dot(sx, y, 1.8, "#1a1a1a");
+  const scarf = a.pick(SCARVES);
+  a.fill(
+    pathD`M${sx - 14} ${sb - 79}Q${sx} ${sb - 73} ${sx + 14} ${sb - 79}L${sx + 14} ${sb - 75}Q${sx} ${sb - 69} ${sx - 14} ${sb - 75}Z`,
+    scarf,
+  );
+  a.box(sx + 5, sb - 76, 6, 16, scarf, 1);
+  a.fill(
+    pathOf([
+      [sx - 10, sb - 99],
+      [sx + 10, sb - 99],
+      [sx + 8, sb - 114],
+      [sx - 8, sb - 114],
+    ]),
+    "#5a6170",
+  );
+  a.box(sx - 12, sb - 101, 24, 3, "#4a505e");
+  // the sledge left in the snow
+  const kx = sx < W / 2 ? a.span(190, 250) : a.span(14, 70);
+  const ky = a.span(282, 292);
+  a.line(pathD`M${kx + 6} ${ky - 4}V${ky - 1}M${kx + 28} ${ky - 4}V${ky - 1}`, "#6a2a1a", 1.6);
+  a.box(kx, ky - 8, 36, 4, "#b0492e", 1);
+  a.line(
+    pathD`M${kx - 2} ${ky - 1}H${kx + 34}Q${kx + 40} ${ky - 1} ${kx + 40} ${ky - 6}`,
+    "#6a2a1a",
+    2,
+  );
+  a.line(pathD`M${kx + 40} ${ky - 6}Q${kx + 52} ${ky + 2} ${kx + 58} ${ky - 4}`, "#c9a46a", 1);
+  // snow falling
+  for (let k = 0; k < 60; k++)
+    a.dot(rng() * W, rng() * W, 0.7 + rng() * 1.5, "#ffffff", 0.45 + rng() * 0.5);
+  return { sky, art: a.art };
+}
+
+const JIGSAW_PAINT: Record<JigsawScene, (rng: Rng) => Picture> = {
+  street: streetScene,
+  village: villageScene,
+  pylons: pylonScene,
+  candle: candleScene,
+  winter: winterScene,
+};
+
+/**
+ * A picture of its own (one of the scenes, drawn afresh), cut into n × n pieces with knobs (each
+ * inner edge bulging one way or the other, nudged a little so no two look alike), the pieces
+ * handed over shuffled. Nothing on the board to go by: up the floors only more pieces.
+ */
+export function jigsawPuzzle(rng: Rng, tier: Tier): JigsawPuzzle {
+  const n = JIGSAW_GRID[tier] as number;
+  const scene = JIGSAW_SCENES[ri(rng, JIGSAW_SCENES.length)] as JigsawScene;
+  const { sky, art } = JIGSAW_PAINT[scene](rng);
+  const edge = (inner: boolean): JigsawEdge =>
+    inner
+      ? { knob: rng() < 0.5 ? -1 : 1, shift: (rng() - 0.5) * 0.08, scale: 0.85 + rng() * 0.25 }
+      : { knob: 0, shift: 0, scale: 1 };
+  const across = Array.from({ length: n + 1 }, (_, r) =>
+    Array.from({ length: n }, () => edge(r > 0 && r < n)),
+  );
+  const down = Array.from({ length: n }, () =>
+    Array.from({ length: n + 1 }, (_, c) => edge(c > 0 && c < n)),
+  );
+  return { n, scene, sky, art, across, down, order: shuffle(rng, [...Array(n * n).keys()]) };
+}

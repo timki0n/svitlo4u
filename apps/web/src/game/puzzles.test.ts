@@ -17,6 +17,14 @@ import {
   crossingCount,
   FUSE_HITS,
   fusePuzzle,
+  JIGSAW_GRID,
+  JIGSAW_SCENES,
+  JIGSAW_SIZE,
+  jigsawEdge,
+  jigsawFits,
+  jigsawGroup,
+  jigsawOutline,
+  jigsawPuzzle,
   MAX_CHARGE_SOLUTIONS,
   MAX_PACK_SOLUTIONS,
   MIN_BATTERY_MOVES,
@@ -75,6 +83,7 @@ describe("window games", () => {
       packPuzzle,
       batteryPuzzle,
       voltPuzzle,
+      jigsawPuzzle,
     ])
       for (const t of TIERS) expect(make(rngOf(`k${t}`), t)).toEqual(make(rngOf(`k${t}`), t));
     expect(slidePuzzle(rngOf("k"), 1)).toEqual(slidePuzzle(rngOf("k"), 1));
@@ -272,5 +281,117 @@ describe("difficulty: no puzzle is a tap or two away", () => {
       sum: 3,
       path: [3, 4],
     });
+  });
+
+  it("Пазл: n × n pieces, flat round the frame, knobbed inside; neighbours share their edge", () => {
+    for (const k of keys(60))
+      for (const t of TIERS) {
+        const p = jigsawPuzzle(rngOf(k), t);
+        const n = JIGSAW_GRID[t];
+        const s = JIGSAW_SIZE / n;
+        expect(p.n).toBe(n);
+        expect(JIGSAW_SCENES).toContain(p.scene);
+        expect(JSON.stringify(p.art)).not.toMatch(/NaN|Infinity|null/);
+        expect([...p.order].sort((a, b) => a - b)).toEqual([...Array(n * n).keys()]);
+        expect(p.art.length).toBeGreaterThan(60);
+        expect(p.across).toHaveLength(n + 1);
+        expect(p.down).toHaveLength(n);
+        for (const [r, line] of p.across.entries()) {
+          expect(line).toHaveLength(n);
+          for (const e of line) expect(e.knob === 0).toBe(r === 0 || r === n);
+        }
+        for (const line of p.down) {
+          expect(line).toHaveLength(n + 1);
+          line.forEach((e, c) => {
+            expect(e.knob === 0).toBe(c === 0 || c === n);
+          });
+        }
+        for (let i = 0; i < n * n; i++) {
+          const r = Math.floor(i / n);
+          const c = i % n;
+          // four edges round: 24 curves, starting at the piece's top left corner
+          const d = jigsawOutline(p, i);
+          expect(d.startsWith(`M${c * s} ${r * s}C`)).toBe(true);
+          expect(d.endsWith("Z")).toBe(true);
+          expect(d.split("C")).toHaveLength(25);
+        }
+        // an edge runs between the corners of its cell, its knob within a quarter of a piece
+        for (let r = 0; r <= n; r++)
+          for (let c = 0; c < n; c++) {
+            const e = jigsawEdge(p, "across", r, c);
+            expect(e[0]).toEqual([c * s, r * s]);
+            expect(e.at(-1)?.[0]).toBeCloseTo((c + 1) * s);
+            for (const [, y] of e) expect(Math.abs(y - r * s)).toBeLessThanOrEqual(s * 0.25 * 1.1);
+          }
+      }
+  });
+
+  it("Пазл: every scene comes up, each drawn afresh", () => {
+    const seen = new Map<string, Set<string>>();
+    for (const k of keys(200)) {
+      const p = jigsawPuzzle(rngOf(k), 2);
+      const pictures = seen.get(p.scene) ?? new Set();
+      pictures.add(JSON.stringify(p.art));
+      seen.set(p.scene, pictures);
+    }
+    expect([...seen.keys()].sort()).toEqual([...JIGSAW_SCENES].sort());
+    for (const pictures of seen.values()) expect(pictures.size).toBeGreaterThan(5);
+  });
+
+  it("Пазл: a piece lies on any free cell, but only next to its own neighbours", () => {
+    // 3 × 3: piece i belongs at cell i
+    const at: (number | null)[] = Array(9).fill(null);
+    // the top left piece in the middle of the board: nothing round it, so it fits
+    expect(jigsawFits(3, at, [0], 1, 1)).toBe(true);
+    at[0] = 4;
+    // its right neighbour fits to its right, not to its left or under it
+    expect(jigsawFits(3, at, [1], 1, 1)).toBe(true);
+    expect(jigsawFits(3, at, [1], 1, -1)).toBe(false);
+    expect(jigsawFits(3, at, [1], 2, 0)).toBe(false);
+    // another piece cannot lie next to it, nor on it, nor off the board
+    expect(jigsawFits(3, at, [2], 1, -1)).toBe(false);
+    expect(jigsawFits(3, at, [2], 1, -2)).toBe(false);
+    expect(jigsawFits(3, at, [2], 0, 1)).toBe(false);
+    // the piece from the top edge has nothing above it: none may lie there
+    expect(jigsawFits(3, at, [3], -1, 1)).toBe(false);
+    at[1] = 5;
+    at[3] = 7;
+    expect(jigsawGroup(3, at, 0).sort()).toEqual([0, 1, 3]);
+    expect(jigsawGroup(3, at, 3).sort()).toEqual([0, 1, 3]);
+    // the group moves as one: up and left onto its own cells (over where it lay), not further
+    expect(jigsawFits(3, at, [0, 1, 3], 0, 0)).toBe(true);
+    expect(jigsawFits(3, at, [0, 1, 3], 1, 1)).toBe(true);
+    expect(jigsawFits(3, at, [0, 1, 3], 1, 2)).toBe(false);
+    // a piece off the board is alone; pieces next to each other the wrong way round are not joined
+    expect(jigsawGroup(3, at, 8)).toEqual([8]);
+    expect(jigsawGroup(3, [1, 0, null, null, null, null, null, null, null], 0)).toEqual([0]);
+    // all home: one group
+    expect(jigsawGroup(3, [...Array(9).keys()], 4)).toHaveLength(9);
+  });
+
+  it("Пазл: however the pieces are moved, no two lie side by side unless they belong so", () => {
+    for (const k of keys(20)) {
+      const rng = rngOf(k);
+      const n = 4;
+      const at: (number | null)[] = Array(n * n).fill(null);
+      for (let move = 0; move < 400; move++) {
+        const i = Math.floor(rng() * n * n);
+        const group = jigsawGroup(n, at, i);
+        const dr = Math.floor(rng() * (2 * n - 1)) - n + 1;
+        const dc = Math.floor(rng() * (2 * n - 1)) - n + 1;
+        if (rng() < 0.05) for (const j of group) at[j] = null;
+        else if (jigsawFits(n, at, group, dr, dc))
+          for (const j of group) at[j] = (Math.floor(j / n) + dr) * n + (j % n) + dc;
+        const on = new Map<number, number>();
+        for (const [j, cell] of at.entries()) if (cell !== null) on.set(cell, j);
+        expect(on.size).toBe(at.filter((cell) => cell !== null).length);
+        for (const [cell, j] of on) {
+          const right = cell % n < n - 1 ? on.get(cell + 1) : undefined;
+          const below = on.get(cell + n);
+          if (right !== undefined) expect(right).toBe(j % n < n - 1 ? j + 1 : -1);
+          if (below !== undefined) expect(below).toBe(j + n);
+        }
+      }
+    }
   });
 });
