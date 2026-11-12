@@ -21,7 +21,6 @@ import {
   JIGSAW_SCENES,
   JIGSAW_SIZE,
   jigsawEdge,
-  jigsawFits,
   jigsawGroup,
   jigsawOutline,
   jigsawPuzzle,
@@ -351,61 +350,24 @@ describe("difficulty: no puzzle is a tap or two away", () => {
     for (const pictures of seen.values()) expect(pictures.size).toBeGreaterThan(5);
   });
 
-  it("Пазл: a piece lies on any free cell, but only next to its own neighbours", () => {
+  it("Пазл: pieces lying next to each other as in the picture join; any others lie alone", () => {
     // 3 × 3: piece i belongs at cell i
     const at: (number | null)[] = Array(9).fill(null);
-    // the top left piece in the middle of the board: nothing round it, so it fits
-    expect(jigsawFits(3, at, [0], 1, 1)).toBe(true);
     at[0] = 4;
-    // its right neighbour fits to its right, not to its left or under it
-    expect(jigsawFits(3, at, [1], 1, 1)).toBe(true);
-    expect(jigsawFits(3, at, [1], 1, -1)).toBe(false);
-    expect(jigsawFits(3, at, [1], 2, 0)).toBe(false);
-    // another piece cannot lie next to it, nor on it, nor off the board
-    expect(jigsawFits(3, at, [2], 1, -1)).toBe(false);
-    expect(jigsawFits(3, at, [2], 1, -2)).toBe(false);
-    expect(jigsawFits(3, at, [2], 0, 1)).toBe(false);
-    // the piece from the top edge has nothing above it: none may lie there
-    expect(jigsawFits(3, at, [3], -1, 1)).toBe(false);
     at[1] = 5;
     at[3] = 7;
     expect(jigsawGroup(3, at, 0).sort()).toEqual([0, 1, 3]);
     expect(jigsawGroup(3, at, 3).sort()).toEqual([0, 1, 3]);
-    // the group moves as one: up and left onto its own cells (over where it lay), not further
-    expect(jigsawFits(3, at, [0, 1, 3], 0, 0)).toBe(true);
-    expect(jigsawFits(3, at, [0, 1, 3], 1, 1)).toBe(true);
-    expect(jigsawFits(3, at, [0, 1, 3], 1, 2)).toBe(false);
-    // a piece off the board is alone; pieces next to each other the wrong way round are not joined
+    // a piece that does not belong there lies next to them all the same, on its own
+    at[2] = 3;
+    expect(jigsawGroup(3, at, 2)).toEqual([2]);
+    expect(jigsawGroup(3, at, 0).sort()).toEqual([0, 1, 3]);
+    // off the board, alone; the wrong way round, apart; the end of a row is not next to the next one
     expect(jigsawGroup(3, at, 8)).toEqual([8]);
     expect(jigsawGroup(3, [1, 0, null, null, null, null, null, null, null], 0)).toEqual([0]);
+    expect(jigsawGroup(3, [null, null, 2, 3, null, null, null, null, null], 2)).toEqual([2]);
     // all home: one group
     expect(jigsawGroup(3, [...Array(9).keys()], 4)).toHaveLength(9);
-  });
-
-  it("Пазл: however the pieces are moved, no two lie side by side unless they belong so", () => {
-    for (const k of keys(20)) {
-      const rng = rngOf(k);
-      const n = 4;
-      const at: (number | null)[] = Array(n * n).fill(null);
-      for (let move = 0; move < 400; move++) {
-        const i = Math.floor(rng() * n * n);
-        const group = jigsawGroup(n, at, i);
-        const dr = Math.floor(rng() * (2 * n - 1)) - n + 1;
-        const dc = Math.floor(rng() * (2 * n - 1)) - n + 1;
-        if (rng() < 0.05) for (const j of group) at[j] = null;
-        else if (jigsawFits(n, at, group, dr, dc))
-          for (const j of group) at[j] = (Math.floor(j / n) + dr) * n + (j % n) + dc;
-        const on = new Map<number, number>();
-        for (const [j, cell] of at.entries()) if (cell !== null) on.set(cell, j);
-        expect(on.size).toBe(at.filter((cell) => cell !== null).length);
-        for (const [cell, j] of on) {
-          const right = cell % n < n - 1 ? on.get(cell + 1) : undefined;
-          const below = on.get(cell + n);
-          if (right !== undefined) expect(right).toBe(j % n < n - 1 ? j + 1 : -1);
-          if (below !== undefined) expect(below).toBe(j + n);
-        }
-      }
-    }
   });
 
   /** A grid's rows, columns and boxes, cells row by row. */

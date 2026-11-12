@@ -21,7 +21,6 @@ import {
   JIGSAW_SIZE,
   type JigsawPuzzle,
   jigsawEdge,
-  jigsawFits,
   jigsawGroup,
   jigsawOutline,
   type Mirror,
@@ -1680,6 +1679,45 @@ export function mountVolt(root: HTMLElement, p: VoltPuzzle, ctx: GameCtx): Clean
 /** Each mount names its picture and pieces apart (two boards on one page never mix them up). */
 let jigsawMounts = 0;
 
+/** The picture as an SVG document of its own, `k` times its size: one image for every piece. */
+function jigsawPicture(p: JigsawPuzzle, k: number): string {
+  const B = JIGSAW_SIZE;
+  const doc = document.createElementNS(NS, "svg");
+  doc.setAttribute("width", String(B * k));
+  doc.setAttribute("height", String(B * k));
+  doc.setAttribute("viewBox", `0 0 ${B} ${B}`);
+  const defs = svgEl("defs", {}, doc);
+  const sky = svgEl("linearGradient", { id: "sky", x1: 0, y1: 0, x2: 0, y2: 1 }, defs);
+  svgEl("stop", { offset: 0, "stop-color": p.sky[0] }, sky);
+  svgEl("stop", { offset: 1, "stop-color": p.sky[1] }, sky);
+  svgEl("rect", { x: 0, y: 0, width: B, height: B, fill: "url(#sky)" }, doc);
+  for (const a of p.art) {
+    const opacity = a.opacity ?? 1;
+    if (a.kind === "rect")
+      svgEl(
+        "rect",
+        { x: a.x, y: a.y, width: a.w, height: a.h, rx: a.rx ?? 0, fill: a.fill, opacity },
+        doc,
+      );
+    else if (a.kind === "circle")
+      svgEl("circle", { cx: a.cx, cy: a.cy, r: a.r, fill: a.fill, opacity }, doc);
+    else
+      svgEl(
+        "path",
+        {
+          d: a.d,
+          fill: a.fill,
+          stroke: a.stroke ?? "none",
+          "stroke-width": a.width ?? 1,
+          "stroke-linecap": "round",
+          opacity,
+        },
+        doc,
+      );
+  }
+  return new XMLSerializer().serializeToString(doc);
+}
+
 export function mountJigsaw(root: HTMLElement, p: JigsawPuzzle, ctx: GameCtx): Cleanup {
   const { n } = p;
   const total = n * n;
@@ -1703,8 +1741,8 @@ export function mountJigsaw(root: HTMLElement, p: JigsawPuzzle, ctx: GameCtx): C
   };
   const vh = trayY + Math.ceil(total / perRow) * pitch + 2;
   const svg = svgRoot(root, vw, vh, "g-drag");
-  /** A piece taken from next to the board is carried above the finger, so it is not hidden. */
-  const lift = s * 0.35;
+  /** A piece carried hangs this far above the finger, its bottom edge clear of it. */
+  const lift = s / 2 + 18;
   const rowOf = (i: number) => Math.floor(i / n);
   const colOf = (i: number) => i % n;
   const outlines = Array.from({ length: total }, (_, i) => jigsawOutline(p, i));
@@ -1725,39 +1763,35 @@ export function mountJigsaw(root: HTMLElement, p: JigsawPuzzle, ctx: GameCtx): C
     Array.from({ length: n + 1 }, (_, c) => curve(jigsawEdge(p, "down", r, c))),
   );
 
-  // the picture, drawn once; each piece shows it through its own outline
+  // the picture, an image every piece shows through its own outline: drawn by the browser once,
+  // not shape by shape for each piece (that made a drag stall); a bitmap of it as soon as it is
+  // ready, cheaper still
   const defs = svgEl("defs", {}, svg);
-  const sky = svgEl("linearGradient", { id: `${uid}-sky`, x1: 0, y1: 0, x2: 0, y2: 1 }, defs);
-  svgEl("stop", { offset: 0, "stop-color": p.sky[0] }, sky);
-  svgEl("stop", { offset: 1, "stop-color": p.sky[1] }, sky);
-  const frame = svgEl("clipPath", { id: `${uid}-frame` }, defs);
-  svgEl("rect", { x: 0, y: 0, width: B, height: B }, frame);
-  const art = svgEl("g", { id: `${uid}-art`, "clip-path": `url(#${uid}-frame)` }, defs);
-  svgEl("rect", { x: 0, y: 0, width: B, height: B, fill: `url(#${uid}-sky)` }, art);
-  for (const a of p.art) {
-    const opacity = a.opacity ?? 1;
-    if (a.kind === "rect")
-      svgEl(
-        "rect",
-        { x: a.x, y: a.y, width: a.w, height: a.h, rx: a.rx ?? 0, fill: a.fill, opacity },
-        art,
-      );
-    else if (a.kind === "circle")
-      svgEl("circle", { cx: a.cx, cy: a.cy, r: a.r, fill: a.fill, opacity }, art);
-    else
-      svgEl(
-        "path",
-        {
-          d: a.d,
-          fill: a.fill,
-          stroke: a.stroke ?? "none",
-          "stroke-width": a.width ?? 1,
-          "stroke-linecap": "round",
-          opacity,
-        },
-        art,
-      );
-  }
+  const k = Math.min(3, Math.max(2, Math.ceil(window.devicePixelRatio || 1)));
+  const vector = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(jigsawPicture(p, k))}`;
+  const picture = svgEl(
+    "image",
+    { id: `${uid}-art`, href: vector, width: B, height: B, preserveAspectRatio: "none" },
+    defs,
+  );
+  let alive = true;
+  let bitmap = "";
+  const raster = new Image();
+  raster.onload = () => {
+    if (!alive) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = B * k;
+    canvas.height = B * k;
+    const g = canvas.getContext("2d");
+    if (!g) return;
+    g.drawImage(raster, 0, 0, B * k, B * k);
+    canvas.toBlob((blob) => {
+      if (!blob || !alive) return;
+      bitmap = URL.createObjectURL(blob);
+      picture.setAttribute("href", bitmap);
+    });
+  };
+  raster.src = vector;
   outlines.forEach((d, i) => {
     const clip = svgEl("clipPath", { id: `${uid}-p${i}` }, defs);
     svgEl("path", { d }, clip);
@@ -1766,7 +1800,9 @@ export function mountJigsaw(root: HTMLElement, p: JigsawPuzzle, ctx: GameCtx): C
 
   /** The cell each piece lies on (row by row), or null: next to the board. */
   const at = new Array<number | null>(total).fill(null);
-  /** A drag: the pieces carried (a group moves whole), the one held, where it is held by. */
+  /** The element each piece is drawn in (the pieces of a group share one). */
+  const shown: (SVGElement | undefined)[] = [];
+  /** A drag: the pieces carried (a group moves whole), the one held by the finger. */
   let drag: {
     group: number[];
     i: number;
@@ -1774,8 +1810,6 @@ export function mountJigsaw(root: HTMLElement, p: JigsawPuzzle, ctx: GameCtx): C
     y: number;
     sx: number;
     sy: number;
-    ox: number;
-    oy: number;
     moved: boolean;
   } | null = null;
   /** The pieces carried, drawn over the rest: moved as the finger moves, not drawn again. */
@@ -1787,22 +1821,22 @@ export function mountJigsaw(root: HTMLElement, p: JigsawPuzzle, ctx: GameCtx): C
   /**
    * Pieces `members` (one, or a group) with the picture's top left at (x, y), `scale` times their
    * size: the picture through their outlines together, their edge round them all but where they
-   * are joined, so a group is one whole.
+   * are joined, so a group is one whole; carried, a shadow under them.
    */
-  const drawSet = (members: readonly number[], x: number, y: number, scale: number, extra = "") => {
-    const g = svgEl(
-      "g",
-      { transform: `translate(${x} ${y}) scale(${scale})`, style: extra },
-      layer,
-    );
+  const drawSet = (
+    members: readonly number[],
+    x: number,
+    y: number,
+    scale: number,
+    carried = false,
+  ) => {
+    const g = svgEl("g", { transform: `translate(${x} ${y}) scale(${scale})` }, layer);
     let clip = `${uid}-p${members[0]}`;
     if (members.length > 1) {
       clip = `${uid}-g${joins++}`;
       const shape = svgEl("clipPath", { id: clip }, g);
       for (const i of members) svgEl("path", { d: outlines[i] as string }, shape);
     }
-    const inner = svgEl("g", { "clip-path": `url(#${clip})` }, g);
-    svgEl("use", { href: `#${uid}-art` }, inner);
     const mine = new Set(members);
     let d = "";
     for (const i of members) {
@@ -1813,6 +1847,15 @@ export function mountJigsaw(root: HTMLElement, p: JigsawPuzzle, ctx: GameCtx): C
       if (c === 0 || !mine.has(i - 1)) d += down[r]?.[c] as string;
       if (c === n - 1 || !mine.has(i + 1)) d += down[r]?.[c + 1] as string;
     }
+    if (carried)
+      for (const i of members)
+        svgEl(
+          "path",
+          { d: outlines[i] as string, transform: "translate(3 8)", style: "fill:rgba(0,0,0,0.35)" },
+          g,
+        );
+    const inner = svgEl("g", { "clip-path": `url(#${clip})` }, g);
+    svgEl("use", { href: `#${uid}-art` }, inner);
     svgEl(
       "path",
       {
@@ -1823,13 +1866,13 @@ export function mountJigsaw(root: HTMLElement, p: JigsawPuzzle, ctx: GameCtx): C
     );
     return g;
   };
-  /** Where the picture's top left is while the pieces are carried. */
+  /** Where the picture's top left is while the pieces are carried: the one held above the finger. */
   const heldAt = (d: NonNullable<typeof drag>): [number, number] => [
-    d.x - d.ox - colOf(d.i) * s,
-    d.y - d.oy - rowOf(d.i) * s,
+    d.x - s / 2 - colOf(d.i) * s,
+    d.y - lift - s / 2 - rowOf(d.i) * s,
   ];
   const status = () =>
-    `Збери картинку: шматки зчіпляються, коли краї сходяться · на полі ${at.filter((c) => c !== null).length} з ${total}`;
+    `Збери картинку: клади шматки на поле, ті, що зійшлися, зчіпляються · на полі ${at.filter((c) => c !== null).length} з ${total}`;
 
   const draw = () => {
     layer.replaceChildren();
@@ -1842,54 +1885,41 @@ export function mountJigsaw(root: HTMLElement, p: JigsawPuzzle, ctx: GameCtx): C
       { x: bx - 4, y: by - 4, width: B + 8, height: B + 8, rx: 10, style: `fill:${TILE}` },
       layer,
     );
-    const carried = new Set(drag?.moved ? drag.group : []);
     // the pieces on the board, each group as one; once all are home, the picture whole
     if (won) svgEl("use", { href: `#${uid}-art`, x: bx, y: by }, layer);
     else {
       const drawn = new Set<number>();
       at.forEach((cell, i) => {
-        if (cell === null || drawn.has(i) || carried.has(i)) return;
+        if (cell === null || drawn.has(i)) return;
         const group = jigsawGroup(n, at, i);
-        for (const j of group) drawn.add(j);
-        drawSet(group, bx + (colOf(cell) - colOf(i)) * s, by + (rowOf(cell) - rowOf(i)) * s, 1);
+        const el = drawSet(
+          group,
+          bx + (colOf(cell) - colOf(i)) * s,
+          by + (rowOf(cell) - rowOf(i)) * s,
+          1,
+        );
+        for (const j of group) {
+          drawn.add(j);
+          shown[j] = el;
+        }
       });
     }
     // next to the board, each in its place
     p.order.forEach((i, j) => {
-      if (at[i] !== null || carried.has(i)) return;
+      if (at[i] !== null) return;
       const [x, y] = slot(j);
-      drawSet([i], x - small * colOf(i) * s, y - small * rowOf(i) * s, small);
+      shown[i] = drawSet([i], x - small * colOf(i) * s, y - small * rowOf(i) * s, small);
     });
-    // what is carried, full size, over everything
-    if (drag?.moved)
-      held = drawSet(
-        drag.group,
-        ...heldAt(drag),
-        1,
-        "filter:drop-shadow(0 8px 10px rgba(0,0,0,0.5))",
-      );
   };
 
   svg.addEventListener("pointerdown", (e) => {
-    if (won) return;
+    if (won || drag) return;
     const [x, y] = pointIn(svg, e, vw, vh);
     // a piece on the board under the finger: it, and everything joined to it
     const R = Math.floor((y - by) / s);
     const C = Math.floor((x - bx) / s);
-    const i = R >= 0 && R < n && C >= 0 && C < n ? at.indexOf(R * n + C) : -1;
-    if (i >= 0) {
-      drag = {
-        group: jigsawGroup(n, at, i),
-        i,
-        x,
-        y,
-        sx: x,
-        sy: y,
-        ox: x - (bx + C * s),
-        oy: y - (by + R * s),
-        moved: false,
-      };
-    } else {
+    let i = R >= 0 && R < n && C >= 0 && C < n ? at.indexOf(R * n + C) : -1;
+    if (i < 0) {
       // or one next to the board (the box round it, knobs and all)
       const pad = box * 0.2;
       const j = p.order.findIndex((k, idx) => {
@@ -1898,10 +1928,14 @@ export function mountJigsaw(root: HTMLElement, p: JigsawPuzzle, ctx: GameCtx): C
         return x >= sx - pad && x <= sx + box + pad && y >= sy - pad && y <= sy + box + pad;
       });
       if (j < 0) return;
-      const k = p.order[j] as number;
-      drag = { group: [k], i: k, x, y, sx: x, sy: y, ox: s / 2, oy: s / 2 + lift, moved: false };
+      i = p.order[j] as number;
     }
-    svg.setPointerCapture(e.pointerId);
+    drag = { group: jigsawGroup(n, at, i), i, x, y, sx: x, sy: y, moved: false };
+    try {
+      svg.setPointerCapture(e.pointerId);
+    } catch {
+      // a pointer gone already: the moves still come to the board
+    }
   });
   svg.addEventListener("pointermove", (e) => {
     if (!drag) return;
@@ -1911,24 +1945,26 @@ export function mountJigsaw(root: HTMLElement, p: JigsawPuzzle, ctx: GameCtx): C
     if (!drag.moved) {
       if (Math.hypot(x - drag.sx, y - drag.sy) <= 6) return;
       drag.moved = true;
-      draw();
+      // lifted: hidden where it lay, drawn over everything above the finger
+      for (const j of drag.group) shown[j]?.setAttribute("display", "none");
+      held = drawSet(drag.group, ...heldAt(drag), 1, true);
       return;
     }
     const [hx, hy] = heldAt(drag);
     held?.setAttribute("transform", `translate(${hx} ${hy}) scale(1)`);
   });
-  svg.addEventListener("pointerup", () => {
+  const drop = () => {
     if (!drag) return;
     const d = drag;
     drag = null;
-    let misfit = false;
     if (d.moved) {
       // the piece held: over the board it clicks onto the nearest cells (the group kept on the
-      // board), if every edge meets its own there; below it, the pieces go back next to the board
-      const left = d.x - d.ox;
-      const top = d.y - d.oy;
-      const over = top + s / 2 <= by + B + s * 0.25;
-      if (!over) for (const j of d.group) at[j] = null;
+      // board), whatever lies round it; a piece that lay there swaps places with it (or, under a
+      // group, goes back next to the board). Below the board, the pieces go back next to it.
+      const [hx, hy] = heldAt(d);
+      const left = hx + colOf(d.i) * s;
+      const top = hy + rowOf(d.i) * s;
+      if (top + s / 2 > by + B + s * 0.25) for (const j of d.group) at[j] = null;
       else {
         const rows = d.group.map(rowOf);
         const cols = d.group.map(colOf);
@@ -1940,10 +1976,16 @@ export function mountJigsaw(root: HTMLElement, p: JigsawPuzzle, ctx: GameCtx): C
           -Math.min(...cols),
           Math.min(n - 1 - Math.max(...cols), Math.round((left - bx) / s) - colOf(d.i)),
         );
-        if (jigsawFits(n, at, d.group, dr, dc)) {
-          for (const j of d.group) at[j] = (rowOf(j) + dr) * n + colOf(j) + dc;
-          navigator.vibrate?.(jigsawGroup(n, at, d.i).length > d.group.length ? 25 : 10);
-        } else misfit = true;
+        const mine = new Set(d.group);
+        const to = d.group.map((j) => (rowOf(j) + dr) * n + colOf(j) + dc);
+        const there = to.map((cell) => at.indexOf(cell)).filter((o) => o >= 0 && !mine.has(o));
+        const before = at[d.i] ?? null;
+        if (d.group.length === 1 && there.length === 1) at[there[0] as number] = before;
+        else for (const o of there) at[o] = null;
+        d.group.forEach((j, k) => {
+          at[j] = to[k] as number;
+        });
+        navigator.vibrate?.(jigsawGroup(n, at, d.i).length > d.group.length ? 25 : 10);
       }
     }
     if (!won && at.every((cell, j) => cell === j)) {
@@ -1952,16 +1994,20 @@ export function mountJigsaw(root: HTMLElement, p: JigsawPuzzle, ctx: GameCtx): C
       unfold = foldShelf(svg, vw, vh, by + B + 8, ctx);
       ctx.done(`усі ${total} шматків на місці`);
     }
-    draw();
-    if (misfit && !won) ctx.say(status(), "краї не сходяться");
-  });
+    if (d.moved || won) draw();
+  };
+  svg.addEventListener("pointerup", drop);
   svg.addEventListener("pointercancel", () => {
     drag = null;
     draw();
   });
 
   draw();
-  return () => unfold();
+  return () => {
+    alive = false;
+    unfold();
+    if (bitmap) URL.revokeObjectURL(bitmap);
+  };
 }
 
 // ── Батарейки по зарядках ───────────────────────────────────────────────────────────────────

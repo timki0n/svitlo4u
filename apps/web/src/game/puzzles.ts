@@ -1612,7 +1612,7 @@ export function jigsawOutline(p: Pick<JigsawPuzzle, "n" | "across" | "down">, i:
   return `${d}Z`;
 }
 
-// ── the rules: a piece lies on any cell, but only next to the pieces it is next to in the picture ──
+// ── the rules: a piece lies on any cell; those lying next to each other as in the picture join ──
 
 /** Round a cell: up, down, left, right (rows, columns). */
 const AROUND = [
@@ -1623,10 +1623,10 @@ const AROUND = [
 ] as const;
 
 /** Which piece lies on each cell (`at`: the cell each piece lies on, row by row, or null). */
-function jigsawLying(at: readonly (number | null)[], but?: ReadonlySet<number>) {
+function jigsawLying(at: readonly (number | null)[]) {
   const on = new Map<number, number>();
   at.forEach((cell, j) => {
-    if (cell !== null && !but?.has(j)) on.set(cell, j);
+    if (cell !== null) on.set(cell, j);
   });
   return on;
 }
@@ -1658,35 +1658,6 @@ export function jigsawGroup(n: number, at: readonly (number | null)[], i: number
     }
   }
   return group;
-}
-
-/**
- * Whether the pieces `moving` (a group, or one piece) can lie shifted (dr, dc) rows and columns
- * from their places in the picture: all of them on the board, on cells nobody else lies on, and
- * next to nothing but the pieces they are next to in the picture, so that every edge meets its own.
- */
-export function jigsawFits(
-  n: number,
-  at: readonly (number | null)[],
-  moving: readonly number[],
-  dr: number,
-  dc: number,
-): boolean {
-  const inside = (r: number, c: number) => r >= 0 && r < n && c >= 0 && c < n;
-  const on = jigsawLying(at, new Set(moving));
-  for (const i of moving) {
-    const r = Math.floor(i / n);
-    const c = i % n;
-    const R = r + dr;
-    const C = c + dc;
-    if (!inside(R, C) || on.has(R * n + C)) return false;
-    for (const [ar, ac] of AROUND) {
-      if (!inside(R + ar, C + ac)) continue;
-      const m = on.get((R + ar) * n + C + ac);
-      if (m !== undefined && !(inside(r + ar, c + ac) && m === (r + ar) * n + c + ac)) return false;
-    }
-  }
-  return true;
 }
 
 // ── the pictures ──────────────────────────────────────────────────────────────────────────────
