@@ -36,9 +36,17 @@ import {
   packShapeOf,
   packSolutions,
   petsPuzzle,
+  SPARK_REACH,
+  SPARK_SNAP,
+  SPARK_TIERS,
   SUDOKU_TIERS,
   slideMinMoves,
   slidePuzzle,
+  sparkDistance,
+  sparkPath,
+  sparkPuzzle,
+  sparkSlack,
+  sparkSnap,
   sudokuPuzzle,
   sudokuReason,
   type Tier,
@@ -88,6 +96,7 @@ describe("window games", () => {
       voltPuzzle,
       jigsawPuzzle,
       sudokuPuzzle,
+      sparkPuzzle,
     ])
       for (const t of TIERS) expect(make(rngOf(`k${t}`), t)).toEqual(make(rngOf(`k${t}`), t));
     expect(slidePuzzle(rngOf("k"), 1)).toEqual(slidePuzzle(rngOf("k"), 1));
@@ -483,5 +492,84 @@ describe("difficulty: no puzzle is a tap or two away", () => {
     const other = [...Array(9).keys()].map((c) => row * 9 + c).find((j) => broken[j]) as number;
     broken[i] = broken[other] as number;
     expect(sudokuReason(p, broken, true)).toBeNull();
+  });
+
+  it("Іскра: a zigzag within reach; taps on time reach the lamp, taps too late or too early fall off", () => {
+    for (const k of keys(60))
+      for (const t of TIERS) {
+        const p = sparkPuzzle(rngOf(k), t);
+        const tier = SPARK_TIERS[t];
+        expect(p.runs).toHaveLength(tier.turns + 1);
+        expect(p.runs[0]).toBeGreaterThanOrEqual(3);
+        for (const len of p.runs) {
+          expect(len).toBeGreaterThanOrEqual(1);
+          expect(len).toBeLessThanOrEqual(5);
+        }
+        const path = sparkPath(p);
+        expect(path).toHaveLength(tier.turns + 2);
+        for (const [x] of path) expect(Math.abs(x)).toBeLessThanOrEqual(SPARK_REACH);
+        // a player tapping at every turn `late` steps after its corner (before it, if below 0)
+        const fly = (late: number) => {
+          const end = path.at(-1) as [number, number];
+          let [x, y] = [0, 0];
+          let dir: number = p.first;
+          let corner = 1;
+          while (y < end[1]) {
+            const turn =
+              corner < path.length - 1 ? (path[corner] as [number, number])[1] + late : end[1];
+            const h = Math.min(0.01, turn - y);
+            x += dir * h;
+            y += h;
+            if (sparkDistance(path, x, y) > p.width / 2) return false;
+            if (y >= turn && corner < path.length - 1) {
+              dir = -dir;
+              corner++;
+            }
+          }
+          return true;
+        };
+        const slack = sparkSlack(p);
+        expect(fly(0)).toBe(true);
+        expect(fly(slack * 0.9)).toBe(true);
+        expect(fly(-slack * 0.9)).toBe(true);
+        expect(fly(slack * 1.1)).toBe(false);
+        expect(fly(-slack * 1.1)).toBe(false);
+      }
+  });
+
+  it("Іскра: the hard wire has few quick double turns, never two in a row", () => {
+    let quick = 0;
+    for (const k of keys(60)) {
+      const p = sparkPuzzle(rngOf(k), 2);
+      p.runs.forEach((len, i) => {
+        if (len === 1) quick++;
+        if (i) expect(len === 1 && p.runs[i - 1] === 1).toBe(false);
+      });
+    }
+    expect(quick / 60).toBeLessThan(4);
+  });
+
+  it("Іскра: a turn close to its corner pulls the spark onto the middle; one further off does not", () => {
+    for (const k of keys(30))
+      for (const t of TIERS) {
+        const p = sparkPuzzle(rngOf(k), t);
+        const path = sparkPath(p);
+        // turned this late (or early): this far off the middle of the next stretch, √2 times
+        const near = (SPARK_SNAP * p.width) / Math.SQRT2;
+        for (let c = 1; c < path.length - 1; c++) {
+          const [cx, cy] = path[c] as [number, number];
+          const came = Math.sign(cx - (path[c - 1] as [number, number])[0]);
+          for (const [late, pulled] of [
+            [0, true],
+            [near * 0.9, true],
+            [-near * 0.9, true],
+            [near * 1.1, false],
+            [-near * 1.1, false],
+          ] as const)
+            expect(sparkSnap(p, path, cx + came * late, cy + late, -came)).toBe(pulled ? c : null);
+          // turned the way it came from: no stretch goes there
+          expect(sparkSnap(p, path, cx, cy, came)).toBeNull();
+        }
+      }
   });
 });

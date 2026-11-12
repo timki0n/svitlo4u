@@ -30,9 +30,13 @@ import {
   type Point,
   rotate,
   type SlidePuzzle,
+  type SparkPuzzle,
   type SudokuPuzzle,
   slideFits,
   slideGrid,
+  sparkDistance,
+  sparkPath,
+  sparkSnap,
   traceBeam,
   type UntanglePuzzle,
   type VoltBlock,
@@ -2335,4 +2339,603 @@ export function mountSudoku(root: HTMLElement, p: SudokuPuzzle, ctx: GameCtx): C
 
   paint();
   return () => document.removeEventListener("keydown", onKey);
+}
+
+// ── Іскра ───────────────────────────────────────────────────────────────────────────────────
+
+/** A bit of fire or smoke flying off the spark: where (in steps), how fast, how old. */
+type SparkBit = {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  age: number;
+  life: number;
+  size: number;
+  smoke: boolean;
+};
+
+export function mountSpark(root: HTMLElement, p: SparkPuzzle, ctx: GameCtx): Cleanup {
+  const canvas = document.createElement("canvas");
+  canvas.className = "g-spark-board";
+  canvas.setAttribute("aria-label", "Дріт зигзагом до лампи; тап повертає іскру");
+  root.appendChild(canvas);
+  const g = canvas.getContext("2d");
+  if (!g) return undefined;
+  const path = sparkPath(p);
+  const end = path.at(-1) as [number, number];
+  const corners = path.length - 2;
+  const half = p.width / 2;
+  // the wire's length to each corner, for the light running back along it
+  const along = [0];
+  for (let k = 1; k < path.length; k++) {
+    const [ax, ay] = path[k - 1] as [number, number];
+    const [bx, by] = path[k] as [number, number];
+    along.push((along[k - 1] as number) + Math.hypot(bx - ax, by - ay));
+  }
+  const length = along.at(-1) as number;
+  const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+  /** The lamp's bulb: its middle and radius above the end of the wire, in steps. */
+  const BASE = 0.8;
+  const BULB = 0.95;
+  const bulbY = end[1] + BASE + BULB * 0.8;
+
+  type Mode = "ready" | "run" | "out" | "won";
+  let mode: Mode = "ready";
+  let since = performance.now();
+  let attempt = 1;
+  let x = 0;
+  let y = 0;
+  let dir: number = p.first;
+  /** The corners the spark has turned at (it lights the wire behind it). */
+  let trail: [number, number][] = [[0, 0]];
+  let passed = 0;
+  /** Where the spark went out, and how it flies on. */
+  let lost = { x: 0, y: 0, vx: 0, vy: 0 };
+  /** Where it was when it reached the lamp. */
+  let reached: [number, number] = [0, 0];
+  let lit = false;
+  let flashed = false;
+  /** The view: the height (steps) at its spark line, and the middle across. */
+  let view = 0;
+  let across = 0;
+  let bits: SparkBit[] = [];
+  let arcs: [number, number][][] = [];
+  let arcsAt = 0;
+  let lastMove = performance.now();
+  /** A turn close to its corner: the stretch's corner the spark is pulled onto, until when. */
+  let snap: { corner: number; until: number } | null = null;
+  let lastFrame = lastMove;
+  let raf = 0;
+  let said = "";
+
+  const say = (warn?: string) => {
+    const tries = attempt > 1 ? ` · спроба ${attempt}` : "";
+    const text =
+      mode === "ready"
+        ? `Тапни, щоб пустити іскру, і тапай на кожному повороті · поворотів ${corners}${tries}`
+        : `Доведи іскру до лампи · поворот ${passed} з ${corners}${tries}`;
+    if (text + (warn ?? "") === said) return;
+    said = text + (warn ?? "");
+    ctx.say(text, warn);
+  };
+
+  /** `count` bits of fire from (x0, y0): off the way `vx, vy` points, spread round it. */
+  const burst = (
+    count: number,
+    x0: number,
+    y0: number,
+    vx: number,
+    vy: number,
+    spread: number,
+    speed: [number, number],
+  ) => {
+    for (let k = 0; k < count && bits.length < 260; k++) {
+      const a = Math.atan2(vy, vx) + (Math.random() - 0.5) * spread;
+      const v = speed[0] + Math.random() * (speed[1] - speed[0]);
+      bits.push({
+        x: x0,
+        y: y0,
+        vx: Math.cos(a) * v,
+        vy: Math.sin(a) * v,
+        age: 0,
+        life: 0.25 + Math.random() * 0.35,
+        size: 1 + Math.random() * 0.9,
+        smoke: false,
+      });
+    }
+  };
+  const smoke = (x0: number, y0: number) => {
+    for (let k = 0; k < 6; k++)
+      bits.push({
+        x: x0 + (Math.random() - 0.5) * 0.4,
+        y: y0 + (Math.random() - 0.5) * 0.4,
+        vx: (Math.random() - 0.5) * 0.5,
+        vy: 0.3 + Math.random() * 0.5,
+        age: 0,
+        life: 0.9 + Math.random() * 0.6,
+        size: 0.25 + Math.random() * 0.2,
+        smoke: true,
+      });
+  };
+
+  const speedAt = (at: number) => p.speed[0] + (p.speed[1] - p.speed[0]) * Math.min(1, at / end[1]);
+
+  /** The spark moved on to `now`: still on the wire, off it, or at the lamp. */
+  const advance = (now: number) => {
+    // a tap comes between frames, after the frame's own time: never back
+    const dt = Math.max(0, Math.min(0.05, (now - lastMove) / 1000));
+    lastMove = now;
+    if (mode !== "run") return;
+    const v = speedAt(y);
+    x += dir * v * dt;
+    y += v * dt;
+    // turned close enough to the corner: drawn onto the middle of the stretch, smoothly
+    if (snap && now < snap.until) {
+      const [cx, cy] = path[snap.corner] as [number, number];
+      const t = ((x - cx) * dir + (y - cy)) / 2;
+      const k = 1 - Math.exp(-dt * 18);
+      x += (cx + dir * t - x) * k;
+      y += (cy + t - y) * k;
+      trail.push([x, y]);
+    } else snap = null;
+    if (y >= end[1] && sparkDistance(path, x, y) <= half) {
+      mode = "won";
+      since = now;
+      reached = [x, y];
+      trail.push([x, y]);
+      passed = corners;
+      say();
+      return;
+    }
+    if (sparkDistance(path, x, y) > half) {
+      mode = "out";
+      since = now;
+      lost = { x, y, vx: dir * v, vy: v };
+      trail.push([x, y]);
+      burst(34, x, y, dir * v, v, Math.PI * 2, [1.5, 5]);
+      smoke(x, y);
+      navigator.vibrate?.([30, 40, 30]);
+      say("іскра зірвалася з дроту");
+      return;
+    }
+    let k = 0;
+    while (k < corners && (path[k + 1] as [number, number])[1] <= y) k++;
+    if (k !== passed) {
+      passed = k;
+      say();
+    }
+  };
+
+  const tap = () => {
+    const now = performance.now();
+    if (mode === "ready") {
+      mode = "run";
+      since = now;
+      lastMove = now;
+      burst(14, 0, 0, 0, 1, Math.PI * 2, [1, 3]);
+      say();
+      return;
+    }
+    if (mode !== "run") return;
+    advance(now);
+    if (mode !== "run") return;
+    trail.push([x, y]);
+    dir = -dir;
+    const corner = sparkSnap(p, path, x, y, dir);
+    snap = corner === null ? null : { corner, until: now + 300 };
+  };
+
+  // ── drawing ──
+  let cw = 0;
+  let ch = 0;
+  let u = 0;
+  const sx = (wx: number) => cw / 2 + (wx - across) * u;
+  const sy = (wy: number) => ch * 0.72 - (wy - view) * u;
+  const line = (points: readonly (readonly [number, number])[]) => {
+    g.beginPath();
+    points.forEach(([px, py], k) => {
+      if (k) g.lineTo(sx(px), sy(py));
+      else g.moveTo(sx(px), sy(py));
+    });
+  };
+  const glow = (cx: number, cy: number, r: number, stops: [number, string][]) => {
+    const grad = g.createRadialGradient(cx, cy, 0, cx, cy, r);
+    for (const [at, color] of stops) grad.addColorStop(at, color);
+    g.fillStyle = grad;
+    g.beginPath();
+    g.arc(cx, cy, r, 0, Math.PI * 2);
+    g.fill();
+  };
+  /** The point `s` along the wire from the start. */
+  const pointAt = (s: number): [number, number] => {
+    let k = 1;
+    while (k < path.length - 1 && (along[k] as number) < s) k++;
+    const [ax, ay] = path[k - 1] as [number, number];
+    const [bx, by] = path[k] as [number, number];
+    const t = (s - (along[k - 1] as number)) / ((along[k] as number) - (along[k - 1] as number));
+    return [ax + (bx - ax) * t, ay + (by - ay) * t];
+  };
+
+  /** The spark itself at (px, py) on the screen, `a` of its strength: a white-hot core, its halo, two rays turning, crackles round it. */
+  const drawSpark = (px: number, py: number, a: number, now: number) => {
+    if (a <= 0) return;
+    g.globalCompositeOperation = "lighter";
+    const flicker = 0.85 + Math.random() * 0.3;
+    glow(px, py, u * 1.25 * flicker, [
+      [0, `rgba(255, 190, 90, ${0.5 * a})`],
+      [0.35, `rgba(255, 140, 40, ${0.2 * a})`],
+      [1, "rgba(255, 110, 20, 0)"],
+    ]);
+    for (const turn of [0, Math.PI / 2]) {
+      const ang = now / 700 + turn;
+      const len = u * (0.42 + Math.random() * 0.2) * a;
+      const dx = Math.cos(ang) * len;
+      const dy = Math.sin(ang) * len;
+      const ray = g.createLinearGradient(px - dx, py - dy, px + dx, py + dy);
+      ray.addColorStop(0, "rgba(255, 240, 200, 0)");
+      ray.addColorStop(0.5, `rgba(255, 248, 225, ${0.85 * a})`);
+      ray.addColorStop(1, "rgba(255, 240, 200, 0)");
+      g.strokeStyle = ray;
+      g.lineWidth = 1;
+      g.beginPath();
+      g.moveTo(px - dx, py - dy);
+      g.lineTo(px + dx, py + dy);
+      g.stroke();
+    }
+    if (now - arcsAt > 45) {
+      arcsAt = now;
+      arcs = Array.from({ length: 3 }, () => {
+        let ang = Math.random() * Math.PI * 2;
+        let [ax, ay] = [0, 0];
+        const seg: [number, number][] = [[0, 0]];
+        const steps = 3 + Math.floor(Math.random() * 2);
+        const len = (0.28 + Math.random() * 0.27) / steps;
+        for (let k = 0; k < steps; k++) {
+          ang += (Math.random() - 0.5) * 1.2;
+          ax += Math.cos(ang) * len;
+          ay += Math.sin(ang) * len;
+          seg.push([ax, ay]);
+        }
+        return seg;
+      });
+    }
+    for (const [width, color] of [
+      [2, `rgba(255, 170, 60, ${0.25 * a})`],
+      [0.8, `rgba(255, 244, 210, ${0.8 * a})`],
+    ] as const) {
+      g.strokeStyle = color;
+      g.lineWidth = width;
+      for (const arc of arcs) {
+        g.beginPath();
+        arc.forEach(([ax, ay], k) => {
+          if (k) g.lineTo(px + ax * u * a, py + ay * u * a);
+          else g.moveTo(px, py);
+        });
+        g.stroke();
+      }
+    }
+    glow(px, py, u * 0.32 * (0.9 + Math.random() * 0.2) * Math.max(0.3, a), [
+      [0, `rgba(255, 255, 255, ${a})`],
+      [0.3, `rgba(255, 248, 215, ${a})`],
+      [0.65, `rgba(255, 190, 90, ${0.85 * a})`],
+      [1, "rgba(255, 140, 40, 0)"],
+    ]);
+    g.globalCompositeOperation = "source-over";
+  };
+
+  /** The lamp at the end of the wire, `on` of the way lit. */
+  const drawLamp = (on: number, now: number) => {
+    const ex = sx(end[0]);
+    const ey = sy(end[1]);
+    const bx = sx(end[0]);
+    const by = sy(bulbY);
+    const r = BULB * u;
+    if (on > 0) {
+      g.globalCompositeOperation = "lighter";
+      const breathe = 1 + Math.sin(now / 600) * 0.04;
+      glow(bx, by, u * 4.2 * breathe, [
+        [0, `rgba(255, 200, 110, ${0.45 * on})`],
+        [0.4, `rgba(255, 150, 60, ${0.16 * on})`],
+        [1, "rgba(255, 120, 30, 0)"],
+      ]);
+      // rays turning slowly round it
+      g.strokeStyle = `rgba(255, 210, 130, ${0.16 * on})`;
+      g.lineWidth = 3;
+      for (let k = 0; k < 12; k++) {
+        const ang = now / 4000 + (k / 12) * Math.PI * 2;
+        const reach = r * (2.1 + 0.35 * Math.sin(now / 500 + k * 1.7));
+        g.beginPath();
+        g.moveTo(bx + Math.cos(ang) * r * 1.25, by + Math.sin(ang) * r * 1.25);
+        g.lineTo(bx + Math.cos(ang) * reach, by + Math.sin(ang) * reach);
+        g.stroke();
+      }
+      g.globalCompositeOperation = "source-over";
+    }
+    // the screw base, the wire going into it
+    const bw = 0.82 * u;
+    const top = ey - BASE * u;
+    const metal = g.createLinearGradient(ex - bw / 2, 0, ex + bw / 2, 0);
+    metal.addColorStop(0, "#55585f");
+    metal.addColorStop(0.45, "#b4b7bf");
+    metal.addColorStop(1, "#4a4d54");
+    g.fillStyle = metal;
+    g.fillRect(ex - bw / 2, top, bw, BASE * u);
+    g.strokeStyle = "rgba(0, 0, 0, 0.35)";
+    g.lineWidth = 1.2;
+    for (let k = 1; k < 4; k++) {
+      const ly = top + (BASE * u * k) / 4;
+      g.beginPath();
+      g.moveTo(ex - bw / 2, ly - 2);
+      g.lineTo(ex + bw / 2, ly + 2);
+      g.stroke();
+    }
+    // the glass
+    g.beginPath();
+    g.moveTo(ex - bw * 0.42, top + 1);
+    g.bezierCurveTo(ex - bw * 0.42, top - r * 0.35, bx - r, by + r * 0.55, bx - r, by);
+    g.arc(bx, by, r, Math.PI, 0);
+    g.bezierCurveTo(bx + r, by + r * 0.55, ex + bw * 0.42, top - r * 0.35, ex + bw * 0.42, top + 1);
+    g.closePath();
+    if (on > 0) {
+      const fill = g.createRadialGradient(bx, by + r * 0.15, 0, bx, by, r * 1.1);
+      fill.addColorStop(0, `rgba(255, 250, 225, ${0.95 * on})`);
+      fill.addColorStop(0.55, `rgba(255, 200, 110, ${0.8 * on})`);
+      fill.addColorStop(1, `rgba(255, 150, 60, ${0.55 * on})`);
+      g.fillStyle = fill;
+    } else g.fillStyle = "rgba(210, 220, 235, 0.07)";
+    g.fill();
+    g.strokeStyle = on > 0 ? `rgba(255, 225, 170, ${0.4 + 0.3 * on})` : "rgba(225, 230, 240, 0.35)";
+    g.lineWidth = 1.5;
+    g.stroke();
+    // its shine
+    g.strokeStyle = "rgba(255, 255, 255, 0.25)";
+    g.lineWidth = 2;
+    g.beginPath();
+    g.arc(bx, by, r * 0.72, Math.PI * 1.15, Math.PI * 1.45);
+    g.stroke();
+    // the filament: a zigzag too, on its two wires
+    const fy = by + r * 0.12;
+    const fw = r * 0.38;
+    const filament = () => {
+      g.beginPath();
+      g.moveTo(ex - bw * 0.2, top);
+      g.lineTo(bx - fw, fy);
+      for (let k = 0; k <= 6; k++)
+        g.lineTo(bx - fw + (2 * fw * k) / 6, fy + (k % 2 ? -1 : 1) * r * 0.1);
+      g.lineTo(ex + bw * 0.2, top);
+    };
+    filament();
+    g.strokeStyle = on > 0 ? `rgba(255, 248, 225, ${0.6 + 0.4 * on})` : "#7a6a58";
+    g.lineWidth = 1.2;
+    g.stroke();
+    if (on > 0) {
+      g.globalCompositeOperation = "lighter";
+      filament();
+      g.strokeStyle = `rgba(255, 180, 80, ${0.5 * on})`;
+      g.lineWidth = 4;
+      g.stroke();
+      g.globalCompositeOperation = "source-over";
+    }
+  };
+
+  const draw = (now: number, dt: number) => {
+    const w = Math.round(canvas.clientWidth);
+    if (!w) return;
+    if (w !== cw) {
+      cw = w;
+      ch = Math.round(w * 1.38);
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      canvas.width = Math.round(cw * dpr);
+      canvas.height = Math.round(ch * dpr);
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      // close up: eight steps across, the view following the spark sideways as well
+      u = cw / 8;
+    }
+    // the view follows the spark up; at the lamp it settles on the lamp; after a fall, back down
+    const aim =
+      mode === "won" ? bulbY - (ch * 0.3) / u : mode === "out" ? lost.y : mode === "run" ? y : 0;
+    view += (aim - view) * Math.min(1, dt * (mode === "ready" ? 5 : 7));
+    const aside =
+      mode === "won" ? end[0] : mode === "out" ? lost.x * 0.65 : mode === "run" ? x * 0.65 : 0;
+    across += (aside - across) * Math.min(1, dt * 3);
+    g.clearRect(0, 0, cw, ch);
+    g.fillStyle = "#16171b";
+    g.fillRect(0, 0, cw, ch);
+    // a faint grid of dots, moving with the view
+    g.fillStyle = "rgba(242, 239, 234, 0.05)";
+    const top = Math.ceil(view + (ch * 0.72) / u) + 1;
+    for (let j = Math.floor(view - (ch * 0.28) / u) - 1; j <= top; j++)
+      for (let i = Math.floor(across - 5); i <= Math.ceil(across + 5); i++) {
+        g.beginPath();
+        g.arc(sx(i), sy(j), 1, 0, Math.PI * 2);
+        g.fill();
+      }
+    // the wire's bed, its edge, the copper in the middle
+    g.lineJoin = "round";
+    g.lineCap = "round";
+    line(path);
+    g.strokeStyle = "#33353c";
+    g.lineWidth = p.width * u + 4;
+    g.stroke();
+    g.strokeStyle = "#202227";
+    g.lineWidth = p.width * u;
+    g.stroke();
+    g.strokeStyle = "#5a4632";
+    g.lineWidth = 2;
+    g.stroke();
+    // the start: a terminal
+    g.fillStyle = "#2a2c31";
+    g.strokeStyle = "#4a4d55";
+    g.lineWidth = 2;
+    g.beginPath();
+    g.arc(sx(0), sy(0), u * 0.42, 0, Math.PI * 2);
+    g.fill();
+    g.stroke();
+    // the wire lit behind the spark
+    const head: [number, number] =
+      mode === "out" ? [lost.x, lost.y] : mode === "won" ? reached : [x, y];
+    const behind = mode === "ready" ? [] : [...trail, head];
+    g.globalCompositeOperation = "lighter";
+    if (behind.length > 1) {
+      line(behind);
+      g.strokeStyle = "rgba(255, 130, 40, 0.16)";
+      g.lineWidth = 9;
+      g.stroke();
+      g.strokeStyle = "rgba(255, 175, 80, 0.85)";
+      g.lineWidth = 2.2;
+      g.stroke();
+    }
+    // at the lamp: light runs back down the whole wire
+    const t = (now - since) / 1000;
+    if (mode === "won") {
+      const back = Math.min(1, Math.max(0, (t - 0.25) / 0.9));
+      if (back > 0) {
+        const s = length * (1 - back);
+        line([pointAt(s), ...path.filter((_, k) => (along[k] as number) > s)]);
+        g.strokeStyle = "rgba(255, 140, 40, 0.22)";
+        g.lineWidth = 12;
+        g.stroke();
+        g.strokeStyle = "rgba(255, 210, 140, 0.9)";
+        g.lineWidth = 2.6;
+        g.stroke();
+        if (back < 1) {
+          const [qx, qy] = pointAt(s);
+          glow(sx(qx), sy(qy), u * 0.9, [
+            [0, "rgba(255, 250, 230, 0.95)"],
+            [0.4, "rgba(255, 190, 90, 0.4)"],
+            [1, "rgba(255, 140, 40, 0)"],
+          ]);
+        }
+      }
+    }
+    g.globalCompositeOperation = "source-over";
+    // the lamp: dark, then lit, a flash as it comes on
+    const on = mode === "won" ? Math.min(1, Math.max(0, (t - 0.22) / 0.45)) : 0;
+    drawLamp(on, now);
+    if (mode === "won" && t > 0.22 && t < 0.8) {
+      const f = (t - 0.22) / 0.58;
+      g.globalCompositeOperation = "lighter";
+      glow(sx(end[0]), sy(bulbY), u * (1.5 + 6 * f), [
+        [0, `rgba(255, 255, 240, ${0.85 * (1 - f)})`],
+        [0.5, `rgba(255, 200, 120, ${0.35 * (1 - f)})`],
+        [1, "rgba(255, 160, 60, 0)"],
+      ]);
+      g.globalCompositeOperation = "source-over";
+    }
+    // the bits of fire and smoke
+    for (const b of bits) {
+      const f = b.age / b.life;
+      const bx = sx(b.x);
+      const by = sy(b.y);
+      if (b.smoke) {
+        g.fillStyle = `rgba(130, 132, 140, ${0.22 * (1 - f)})`;
+        g.beginPath();
+        g.arc(bx, by, (b.size + f * 0.9) * u, 0, Math.PI * 2);
+        g.fill();
+        continue;
+      }
+      g.globalCompositeOperation = "lighter";
+      g.strokeStyle =
+        f < 0.25
+          ? `rgba(255, 250, 225, ${1 - f})`
+          : f < 0.6
+            ? `rgba(255, 190, 90, ${1 - f})`
+            : `rgba(255, 110, 40, ${1 - f})`;
+      g.lineWidth = b.size;
+      g.beginPath();
+      g.moveTo(bx, by);
+      g.lineTo(bx - b.vx * u * 0.035, by + b.vy * u * 0.035);
+      g.stroke();
+      g.globalCompositeOperation = "source-over";
+    }
+    // the spark: waiting at the start, running, dying off the wire, flying into the lamp
+    if (mode === "ready" || mode === "run") drawSpark(sx(x), sy(y), 1, now);
+    else if (mode === "out") {
+      const fade = Math.max(0, 1 - t / 0.6);
+      drawSpark(sx(lost.x), sy(lost.y), fade * (0.4 + Math.random() * 0.6), now);
+    } else if (t < 0.25) {
+      const k = t / 0.25;
+      drawSpark(
+        sx(reached[0] + (end[0] - reached[0]) * k),
+        sy(reached[1] + (bulbY - reached[1]) * k),
+        1 - k * 0.5,
+        now,
+      );
+    }
+  };
+
+  const frame = (now: number) => {
+    raf = requestAnimationFrame(frame);
+    advance(now);
+    const dt = Math.max(0, Math.min(0.05, (now - lastFrame) / 1000));
+    lastFrame = now;
+    const t = (now - since) / 1000;
+    // fire off the spark as it runs, a little as it waits
+    const rate = (mode === "run" ? 70 : mode === "ready" ? 22 : 0) * (still ? 0.4 : 1);
+    if (rate && Math.random() < rate * dt * 2) {
+      const v = mode === "run" ? speedAt(y) : 0;
+      if (mode === "run") burst(2, x, y, -dir * v, -v, 1.6, [0.8, 2.6]);
+      else burst(1, x, y, 0, 1, Math.PI * 2, [0.4, 1.4]);
+    }
+    if (mode === "out") {
+      lost.x += lost.vx * dt;
+      lost.y += lost.vy * dt;
+      lost.vx *= Math.exp(-6 * dt);
+      lost.vy *= Math.exp(-6 * dt);
+      if (t > 0.95) {
+        // the spark lit again at the start
+        mode = "ready";
+        since = now;
+        attempt++;
+        x = 0;
+        y = 0;
+        dir = p.first;
+        trail = [[0, 0]];
+        snap = null;
+        passed = 0;
+        burst(12, 0, 0, 0, 1, Math.PI * 2, [0.8, 2.4]);
+        say();
+      }
+    }
+    if (mode === "won") {
+      if (!flashed && t > 0.25) {
+        flashed = true;
+        burst(60, end[0], bulbY, 0, 1, Math.PI * 2, [2, 6]);
+        navigator.vibrate?.(40);
+      }
+      if (!lit && t > 1.15) {
+        lit = true;
+        ctx.done(`лампа горить з ${attempt}-ї спроби`);
+      }
+    }
+    for (const b of bits) {
+      b.age += dt;
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      if (!b.smoke) {
+        b.vx *= Math.exp(-2.5 * dt);
+        b.vy *= Math.exp(-2.5 * dt);
+      }
+    }
+    bits = bits.filter((b) => b.age < b.life);
+    draw(now, dt);
+  };
+
+  canvas.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    tap();
+  });
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key !== " " && e.key !== "Enter" && e.key !== "ArrowUp") return;
+    e.preventDefault();
+    tap();
+  };
+  document.addEventListener("keydown", onKey);
+  say();
+  raf = requestAnimationFrame(frame);
+  return () => {
+    cancelAnimationFrame(raf);
+    document.removeEventListener("keydown", onKey);
+  };
 }

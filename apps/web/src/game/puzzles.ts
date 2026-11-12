@@ -2805,3 +2805,117 @@ export function sudokuPuzzle(rng: Rng, tier: Tier): SudokuPuzzle {
   }
   return last as SudokuPuzzle;
 }
+
+// ── «Іскра»: a spark runs up a zigzag wire; a tap turns it; off the wire it goes out ───────────
+
+export type SparkPuzzle = {
+  /** The runs of the zigzag, in steps (a step: one across and one up), turning after each. */
+  runs: number[];
+  /** Which way the first run goes: 1 right, -1 left. */
+  first: 1 | -1;
+  /** The wire's width, in steps across it. */
+  width: number;
+  /** Steps a second at the start and at the lamp. */
+  speed: [number, number];
+};
+
+/** The path keeps within this many steps either side of the middle. */
+export const SPARK_REACH = 4;
+/**
+ * Per tier: turns to the lamp, the runs' lengths (shortest, longest), how often a run is a single
+ * step besides (two turns in quick succession; never twice in a row), the width, the speed.
+ */
+export const SPARK_TIERS = [
+  { turns: 12, runs: [2, 5], quick: 0, width: 1.5, speed: [2.6, 2.6] },
+  { turns: 20, runs: [1, 5], quick: 0, width: 1.3, speed: [3.4, 3.8] },
+  { turns: 30, runs: [2, 4], quick: 0.1, width: 1.2, speed: [4, 4.6] },
+] as const;
+
+/**
+ * How late (or early) a tap may come at a turn, in steps: turned that far off the corner, the
+ * spark runs alongside the next stretch √2 times as far from its middle, and must stay on it.
+ */
+export const sparkSlack = (p: Pick<SparkPuzzle, "width">) => p.width / 2 / Math.SQRT2;
+
+/**
+ * A zigzag of its own: runs of a few steps, longer at the start (time to get going) and into the
+ * lamp, never out past the reach either side.
+ */
+export function sparkPuzzle(rng: Rng, tier: Tier): SparkPuzzle {
+  const t = SPARK_TIERS[tier];
+  const first: 1 | -1 = rng() < 0.5 ? 1 : -1;
+  const runs: number[] = [];
+  let x = 0;
+  let dir: number = first;
+  for (let k = 0; k <= t.turns; k++) {
+    const room = SPARK_REACH - dir * x;
+    const lo = k === 0 ? 3 : k === t.turns ? 2 : t.runs[0];
+    // a single step, if the run after it has room for two (not forced into another single)
+    const quick =
+      k > 0 &&
+      k < t.turns &&
+      t.quick > 0 &&
+      runs.at(-1) !== 1 &&
+      SPARK_REACH + dir * x >= 1 &&
+      rng() < t.quick;
+    const len = quick ? 1 : Math.min(room, lo + ri(rng, Math.max(1, t.runs[1] - lo + 1)));
+    runs.push(len);
+    x += dir * len;
+    dir = -dir;
+  }
+  return { runs, first, width: t.width, speed: [t.speed[0], t.speed[1]] };
+}
+
+/** The middle of the wire: its corners from the start (0, 0) to the lamp, y going up. */
+export function sparkPath(p: Pick<SparkPuzzle, "runs" | "first">): [number, number][] {
+  const points: [number, number][] = [[0, 0]];
+  let [x, y] = [0, 0];
+  p.runs.forEach((len, k) => {
+    x += (k % 2 ? -p.first : p.first) * len;
+    y += len;
+    points.push([x, y]);
+  });
+  return points;
+}
+
+/** How far (x, y) is from the middle of the wire. */
+export function sparkDistance(path: readonly (readonly [number, number])[], x: number, y: number) {
+  let best = Number.POSITIVE_INFINITY;
+  for (let k = 1; k < path.length; k++) {
+    const [ax, ay] = path[k - 1] as [number, number];
+    const [bx, by] = path[k] as [number, number];
+    const dx = bx - ax;
+    const dy = by - ay;
+    const t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)));
+    best = Math.min(best, Math.hypot(x - ax - t * dx, y - ay - t * dy));
+  }
+  return best;
+}
+
+/** A turn close to its corner pulls the spark onto the middle of the wire: within this share of its width. */
+export const SPARK_SNAP = 0.25;
+
+/**
+ * Just turned at (x, y) to go `dir`: the corner of the stretch it has turned onto, if it runs
+ * within SPARK_SNAP of the wire's width off that stretch's middle (then it is pulled onto it);
+ * null if it is further off, or the nearest corner turns the other way.
+ */
+export function sparkSnap(
+  p: Pick<SparkPuzzle, "width">,
+  path: readonly (readonly [number, number])[],
+  x: number,
+  y: number,
+  dir: number,
+): number | null {
+  let best = -1;
+  let gap = Number.POSITIVE_INFINITY;
+  for (let c = 1; c < path.length - 1; c++) {
+    const d = Math.abs((path[c] as [number, number])[1] - y);
+    if (d < gap) [best, gap] = [c, d];
+  }
+  if (best < 0) return null;
+  const [cx, cy] = path[best] as [number, number];
+  if (Math.sign((path[best + 1] as [number, number])[0] - cx) !== dir) return null;
+  const off = Math.abs(x - cx - (y - cy) * dir) / Math.SQRT2;
+  return off <= SPARK_SNAP * p.width ? best : null;
+}
