@@ -228,7 +228,7 @@ export function EveningScreen({ api, door }: { api: Api; door: number }) {
   const v = view?.v;
   const left = useCountdown(v?.deadline ?? null, v?.now ?? 0, view?.at ?? 0);
   return (
-    <main className="screen" ref={main}>
+    <main className="screen g-evening" ref={main}>
       <PayFlight
         result={v?.result}
         serverNow={v?.now ?? 0}

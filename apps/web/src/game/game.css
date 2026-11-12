@@ -2431,9 +2431,18 @@
   cursor: default;
 }
 
+/* the table's page holds the layer of reactions: they scroll with the faces they belong to */
+.g-evening {
+  position: relative;
+}
+
+/* over the whole page, out into the app's side padding (20px, see .app) */
 .g-emote-layer {
-  position: fixed;
-  inset: 0;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -20px;
+  right: -20px;
   z-index: 35;
   overflow: hidden;
   pointer-events: none;

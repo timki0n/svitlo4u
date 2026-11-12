@@ -41,6 +41,7 @@ const PHRASES: EveningPhrase[] = [
   "Удачі!",
   "Скоро буду!",
   "Дякую за гру!",
+  "Було весело!",
 ];
 /** The core takes one a second from a player: the row rests as long after a tap. */
 const REST_MS = 1_000;
@@ -81,17 +82,30 @@ function bubbleOf(layer: HTMLElement, what: string, watching: boolean) {
 }
 
 /**
- * Puts a bubble with its centre over `cx`, kept off the screen's edges — the tail still pointing at
- * the face; returns its width and height.
+ * The layer lies on the page (bubbles scroll with the faces they belong to): its box on the screen,
+ * and the leftmost and rightmost a bubble may reach, off the edges of both.
  */
-function place(box: HTMLElement, bubble: HTMLElement, cx: number, y: number) {
-  const { width, height } = bubble.getBoundingClientRect();
-  const half = EDGE + width / 2;
-  const x = Math.min(Math.max(cx, half), Math.max(half, window.innerWidth - half));
-  box.style.left = `${x}px`;
-  box.style.top = `${y}px`;
+function frameOf(layer: HTMLElement) {
+  const box = layer.getBoundingClientRect();
+  return {
+    box,
+    lo: Math.max(box.left, 0) + EDGE,
+    hi: Math.min(box.right, window.innerWidth) - EDGE,
+  };
+}
+
+/**
+ * Puts a bubble with its centre over `cx` (`y` on the screen), kept off the edges — the tail still
+ * pointing at the face.
+ */
+function place(layer: HTMLElement, box: HTMLElement, bubble: HTMLElement, cx: number, y: number) {
+  const f = frameOf(layer);
+  const { width } = bubble.getBoundingClientRect();
+  const half = width / 2;
+  const x = Math.min(Math.max(cx, f.lo + half), Math.max(f.lo + half, f.hi - half));
+  box.style.left = `${x - f.box.left}px`;
+  box.style.top = `${y - f.box.top}px`;
   if (width > 0) bubble.style.setProperty("--tail", `${50 + ((cx - x) / width) * 100}%`);
-  return { width, height };
 }
 
 /** Played, then gone (also when a page hidden mid-way holds its animations). */
@@ -107,9 +121,10 @@ function rise(layer: HTMLElement, root: HTMLElement, id: number, what: string) {
   if (!seat) return;
   const r = (seat.querySelector(".g-pseat-face") ?? seat).getBoundingClientRect();
   const { box, bubble } = bubbleOf(layer, what, false);
-  // one near the top of the screen rises from lower down
+  // one near the top of the page rises from lower down
   const height = bubble.getBoundingClientRect().height;
-  place(box, bubble, r.left + r.width / 2, Math.max(r.top - 4, height + 56));
+  const top = layer.getBoundingClientRect().top;
+  place(layer, box, bubble, r.left + r.width / 2, Math.max(r.top - 4, top + height + 50));
   const up = (dy: number, s = 1) => `translate(-50%, calc(-100% - ${dy}px)) scale(${s})`;
   play(
     box,
@@ -145,23 +160,23 @@ function wayOf(count: number, i: number): Way {
 function fall(layer: HTMLElement, face: DOMRect, what: string, way: Way, row: number) {
   const { box, bubble } = bubbleOf(layer, what, true);
   const { width } = bubble.getBoundingClientRect();
+  const f = frameOf(layer);
   const cx = face.left + face.width / 2;
   // starting under the face: down, centred on it; left, mostly to its left; right, to its right
   const want = way === "down" ? cx - width / 2 : way === "left" ? cx + 10 - width : cx - 10;
-  const room = window.innerWidth - EDGE - width;
-  const left = Math.min(Math.max(want, EDGE), Math.max(EDGE, room));
-  box.style.left = `${left}px`;
-  box.style.top = `${face.bottom + 5 + row * ROW}px`;
+  const left = Math.min(Math.max(want, f.lo), Math.max(f.lo, f.hi - width));
+  box.style.left = `${left - f.box.left}px`;
+  box.style.top = `${face.bottom + 5 + row * ROW - f.box.top}px`;
   if (width > 0) {
     const tail = Math.min(86, Math.max(14, ((cx - left) / width) * 100));
     bubble.style.setProperty("--tail", `${tail}%`);
   }
-  // out to a side as far as the screen lets it, else just down
+  // out to a side as far as the edge lets it, else just down
   const dx =
     way === "left"
-      ? -Math.min(28, Math.max(0, left - 2))
+      ? -Math.min(28, Math.max(0, left - (f.lo - EDGE) - 2))
       : way === "right"
-        ? Math.min(28, Math.max(0, window.innerWidth - 2 - left - width))
+        ? Math.min(28, Math.max(0, f.hi + EDGE - 2 - left - width))
         : 0;
   // only a little way down: it leaves the face rather than falls far
   const dy = way === "down" ? 10 : 6;

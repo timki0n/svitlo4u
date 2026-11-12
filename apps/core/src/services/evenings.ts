@@ -104,6 +104,7 @@ export const EVENING_PHRASES = [
   "Удачі!",
   "Скоро буду!",
   "Дякую за гру!",
+  "Було весело!",
 ] as const;
 export type EveningPhrase = (typeof EVENING_PHRASES)[number];
 export type EveningReaction = EveningEmote | EveningPhrase;
