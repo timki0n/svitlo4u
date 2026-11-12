@@ -2696,3 +2696,169 @@
 .g-volt-meter[data-state="ok"] .g-volt-label {
   color: rgba(26, 18, 8, 0.7);
 }
+
+/* Судоку: the boxes, the cells in them, the digits to put in, the pencil and the eraser */
+.g-sdk {
+  display: grid;
+  grid-template-columns: repeat(var(--across), 1fr);
+  gap: 5px;
+  width: min(100%, 340px);
+  padding: 7px;
+  border-radius: 16px;
+  background: var(--well);
+  box-shadow: var(--inset);
+  touch-action: manipulation;
+}
+
+/* a box: a block of its own with an edge round it; the cells in it apart by a faint line */
+.g-sdk-box {
+  display: grid;
+  grid-template-columns: repeat(var(--bw), 1fr);
+  gap: 1px;
+  overflow: hidden;
+  border-radius: 7px;
+  background: rgba(242, 239, 234, 0.06);
+  box-shadow: 0 0 0 1.5px rgba(242, 239, 234, 0.3);
+}
+
+.g-sdk-cell {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: #1a1b1f;
+  color: var(--light);
+  font:
+    700 19px "Manrope Variable",
+    sans-serif;
+  cursor: pointer;
+}
+
+.g-sdk-cell[data-given] {
+  color: var(--text);
+}
+
+.g-sdk-cell[data-near] {
+  background: #212228;
+}
+
+.g-sdk-cell[data-same] {
+  background: rgba(255, 154, 61, 0.14);
+}
+
+.g-sdk-cell[data-bad] {
+  background: rgba(255, 107, 87, 0.18);
+  color: var(--warn);
+}
+
+.g-sdk-cell[data-pick] {
+  background: rgba(255, 154, 61, 0.3);
+  box-shadow: inset 0 0 0 2px var(--light);
+}
+
+.g-sdk-cell[data-pick][data-bad] {
+  background: rgba(255, 107, 87, 0.3);
+  box-shadow: inset 0 0 0 2px var(--warn);
+}
+
+.g-sdk-cell[data-won] {
+  color: var(--light);
+  cursor: default;
+}
+
+.g-sdk-marks {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  width: 100%;
+  height: 100%;
+  padding: 2px;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1;
+}
+
+.g-sdk-marks i {
+  display: grid;
+  place-items: center;
+  font-style: normal;
+}
+
+.g-sdk-pad {
+  display: grid;
+  grid-template-columns: repeat(9, 1fr);
+  gap: 5px;
+  width: min(100%, 340px);
+}
+
+.g-sdk-key {
+  min-width: 0;
+  height: 48px;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: var(--surface-2);
+  box-shadow: var(--raised-sm);
+  color: var(--text);
+  font:
+    700 20px "Manrope Variable",
+    sans-serif;
+  cursor: pointer;
+}
+
+.g-sdk-key:active {
+  box-shadow: var(--inset-sm);
+}
+
+.g-sdk-key[data-spent],
+.g-sdk-key:disabled {
+  opacity: 0.35;
+}
+
+.g-sdk-tools {
+  display: flex;
+  gap: 10px;
+  width: min(100%, 340px);
+}
+
+.g-sdk-tool {
+  flex: 1;
+}
+
+.g-sdk-tool[data-on] {
+  color: var(--light);
+  box-shadow: var(--inset-sm);
+}
+
+.g-sdk-tool:disabled {
+  opacity: 0.4;
+}
+
+.g-sdk[data-n="6"] .g-sdk-cell {
+  font-size: 24px;
+}
+
+.g-sdk[data-n="6"] .g-sdk-marks {
+  font-size: 11px;
+}
+
+.g-sdk-pad[data-n="6"] {
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+}
+
+.g-sdk[data-n="4"] .g-sdk-cell {
+  font-size: 30px;
+}
+
+.g-sdk[data-n="4"] .g-sdk-marks {
+  grid-template-columns: repeat(2, 1fr);
+  padding: 6px;
+  font-size: 14px;
+}
+
+.g-sdk-pad[data-n="4"] {
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}

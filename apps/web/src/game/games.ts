@@ -14,6 +14,7 @@ import {
   mountPack,
   mountPets,
   mountSlide,
+  mountSudoku,
   mountUntangle,
   mountVolt,
 } from "./mount.ts";
@@ -27,6 +28,7 @@ import {
   packPuzzle,
   petsPuzzle,
   slidePuzzle,
+  sudokuPuzzle,
   type Tier,
   tierOf,
   untanglePuzzle,
@@ -65,6 +67,7 @@ export const GAMES: readonly GameDef[] = [
   game("batteries", "Батарейки по зарядках", batteryPuzzle, mountBatteries),
   game("volt", "Точна напруга", voltPuzzle, mountVolt),
   game("jigsaw", "Пазл", jigsawPuzzle, mountJigsaw),
+  game("sudoku", "Судоку", sudokuPuzzle, mountSudoku),
 ];
 
 export const TIER_LABEL = ["легкий рівень", "середній рівень", "важкий рівень"] as const;

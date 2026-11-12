@@ -36,8 +36,11 @@ import {
   packShapeOf,
   packSolutions,
   petsPuzzle,
+  SUDOKU_TIERS,
   slideMinMoves,
   slidePuzzle,
+  sudokuPuzzle,
+  sudokuReason,
   type Tier,
   tierOf,
   traceBeam,
@@ -84,6 +87,7 @@ describe("window games", () => {
       batteryPuzzle,
       voltPuzzle,
       jigsawPuzzle,
+      sudokuPuzzle,
     ])
       for (const t of TIERS) expect(make(rngOf(`k${t}`), t)).toEqual(make(rngOf(`k${t}`), t));
     expect(slidePuzzle(rngOf("k"), 1)).toEqual(slidePuzzle(rngOf("k"), 1));
@@ -393,5 +397,91 @@ describe("difficulty: no puzzle is a tap or two away", () => {
         }
       }
     }
+  });
+
+  /** A grid's rows, columns and boxes, cells row by row. */
+  const sudokuUnits = (n: number, [bh, bw]: readonly [number, number]) => {
+    const units: number[][] = [];
+    for (let r = 0; r < n; r++) units.push([...Array(n).keys()].map((c) => r * n + c));
+    for (let c = 0; c < n; c++) units.push([...Array(n).keys()].map((r) => r * n + c));
+    for (let b = 0; b < n; b++) {
+      const r0 = Math.floor(b / (n / bw)) * bh;
+      const c0 = (b % (n / bw)) * bw;
+      units.push([...Array(n).keys()].map((k) => (r0 + Math.floor(k / bw)) * n + c0 + (k % bw)));
+    }
+    return units;
+  };
+  /** Solutions counted by trying digits (up to two), apart from the reasoning that made the grid. */
+  const sudokuCount = (n: number, box: readonly [number, number], cells: readonly number[]) => {
+    const units = sudokuUnits(n, box);
+    const of = [...Array(n * n).keys()].map((i) => units.filter((u) => u.includes(i)));
+    const grid = cells.slice();
+    let found = 0;
+    const go = (): void => {
+      let best = -1;
+      let bestFree: number[] = [];
+      for (let i = 0; i < n * n; i++) {
+        if (grid[i]) continue;
+        const taken = new Set((of[i] as number[][]).flat().map((j) => grid[j]));
+        const free = [...Array(n).keys()].map((d) => d + 1).filter((d) => !taken.has(d));
+        if (best < 0 || free.length < bestFree.length) [best, bestFree] = [i, free];
+      }
+      if (best < 0) {
+        found++;
+        return;
+      }
+      for (const d of bestFree) {
+        grid[best] = d;
+        go();
+        if (found > 1) break;
+      }
+      grid[best] = 0;
+    };
+    go();
+    return found;
+  };
+
+  it("Судоку: 4 × 4, 6 × 6, 9 × 9; one solution, reached by reasoning; the 9 × 9 takes more than singles", () => {
+    const range = [
+      [6, 9],
+      [11, 15],
+      [20, 32],
+    ] as const;
+    for (const k of keys(30))
+      for (const t of TIERS) {
+        const p = sudokuPuzzle(rngOf(k), t);
+        const { n, box } = p;
+        expect(n).toBe(SUDOKU_TIERS[t].n);
+        expect(box).toEqual(SUDOKU_TIERS[t].box);
+        // the solution keeps the rules; the givens are its digits, in pairs facing across the centre
+        for (const unit of sudokuUnits(n, box))
+          expect(unit.map((i) => p.solution[i]).sort()).toEqual(
+            [...Array(n).keys()].map((d) => d + 1),
+          );
+        p.givens.forEach((d, i) => {
+          if (d) expect(d).toBe(p.solution[i]);
+          expect(d > 0).toBe((p.givens[n * n - 1 - i] as number) > 0);
+        });
+        const count = p.givens.filter(Boolean).length;
+        expect(count).toBeGreaterThanOrEqual(range[t][0]);
+        expect(count).toBeLessThanOrEqual(range[t][1]);
+        expect(sudokuReason(p, p.givens, t === 2)).toEqual(p.solution);
+        if (t < 2) expect(sudokuReason(p, p.givens, false)).toEqual(p.solution);
+        else expect(sudokuReason(p, p.givens, false)).toBeNull();
+        expect(sudokuCount(n, box, p.givens)).toBe(1);
+      }
+  });
+
+  it("Судоку: reasoning never guesses, nor fills a grid that breaks the rules", () => {
+    const p = sudokuPuzzle(rngOf("k"), 2);
+    expect(sudokuReason(p, p.solution, false)).toEqual(p.solution);
+    expect(sudokuReason(p, Array(81).fill(0), true)).toBeNull();
+    const broken = p.givens.slice();
+    const i = broken.indexOf(0);
+    // the same digit twice in a row
+    const row = Math.floor(i / 9);
+    const other = [...Array(9).keys()].map((c) => row * 9 + c).find((j) => broken[j]) as number;
+    broken[i] = broken[other] as number;
+    expect(sudokuReason(p, broken, true)).toBeNull();
   });
 });

@@ -30,6 +30,7 @@ import {
   type Point,
   rotate,
   type SlidePuzzle,
+  type SudokuPuzzle,
   slideFits,
   slideGrid,
   traceBeam,
@@ -2149,4 +2150,189 @@ export function mountBatteries(root: HTMLElement, p: BatteryPuzzle, ctx: GameCtx
   });
   draw();
   return undefined;
+}
+
+// ── Судоку ──────────────────────────────────────────────────────────────────────────────────
+
+const ARROWS: Record<string, [number, number]> = {
+  ArrowUp: [-1, 0],
+  ArrowDown: [1, 0],
+  ArrowLeft: [0, -1],
+  ArrowRight: [0, 1],
+};
+
+export function mountSudoku(root: HTMLElement, p: SudokuPuzzle, ctx: GameCtx): Cleanup {
+  const { n } = p;
+  const [bh, bw] = p.box;
+  const digits = Array.from({ length: n }, (_, d) => d + 1);
+  /** The digits in the cells now (row by row, 0: empty), the pencil marks in each (bit per digit). */
+  const now = p.givens.slice();
+  const marks = new Array<number>(n * n).fill(0);
+  const given = p.givens.map((d) => d > 0);
+  const rowOf = (i: number) => Math.floor(i / n);
+  const colOf = (i: number) => i % n;
+  const boxOf = (i: number) => Math.floor(rowOf(i) / bh) * (n / bw) + Math.floor(colOf(i) / bw);
+  const near = (i: number, j: number) =>
+    rowOf(i) === rowOf(j) || colOf(i) === colOf(j) || boxOf(i) === boxOf(j);
+  const area = n === 6 ? "прямокутнику" : "квадраті";
+  let pick = -1;
+  let pencil = false;
+  let won = false;
+
+  // the board: its boxes, and the cells in each
+  const board = document.createElement("div");
+  board.className = "g-sdk";
+  board.dataset.n = String(n);
+  board.style.setProperty("--across", String(n / bw));
+  board.style.setProperty("--bw", String(bw));
+  const cells: HTMLButtonElement[] = [];
+  for (let b = 0; b < n; b++) {
+    const group = document.createElement("div");
+    group.className = "g-sdk-box";
+    board.appendChild(group);
+    for (let k = 0; k < n; k++) {
+      const r = Math.floor(b / (n / bw)) * bh + Math.floor(k / bw);
+      const c = (b % (n / bw)) * bw + (k % bw);
+      const cell = document.createElement("button");
+      cell.type = "button";
+      cell.className = "g-sdk-cell";
+      cell.setAttribute("aria-label", `Рядок ${r + 1}, стовпець ${c + 1}`);
+      cell.addEventListener("click", () => {
+        if (won) return;
+        pick = r * n + c;
+        paint();
+      });
+      group.appendChild(cell);
+      cells[r * n + c] = cell;
+    }
+  }
+  root.appendChild(board);
+
+  // the digits to put in, the pencil, the eraser
+  const pad = document.createElement("div");
+  pad.className = "g-sdk-pad";
+  pad.dataset.n = String(n);
+  const keys = digits.map((d) => {
+    const key = document.createElement("button");
+    key.type = "button";
+    key.className = "g-sdk-key";
+    key.textContent = String(d);
+    key.addEventListener("click", () => put(d));
+    pad.appendChild(key);
+    return key;
+  });
+  root.appendChild(pad);
+  const tools = document.createElement("div");
+  tools.className = "g-sdk-tools";
+  const pencilKey = document.createElement("button");
+  pencilKey.type = "button";
+  pencilKey.className = "g-btn g-sdk-tool";
+  pencilKey.textContent = "Олівець";
+  pencilKey.setAttribute("aria-pressed", "false");
+  pencilKey.addEventListener("click", () => {
+    pencil = !pencil;
+    paint();
+  });
+  const eraser = document.createElement("button");
+  eraser.type = "button";
+  eraser.className = "g-btn g-sdk-tool";
+  eraser.textContent = "Стерти";
+  eraser.addEventListener("click", () => put(0));
+  tools.append(pencilKey, eraser);
+  root.appendChild(tools);
+
+  /** Digit `d` into the cell picked (0: clear it), or with the pencil, its mark there or not. */
+  function put(d: number) {
+    if (won || pick < 0 || given[pick]) return;
+    if (d === 0) {
+      now[pick] = 0;
+      marks[pick] = 0;
+    } else if (pencil) {
+      if (now[pick]) return;
+      marks[pick] = (marks[pick] as number) ^ (1 << (d - 1));
+    } else if (now[pick] === d) now[pick] = 0;
+    else {
+      now[pick] = d;
+      marks[pick] = 0;
+      // the digit is taken here: out of the marks round it
+      for (let j = 0; j < n * n; j++)
+        if (near(pick, j)) marks[j] = (marks[j] as number) & ~(1 << (d - 1));
+    }
+    const bad = clashes();
+    if (now.every(Boolean) && bad.size === 0) {
+      won = true;
+      pick = -1;
+      paint();
+      ctx.done(`сітка ${n}×${n} заповнена`);
+      return;
+    }
+    paint();
+  }
+
+  /** The cells whose digit is also in their row, column or box. */
+  function clashes() {
+    const bad = new Set<number>();
+    for (let i = 0; i < n * n; i++)
+      for (let j = i + 1; j < n * n; j++)
+        if (now[i] && now[i] === now[j] && near(i, j)) {
+          bad.add(i);
+          bad.add(j);
+        }
+    return bad;
+  }
+
+  function paint() {
+    const bad = clashes();
+    const empty = now.filter((d) => !d).length;
+    if (!won)
+      ctx.say(
+        `Цифри від 1 до ${n}: кожна раз у рядку, стовпці й ${area} · лишилось ${empty}`,
+        bad.size ? "є повтори" : undefined,
+      );
+    const mine = pick >= 0 ? (now[pick] as number) : 0;
+    cells.forEach((cell, i) => {
+      const d = now[i] as number;
+      cell.toggleAttribute("data-given", given[i] as boolean);
+      cell.toggleAttribute("data-pick", i === pick);
+      cell.toggleAttribute("data-near", pick >= 0 && i !== pick && near(pick, i));
+      cell.toggleAttribute("data-same", mine > 0 && d === mine && i !== pick);
+      cell.toggleAttribute("data-bad", bad.has(i));
+      cell.toggleAttribute("data-won", won);
+      if (d) cell.textContent = String(d);
+      else if (marks[i])
+        cell.innerHTML = `<span class="g-sdk-marks">${digits
+          .map((m) => `<i>${(marks[i] as number) & (1 << (m - 1)) ? m : ""}</i>`)
+          .join("")}</span>`;
+      else cell.textContent = "";
+    });
+    // a digit all placed is spent
+    keys.forEach((key, k) => {
+      key.toggleAttribute("data-spent", now.filter((d) => d === k + 1).length >= n);
+      key.disabled = won;
+    });
+    pencilKey.toggleAttribute("data-on", pencil);
+    pencilKey.setAttribute("aria-pressed", String(pencil));
+    pencilKey.disabled = won;
+    eraser.disabled = won;
+  }
+
+  // with a keyboard: digits, the eraser, the arrows to move
+  const onKey = (e: KeyboardEvent) => {
+    if (won || e.ctrlKey || e.metaKey || e.altKey) return;
+    const d = Number(e.key);
+    if (Number.isInteger(d) && d >= 1 && d <= n) put(d);
+    else if (e.key === "Backspace" || e.key === "Delete" || e.key === "0") put(0);
+    else {
+      const step = ARROWS[e.key];
+      if (!step) return;
+      e.preventDefault();
+      const at = Math.max(pick, 0);
+      pick = ((rowOf(at) + step[0] + n) % n) * n + ((colOf(at) + step[1] + n) % n);
+      paint();
+    }
+  };
+  document.addEventListener("keydown", onKey);
+
+  paint();
+  return () => document.removeEventListener("keydown", onKey);
 }

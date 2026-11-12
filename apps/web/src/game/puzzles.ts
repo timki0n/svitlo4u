@@ -2585,3 +2585,223 @@ export function jigsawPuzzle(rng: Rng, tier: Tier): JigsawPuzzle {
   );
   return { n, scene, sky, art, across, down, order: shuffle(rng, [...Array(n * n).keys()]) };
 }
+
+// ── «Судоку»: every row, column and box holds each digit once ────────────────────────────────────
+
+export type SudokuPuzzle = {
+  /** The side: 4 (boxes of 2 × 2), 6 (boxes of 2 rows × 3 columns) or 9 (boxes of 3 × 3). */
+  n: number;
+  /** A box's rows and columns. */
+  box: [number, number];
+  /** The cells row by row: the digit given, 0 for an empty one. */
+  givens: number[];
+  /** The one way to fill it. */
+  solution: number[];
+};
+
+/**
+ * Per tier: the side and its boxes, how many cells are given (fewest and most; 0: as few as the
+ * reasoning allows), and whether it takes more than singles to solve.
+ */
+export const SUDOKU_TIERS = [
+  { n: 4, box: [2, 2], givens: [6, 8], deep: false },
+  { n: 6, box: [2, 3], givens: [11, 14], deep: false },
+  { n: 9, box: [3, 3], givens: [0, 0], deep: true },
+] as const;
+
+/** A grid's lines: its rows, columns and boxes (cells row by row), and which three hold a cell. */
+type SudokuShape = { n: number; units: number[][]; unitsOf: [number, number, number][] };
+const sudokuShapes = new Map<string, SudokuShape>();
+
+function sudokuShape(n: number, [bh, bw]: readonly [number, number]): SudokuShape {
+  const key = `${n}:${bh}x${bw}`;
+  const known = sudokuShapes.get(key);
+  if (known) return known;
+  const units: number[][] = [];
+  for (let r = 0; r < n; r++) units.push(Array.from({ length: n }, (_, c) => r * n + c));
+  for (let c = 0; c < n; c++) units.push(Array.from({ length: n }, (_, r) => r * n + c));
+  for (let b = 0; b < n; b++) {
+    const r0 = Math.floor(b / (n / bw)) * bh;
+    const c0 = (b % (n / bw)) * bw;
+    units.push(Array.from({ length: n }, (_, k) => (r0 + Math.floor(k / bw)) * n + c0 + (k % bw)));
+  }
+  const unitsOf = Array.from({ length: n * n }, () => [0, 0, 0] as [number, number, number]);
+  units.forEach((unit, u) => {
+    for (const i of unit) (unitsOf[i] as [number, number, number])[Math.floor(u / n)] = u;
+  });
+  const shape = { n, units, unitsOf };
+  sudokuShapes.set(key, shape);
+  return shape;
+}
+
+const bits = (mask: number) => {
+  let count = 0;
+  for (let m = mask; m; m &= m - 1) count++;
+  return count;
+};
+
+/** Every way to pick `k` of `items`. */
+function choose<T>(items: readonly T[], k: number): T[][] {
+  if (k === 0) return [[]];
+  const out: T[][] = [];
+  items.forEach((item, i) => {
+    for (const rest of choose(items.slice(i + 1), k - 1)) out.push([item, ...rest]);
+  });
+  return out;
+}
+
+/**
+ * Solves by reasoning alone, as a person would, never guessing: a cell with one digit left, a digit
+ * with one cell left in a line or box; with `deep`, also a digit a box keeps to one row or column
+ * (or a line to one box), and two or three cells sharing two or three digits (or two or three
+ * digits sharing two or three cells). The filled grid, or null if reasoning does not get there.
+ * Every step is sound, so a grid it fills has no other solution.
+ */
+export function sudokuReason(
+  p: Pick<SudokuPuzzle, "n" | "box">,
+  cells: readonly number[],
+  deep: boolean,
+): number[] | null {
+  const { n, units, unitsOf } = sudokuShape(p.n, p.box);
+  const grid = new Array<number>(n * n).fill(0);
+  const cand = new Array<number>(n * n).fill((1 << n) - 1);
+  let left = n * n;
+  const place = (i: number, d: number) => {
+    grid[i] = d;
+    cand[i] = 0;
+    left--;
+    for (const u of unitsOf[i] as number[])
+      for (const j of units[u] as number[]) cand[j] = (cand[j] as number) & ~(1 << (d - 1));
+  };
+  for (const [i, d] of cells.entries()) {
+    if (!d) continue;
+    if (!((cand[i] as number) & (1 << (d - 1)))) return null;
+    place(i, d);
+  }
+  /** Takes digits `mask` out of cell `j`; whether that changed anything. */
+  const drop = (j: number, mask: number) => {
+    const before = cand[j] as number;
+    cand[j] = before & ~mask;
+    return cand[j] !== before;
+  };
+  while (left > 0) {
+    let moved = false;
+    // a cell with one digit left
+    for (let i = 0; i < n * n; i++) {
+      if (grid[i]) continue;
+      const c = cand[i] as number;
+      if (!c) return null;
+      if (bits(c) === 1) {
+        place(i, 31 - Math.clz32(c) + 1);
+        moved = true;
+      }
+    }
+    if (moved) continue;
+    // a digit with one cell left in a line or box
+    for (const unit of units)
+      for (let d = 1; d <= n; d++) {
+        const bit = 1 << (d - 1);
+        if (unit.some((i) => grid[i] === d)) continue;
+        const spots = unit.filter((i) => (cand[i] as number) & bit);
+        if (spots.length === 0) return null;
+        if (spots.length === 1) {
+          place(spots[0] as number, d);
+          moved = true;
+        }
+      }
+    if (moved) continue;
+    if (!deep) return null;
+    for (const [u, unit] of units.entries()) {
+      // a digit kept to where this unit meets another: out of the rest of that other one
+      for (let d = 1; d <= n; d++) {
+        const bit = 1 << (d - 1);
+        const spots = unit.filter((i) => (cand[i] as number) & bit);
+        if (spots.length < 2) continue;
+        for (let k = 0; k < 3; k++) {
+          const other = (unitsOf[spots[0] as number] as number[])[k] as number;
+          if (other === u || !spots.every((i) => (unitsOf[i] as number[])[k] === other)) continue;
+          for (const j of units[other] as number[])
+            if (!spots.includes(j) && drop(j, bit)) moved = true;
+        }
+      }
+      // two or three cells with only two or three digits between them: those digits are theirs
+      const open = unit.filter((i) => !grid[i]);
+      for (const k of [2, 3]) {
+        if (open.length <= k) continue;
+        for (const set of choose(open, k)) {
+          const mask = set.reduce((m, i) => m | (cand[i] as number), 0);
+          if (bits(mask) !== k) continue;
+          for (const j of open) if (!set.includes(j) && drop(j, mask)) moved = true;
+        }
+        // two or three digits with only two or three cells between them: those cells are theirs
+        const digits = Array.from({ length: n }, (_, d) => d + 1).filter(
+          (d) => !unit.some((i) => grid[i] === d),
+        );
+        if (digits.length <= k) continue;
+        for (const set of choose(digits, k)) {
+          const mask = set.reduce((m, d) => m | (1 << (d - 1)), 0);
+          const spots = open.filter((i) => (cand[i] as number) & mask);
+          if (spots.length !== k) continue;
+          for (const j of spots) if (drop(j, ~mask)) moved = true;
+        }
+      }
+    }
+    if (!moved) return null;
+  }
+  return grid;
+}
+
+/** A whole grid of its own: the cells filled one by one, each with a digit drawn at random that fits. */
+function sudokuFull(rng: Rng, p: Pick<SudokuPuzzle, "n" | "box">): number[] {
+  const { n, units, unitsOf } = sudokuShape(p.n, p.box);
+  const grid = new Array<number>(n * n).fill(0);
+  const digits = Array.from({ length: n }, (_, d) => d + 1);
+  const fill = (i: number): boolean => {
+    if (i === n * n) return true;
+    const taken = new Set(
+      (unitsOf[i] as number[]).flatMap((u) => (units[u] as number[]).map((j) => grid[j])),
+    );
+    for (const d of shuffle(rng, digits)) {
+      if (taken.has(d)) continue;
+      grid[i] = d;
+      if (fill(i + 1)) return true;
+    }
+    grid[i] = 0;
+    return false;
+  };
+  fill(0);
+  return grid;
+}
+
+/**
+ * A grid of its own with cells taken out two at a time, each facing the other across the centre,
+ * for as long as reasoning still fills it (so it has one solution, found without guessing) and
+ * the tier's count of givens allows. The hard one must take more than singles: if the grid it got
+ * to can be solved without, another grid is tried.
+ */
+export function sudokuPuzzle(rng: Rng, tier: Tier): SudokuPuzzle {
+  const t = SUDOKU_TIERS[tier];
+  const n = t.n;
+  const box: [number, number] = [t.box[0], t.box[1]];
+  const shape = { n, box };
+  let last: SudokuPuzzle | null = null;
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const solution = sudokuFull(rng, shape);
+    const givens = solution.slice();
+    const fewest = t.givens[0] + ri(rng, t.givens[1] - t.givens[0] + 1);
+    let count = n * n;
+    for (const i of shuffle(rng, [...Array(Math.ceil((n * n) / 2)).keys()])) {
+      const j = n * n - 1 - i;
+      const pair = i === j ? 1 : 2;
+      if (count - pair < fewest) continue;
+      const kept = [givens[i] as number, givens[j] as number];
+      givens[i] = 0;
+      givens[j] = 0;
+      if (sudokuReason(shape, givens, t.deep)) count -= pair;
+      else [givens[i], givens[j]] = kept as [number, number];
+    }
+    last = { n, box, givens, solution };
+    if (!t.deep || !sudokuReason(shape, givens, false)) return last;
+  }
+  return last as SudokuPuzzle;
+}
