@@ -90,6 +90,8 @@ export function Watchers({ v, size = 20 }: { v: EveningTableView; size?: number 
   const ids = v.watchers;
   if (ids.length === 0) return null;
   const shown = ids.slice(0, ids.length > 5 ? 4 : 5);
+  // the viewer watching sees their own face among them: their reactions rise over it
+  if (ids.includes(v.me.id) && !shown.includes(v.me.id)) shown[shown.length - 1] = v.me.id;
   const names = ids.map((id) => playerName(v.players[id])).join(", ");
   return (
     <span className="g-watchers" title={`Дивляться: ${names}`}>
@@ -106,7 +108,7 @@ export function Watchers({ v, size = 20 }: { v: EveningTableView; size?: number 
       </svg>
       <span className="g-watchers-faces" aria-hidden="true">
         {shown.map((id) => (
-          <span key={id} className="g-watcher">
+          <span key={id} className="g-watcher" data-watcher={id}>
             <Avatar id={id} player={v.players[id]} size={size} />
           </span>
         ))}

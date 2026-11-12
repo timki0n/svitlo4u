@@ -1,12 +1,22 @@
 /**
- * Emojis round a table: one at it taps an emoji in the row under the game, and on every screen it
- * rises over their face like a tooltip, then fades. The faces are found by `data-pid` inside the
- * screen (a seat's avatar, my plate, a field's head in «Графік»). Mine shows at once, as I tap; the
- * core's copy of it is then not shown again. Each one shows once, only while fresh, and without the
- * rise for those who asked for less motion.
+ * Reactions round a table: one at it taps an emoji in the row under the game; one watching taps a
+ * phrase while the table gathers («Граєм?», «Удачі!»…), an emoji while a game is played. On every
+ * screen a player's rises over their face like a tooltip, then fades; one watching's leaves their
+ * face in the row of those watching, smaller, and fades within a second — several said at once
+ * spread out: the leftmost goes left, the rightmost right, the rest down. The faces are found inside
+ * the screen: `data-pid` (a seat's avatar, my plate, a field's head in «Графік»), `data-watcher` (a
+ * face in the row; one not shown there leaves the row). Mine shows at once, as I tap; the core's
+ * copy of it is then not shown again. Each one shows once, only while fresh, and without the motion
+ * for those who asked for less.
  */
 import { type RefObject, useEffect, useRef, useState } from "react";
-import type { EveningEmote, EveningTableView, gameApi } from "./api.ts";
+import type {
+  EveningEmote,
+  EveningPhrase,
+  EveningReaction,
+  EveningTableView,
+  gameApi,
+} from "./api.ts";
 
 type Api = ReturnType<typeof gameApi>;
 
@@ -21,38 +31,89 @@ const EMOTES: { emoji: EveningEmote; name: string }[] = [
   { emoji: "🤔", name: "Хм" },
   { emoji: "🔥", name: "Вогонь" },
 ];
+/** What one watching may say while the table gathers (the core takes these and no others). */
+const PHRASES: EveningPhrase[] = [
+  "Привіт!",
+  "Граєм?",
+  "ГО!",
+  "Я все.",
+  "В іншу гру!",
+  "Удачі!",
+  "Скоро буду!",
+  "Дякую за гру!",
+];
 /** The core takes one a second from a player: the row rests as long after a tap. */
 const REST_MS = 1_000;
 /** One that reached the screen later than this after it was sent is not shown. */
 const FRESH_MS = 2_500;
 const RISE_MS = 2_400;
+/** A bubble keeps this far from the screen's edges. */
+const EDGE = 8;
 
-/** The top centre of a player's face on the screen (a seat's avatar, else the place itself). */
-function faceOf(root: HTMLElement, id: number): { x: number; y: number } | null {
-  const place = root.querySelector<HTMLElement>(`[data-pid="${id}"]`);
-  if (!place) return null;
-  const r = (place.querySelector(".g-pseat-face") ?? place).getBoundingClientRect();
-  return { x: r.left + r.width / 2, y: r.top };
-}
+/**
+ * How long a reaction of one watching moves away from their face, fading as it goes: a phrase
+ * longer than an emoji, time to read it.
+ */
+const fallMs = (what: string) => ((PHRASES as string[]).includes(what) ? 1_500 : 1_000);
+/** Reactions of those watching that come this close together count as said at once. */
+const TOGETHER_MS = 150;
+/** A row of them under the faces: the taller one (an emoji) and a gap. */
+const ROW = 28;
 
-/** An emoji in its bubble rises over a face and fades. */
-function rise(layer: HTMLElement, root: HTMLElement, id: number, emoji: string) {
-  if (document.hidden) return;
-  const at = faceOf(root, id);
-  if (!at) return;
+type Way = "left" | "down" | "right";
+/** A reaction of one watching on the screen: their face's centre, and when it is gone. */
+type Falling = { x: number; until: number };
+
+const reduced = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+
+/** A bubble with the reaction in it, put on the layer to be measured and placed. */
+function bubbleOf(layer: HTMLElement, what: string, watching: boolean) {
   const box = document.createElement("span");
-  box.className = "g-emote";
-  box.style.left = `${at.x}px`;
-  box.style.top = `${at.y - 4}px`;
+  box.className = watching ? "g-emote g-emote-fall" : "g-emote";
   const bubble = document.createElement("span");
   bubble.className = "g-emote-bubble";
-  bubble.textContent = emoji;
+  if ((PHRASES as string[]).includes(what)) bubble.dataset.text = "";
+  if (watching) bubble.dataset.small = "";
+  bubble.textContent = what;
   box.append(bubble);
   layer.append(box);
-  const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-  const up = (y: number, s = 1) => `translate(-50%, calc(-100% - ${y}px)) scale(${s})`;
-  box.animate(
-    still
+  return { box, bubble };
+}
+
+/**
+ * Puts a bubble with its centre over `cx`, kept off the screen's edges — the tail still pointing at
+ * the face; returns its width and height.
+ */
+function place(box: HTMLElement, bubble: HTMLElement, cx: number, y: number) {
+  const { width, height } = bubble.getBoundingClientRect();
+  const half = EDGE + width / 2;
+  const x = Math.min(Math.max(cx, half), Math.max(half, window.innerWidth - half));
+  box.style.left = `${x}px`;
+  box.style.top = `${y}px`;
+  if (width > 0) bubble.style.setProperty("--tail", `${50 + ((cx - x) / width) * 100}%`);
+  return { width, height };
+}
+
+/** Played, then gone (also when a page hidden mid-way holds its animations). */
+function play(box: HTMLElement, frames: Keyframe[], duration = RISE_MS, easing = "ease-out") {
+  box.animate(frames, { duration, easing, fill: "both" }).onfinish = () => box.remove();
+  setTimeout(() => box.remove(), duration + 1_000);
+}
+
+/** A reaction of one at the table rises in its bubble over their face, and fades. */
+function rise(layer: HTMLElement, root: HTMLElement, id: number, what: string) {
+  if (document.hidden) return;
+  const seat = root.querySelector<HTMLElement>(`[data-pid="${id}"]`);
+  if (!seat) return;
+  const r = (seat.querySelector(".g-pseat-face") ?? seat).getBoundingClientRect();
+  const { box, bubble } = bubbleOf(layer, what, false);
+  // one near the top of the screen rises from lower down
+  const height = bubble.getBoundingClientRect().height;
+  place(box, bubble, r.left + r.width / 2, Math.max(r.top - 4, height + 56));
+  const up = (dy: number, s = 1) => `translate(-50%, calc(-100% - ${dy}px)) scale(${s})`;
+  play(
+    box,
+    reduced()
       ? [{ opacity: 0 }, { opacity: 1, offset: 0.1 }, { opacity: 1, offset: 0.8 }, { opacity: 0 }]
       : [
           { transform: up(-6, 0.5), opacity: 0 },
@@ -61,13 +122,104 @@ function rise(layer: HTMLElement, root: HTMLElement, id: number, emoji: string) 
           { transform: up(30, 1), opacity: 1, offset: 0.75 },
           { transform: up(44, 0.96), opacity: 0 },
         ],
-    { duration: RISE_MS, easing: "ease-out", fill: "both" },
-  ).onfinish = () => box.remove();
-  // a page hidden mid-way holds its animations: the bubble goes all the same
-  setTimeout(() => box.remove(), RISE_MS + 1_000);
+  );
 }
 
-/** The emojis' row under the game (for one at the table) and their bubbles over the faces. */
+/**
+ * Which way each of those watching who reacted at once goes, `i`-th of `count` by their faces from
+ * left to right: one alone, down; two, the left one left and the right one right; more, the outer
+ * ones out to their sides and the rest down.
+ */
+function wayOf(count: number, i: number): Way {
+  if (count < 2) return "down";
+  if (i === 0) return "left";
+  if (i === count - 1) return "right";
+  return "down";
+}
+
+/**
+ * A reaction of one watching leaves their face — down, or out to its side — and fades within a
+ * second: an emoji as it is, a phrase on a card whose tail points back at the face. `row` starts it
+ * that many rows lower (one going down between others going out to the sides starts under them).
+ */
+function fall(layer: HTMLElement, face: DOMRect, what: string, way: Way, row: number) {
+  const { box, bubble } = bubbleOf(layer, what, true);
+  const { width } = bubble.getBoundingClientRect();
+  const cx = face.left + face.width / 2;
+  // starting under the face: down, centred on it; left, mostly to its left; right, to its right
+  const want = way === "down" ? cx - width / 2 : way === "left" ? cx + 10 - width : cx - 10;
+  const room = window.innerWidth - EDGE - width;
+  const left = Math.min(Math.max(want, EDGE), Math.max(EDGE, room));
+  box.style.left = `${left}px`;
+  box.style.top = `${face.bottom + 5 + row * ROW}px`;
+  if (width > 0) {
+    const tail = Math.min(86, Math.max(14, ((cx - left) / width) * 100));
+    bubble.style.setProperty("--tail", `${tail}%`);
+  }
+  // out to a side as far as the screen lets it, else just down
+  const dx =
+    way === "left"
+      ? -Math.min(28, Math.max(0, left - 2))
+      : way === "right"
+        ? Math.min(28, Math.max(0, window.innerWidth - 2 - left - width))
+        : 0;
+  // only a little way down: it leaves the face rather than falls far
+  const dy = way === "down" ? 10 : 6;
+  const at = (k: number) => `translate(${dx * k}px, ${dy * k}px)`;
+  play(
+    box,
+    reduced()
+      ? [{ opacity: 0 }, { opacity: 1, offset: 0.12 }, { opacity: 1, offset: 0.4 }, { opacity: 0 }]
+      : [
+          { transform: "translate(0, -4px)", opacity: 0 },
+          { transform: at(0.12), opacity: 1, offset: 0.12 },
+          { transform: at(0.4), opacity: 1, offset: 0.4 },
+          { transform: at(1), opacity: 0 },
+        ],
+    fallMs(what),
+    "linear",
+  );
+}
+
+/**
+ * Shows reactions of those watching said at once, each from its face in the row of those watching
+ * (the row itself when the face is not shown), spread out by `wayOf` together with those still on
+ * the screen; returns those on the screen now.
+ */
+function fallAll(
+  layer: HTMLElement,
+  root: HTMLElement,
+  items: { id: number; what: string }[],
+  falling: Falling[],
+): Falling[] {
+  const now = performance.now();
+  const still = falling.filter((f) => f.until > now);
+  if (document.hidden) return still;
+  const fresh = items.flatMap(({ id, what }) => {
+    const face =
+      root.querySelector<HTMLElement>(`[data-watcher="${id}"]`) ??
+      root.querySelector<HTMLElement>(".g-watchers");
+    if (!face) return [];
+    const r = face.getBoundingClientRect();
+    return [{ face: r, what, x: r.left + r.width / 2 }];
+  });
+  const all = [
+    ...still.map((f) => ({ x: f.x, fresh: null })),
+    ...fresh.map((f) => ({ x: f.x, fresh: f })),
+  ].sort((a, b) => a.x - b.x);
+  // those going down between two going out start under them, one row each
+  all.forEach((a, i) => {
+    const way = wayOf(all.length, i);
+    const row = all.length > 2 && way === "down" ? i : 0;
+    if (a.fresh) fall(layer, a.fresh.face, a.fresh.what, way, row);
+  });
+  return [...still, ...fresh.map((f) => ({ x: f.x, until: now + fallMs(f.what) }))];
+}
+
+/**
+ * The reactions' row under the game — emojis for one at the table (and one watching a game played),
+ * phrases for one watching while the table gathers — and their bubbles over the faces.
+ */
 export function Emotes({
   v,
   api,
@@ -83,8 +235,15 @@ export function Emotes({
   const shown = useRef(new Set<number>());
   // mine, shown as I tapped: the core's copy of each is not shown again
   const mine = useRef<{ emoji: string; t: number }[]>([]);
+  // reactions of those watching: still on the screen, and those just come, gathered a moment so
+  // that ones said at once are spread out together
+  const falling = useRef<Falling[]>([]);
+  const gathered = useRef<{ id: number; what: string }[]>([]);
+  const gathering = useRef(0);
   const [resting, setResting] = useState(false);
   const me = v.me.id;
+  const watching = !v.me.seated && v.watchers.includes(me);
+  const bar = v.me.seated || (watching && v.live) ? "emojis" : watching ? "phrases" : null;
 
   useEffect(() => {
     const host = layer.current;
@@ -101,27 +260,40 @@ export function Emotes({
           continue;
         }
       }
-      rise(host, scope, e.id, e.emoji);
+      if (v.watchers.includes(e.id)) gathered.current.push({ id: e.id, what: e.emoji });
+      else rise(host, scope, e.id, e.emoji);
     }
-  }, [v.emotes, v.now, me, root]);
+    if (gathered.current.length > 0 && !gathering.current)
+      gathering.current = window.setTimeout(() => {
+        gathering.current = 0;
+        const items = gathered.current;
+        gathered.current = [];
+        falling.current = fallAll(host, scope, items, falling.current);
+      }, TOGETHER_MS);
+  }, [v.emotes, v.now, v.watchers, me, root]);
 
-  const send = (emoji: EveningEmote) => {
+  useEffect(() => () => window.clearTimeout(gathering.current), []);
+
+  const send = (what: EveningReaction) => {
     const host = layer.current;
     const scope = root.current;
     if (resting) return;
-    if (host && scope) rise(host, scope, me, emoji);
-    mine.current.push({ emoji, t: Date.now() });
+    if (host && scope) {
+      if (watching) falling.current = fallAll(host, scope, [{ id: me, what }], falling.current);
+      else rise(host, scope, me, what);
+    }
+    mine.current.push({ emoji: what, t: Date.now() });
     setResting(true);
     setTimeout(() => setResting(false), REST_MS);
-    api.emote(door, emoji).catch(() => {
-      // not sent (too fast, stood up): it showed here only
+    api.emote(door, what).catch(() => {
+      // not sent (too fast, the game began, left): it showed here only
     });
   };
 
   return (
     <>
       <div ref={layer} className="g-emote-layer" aria-hidden="true" />
-      {v.me.seated && (
+      {bar === "emojis" && (
         <section className="card g-emotes" aria-label="Емоції">
           {EMOTES.map((e) => (
             <button
@@ -134,6 +306,21 @@ export function Emotes({
               onClick={() => send(e.emoji)}
             >
               {e.emoji}
+            </button>
+          ))}
+        </section>
+      )}
+      {bar === "phrases" && (
+        <section className="card g-phrases" aria-label="Репліки">
+          {PHRASES.map((text) => (
+            <button
+              key={text}
+              type="button"
+              className="g-phrase-btn"
+              disabled={resting}
+              onClick={() => send(text)}
+            >
+              {text}
             </button>
           ))}
         </section>

@@ -94,6 +94,7 @@ beforeEach(async () => {
         nopeMs: 60,
         holdMs: 60,
         callMs: 200,
+        goneMs: 500,
       },
     },
   );
@@ -343,6 +344,50 @@ describe("«Вечорниці»", () => {
     expect((await table(door, ANN)).watchers).toEqual([]);
   });
 
+  it("who watches: one coming in or leaving wakes the screens waiting on the table", async () => {
+    const door = await doorOf("durak");
+    await openDoor(door);
+    await call("POST", `/evenings/${door}/join`, ANN, { stake: 30 });
+    const v0 = await table(door, ANN);
+    // Ann's screen waits for a change; Kate opens the table
+    const waiting = call<EveningTableView>("GET", `/evenings/${door}?since=${v0.version}`, ANN);
+    await new Promise((r) => setTimeout(r, 30));
+    await table(door, CAT);
+    const v1 = (await waiting).body;
+    expect(v1.watchers).toEqual([9]);
+    // Kate's screen asks no more (closed): a moment later she is gone, and Ann's screen learns it
+    // without waiting out its long poll
+    const started = Date.now();
+    const v2 = (await call<EveningTableView>("GET", `/evenings/${door}?since=${v1.version}`, ANN))
+      .body;
+    expect(v2.watchers).toEqual([]);
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it("one watching says a phrase while the table gathers, an emoji while a game is played", async () => {
+    const door = await doorOf("durak");
+    await openDoor(door);
+    await call("POST", `/evenings/${door}/join`, ANN, { stake: 30 });
+    const send = (who: Person, emoji: string) =>
+      call<{ error?: string }>("POST", `/evenings/${door}/emote`, who, { emoji });
+
+    expect((await send(CAT, "Граєм?")).body.error).toBe("not_here"); // not in the room yet
+    expect((await table(door, CAT)).live).toBe(false);
+    expect((await send(CAT, "👍")).body.error).toBe("bad_emote");
+    expect((await send(CAT, "Граєм?")).status).toBe(200);
+    expect((await send(ANN, "ГО!")).body.error).toBe("bad_emote"); // at the table: emojis
+    const seen = (await table(door, ANN)).emotes;
+    expect(seen.map((e) => [e.id, e.emoji])).toEqual([[9, "Граєм?"]]);
+
+    // Bob sits: a moment later the cards are dealt, and Kate has only the emojis
+    await call("POST", `/evenings/${door}/join`, BOB, { stake: 20 });
+    await vi.waitFor(async () => expect((await table(door, CAT)).live).toBe(true));
+    clock.advanceBy(1_000);
+    await table(door, CAT); // still in the room
+    expect((await send(CAT, "Удачі!")).body.error).toBe("bad_emote");
+    expect((await send(CAT, "🔥")).status).toBe(200);
+  });
+
   it("emojis: one at the table sends them, everyone sees them a few seconds, one a second", async () => {
     const door = await doorOf("durak");
     await openDoor(door);
@@ -350,7 +395,7 @@ describe("«Вечорниці»", () => {
     const send = (who: Person, emoji: string) =>
       call<{ error?: string }>("POST", `/evenings/${door}/emote`, who, { emoji });
 
-    expect((await send(BOB, "👍")).body.error).toBe("not_seated"); // a spectator has no face here
+    expect((await send(BOB, "👍")).body.error).toBe("not_here"); // not even in the room
     expect((await send(ANN, "🍕")).body.error).toBe("bad_emote");
     expect((await send(ANN, "😂")).status).toBe(200);
     expect((await send(ANN, "🔥")).body.error).toBe("too_fast");

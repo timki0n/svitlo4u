@@ -36,7 +36,7 @@ const DoorParams = SiteParams.extend({ door: z.coerce.number().int().min(1).max(
 const PartParams = DoorParams.extend({ part: z.coerce.number().int().min(1).max(9) });
 const SinceQuery = z.object({ since: z.coerce.number().int().default(-1) });
 const JoinBody = z.object({ stake: z.number().int().positive() });
-const EmoteBody = z.object({ emoji: z.string().min(1).max(16) });
+const EmoteBody = z.object({ emoji: z.string().min(1).max(24) });
 const MoveBody = z.discriminatedUnion("type", [
   z.object({ type: z.literal("shuffle") }),
   z.object({ type: z.literal("ready") }),
@@ -137,8 +137,11 @@ export function registerGame(
     const params = DoorParams.safeParse(request.params);
     const query = SinceQuery.safeParse(request.query);
     if (!params.success || !query.success) return fail(reply, 400, "bad_door");
+    // the screen closed (or left the room): stop waiting — and its viewer is no longer there
+    const gone = new AbortController();
+    reply.raw.on("close", () => gone.abort());
     return evening(reply, () =>
-      evenings.view(p.site.id, p.user.id, params.data.door, query.data.since),
+      evenings.view(p.site.id, p.user.id, params.data.door, query.data.since, gone.signal),
     );
   });
 

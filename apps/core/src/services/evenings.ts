@@ -83,14 +83,33 @@ const LONG_POLL_MS = 25_000;
 /** The pause after a hand: long enough to read the showdown on a phone. */
 const BETWEEN_HANDS_MS = 6_000;
 const RESULT_SHOWN_MS = 8_000;
-/** A spectator counts while their screen asks at least this often. */
-const WATCHING_MS = 40_000;
-/** The emojis a player at a table may send: each rises over their face on every screen. */
+/**
+ * One is in the room while their screen holds a request for the table open (it asks again at once
+ * after each answer); none open this long, they left it.
+ */
+const GONE_MS = 10_000;
+/**
+ * The emojis a player at a table may send (one watching too, while a game is played): each rises
+ * over their face on every screen.
+ */
 export const EVENING_EMOTES = ["👍", "😂", "😎", "😱", "😢", "😡", "🤔", "🔥"] as const;
 export type EveningEmote = (typeof EVENING_EMOTES)[number];
-/** How long an emoji sent stays in the view (screens show it once, as it comes). */
+/** What one watching may say while the table gathers (no game under way), over their face too. */
+export const EVENING_PHRASES = [
+  "Привіт!",
+  "Граєм?",
+  "ГО!",
+  "Я все.",
+  "В іншу гру!",
+  "Удачі!",
+  "Скоро буду!",
+  "Дякую за гру!",
+] as const;
+export type EveningPhrase = (typeof EVENING_PHRASES)[number];
+export type EveningReaction = EveningEmote | EveningPhrase;
+/** How long a reaction sent stays in the view (screens show it once, as it comes). */
 const EMOTE_MS = 4_000;
-/** One player's emojis: at most one this often. */
+/** One's reactions: at most one this often. */
 const EMOTE_GAP_MS = 1_000;
 
 const rand = () => randomInt(0, 2 ** 30) / 2 ** 30;
@@ -150,6 +169,8 @@ export type EveningTableView = {
   queue: number[];
   /** Who watches the table (not sitting at it), the first to come first. */
   watchers: number[];
+  /** A game (a hand) is under way: one watching sends emojis now, phrases otherwise. */
+  live: boolean;
   me: { id: number; seated: boolean; queued: boolean };
   battle:
     | (BattleView & {
@@ -170,8 +191,11 @@ export type EveningTableView = {
   durak: RoundTableView<DurakView> | null;
   colors: RoundTableView<ColorsView> | null;
   blackout: RoundTableView<BlackoutView> | null;
-  /** Emojis sent in the last few seconds: `n` tells each apart (screens show each once). */
-  emotes: { n: number; id: number; emoji: EveningEmote; at: number }[];
+  /**
+   * Reactions sent in the last few seconds (an emoji, or a phrase of one watching): `n` tells each
+   * apart (screens show each once).
+   */
+  emotes: { n: number; id: number; emoji: EveningReaction; at: number }[];
   /** The last game or hand that ended, for a moment. */
   result: {
     winners: number[];
@@ -198,6 +222,8 @@ export type EveningTimings = {
   holdMs: number;
   /** «Дурень»: the attacker's time to add or call «Бито» (see CALL_MS). */
   callMs: number;
+  /** One whose screen has no request open this long has left the room (see GONE_MS). */
+  goneMs: number;
 };
 export type EveningsDeps = {
   store: Store;
@@ -207,6 +233,8 @@ export type EveningsDeps = {
 };
 
 type Seat = EveningSeat & { silent: number };
+/** A screen on the table: its requests open, when one last opened or closed, the timer to drop it. */
+type Watcher = { open: number; last: number; gone: ReturnType<typeof setTimeout> | null };
 type Table = {
   site: string;
   door: number;
@@ -225,7 +253,8 @@ type Table = {
   deadline: number | null;
   timer: ReturnType<typeof setTimeout> | null;
   waiters: Set<() => void>;
-  watchers: Map<number, number>;
+  /** Everyone whose screen is on the table, seated or not, the first to come first. */
+  watchers: Map<number, Watcher>;
 };
 
 export class EveningError extends Error {}
@@ -252,6 +281,7 @@ export class EveningService {
       nopeMs: NOPE_MS,
       holdMs: HOLD_MS,
       callMs: CALL_MS,
+      goneMs: GONE_MS,
       ...deps.timings,
     };
   }
@@ -259,7 +289,10 @@ export class EveningService {
   /** Every pending timer off (the core stops). */
   stop(): void {
     for (const doors of this.tables.values())
-      for (const t of doors.values()) if (t.timer) clearTimeout(t.timer);
+      for (const t of doors.values()) {
+        if (t.timer) clearTimeout(t.timer);
+        for (const w of t.watchers.values()) if (w.gone) clearTimeout(w.gone);
+      }
   }
 
   overview(siteId: string): EveningsOverview {
@@ -436,41 +469,62 @@ export class EveningService {
     }
   }
 
-  /** An emoji from one at the table, over their face on every screen (one a second at most). */
+  /**
+   * A reaction over one's face on every screen (one a second at most): one at the table sends an
+   * emoji; one watching, an emoji while a game is played, else a phrase.
+   */
   emote(siteId: string, userId: number, door: number, emoji: string): void {
     const table = this.tables.get(siteId)?.get(door);
-    if (!table?.seats.some((s) => s.id === userId)) fail("not_seated");
+    if (!table) fail("not_here");
     const t = table as Table;
-    if (!(EVENING_EMOTES as readonly string[]).includes(emoji)) fail("bad_emote");
     const now = this.deps.clock.now();
+    const seated = t.seats.some((s) => s.id === userId);
+    if (!seated && !this.watching(t, now).includes(userId)) fail("not_here");
+    const allowed: readonly string[] = seated || this.live(t) ? EVENING_EMOTES : EVENING_PHRASES;
+    if (!allowed.includes(emoji)) fail("bad_emote");
     t.emotes = t.emotes.filter((e) => now - e.at < EMOTE_MS);
     if (t.emotes.some((e) => e.id === userId && now - e.at < EMOTE_GAP_MS)) fail("too_fast");
     const n = (t.emotes[t.emotes.length - 1]?.n ?? now) + 1;
-    t.emotes.push({ n, id: userId, emoji: emoji as EveningEmote, at: now });
+    t.emotes.push({ n, id: userId, emoji: emoji as EveningReaction, at: now });
     this.changed(t);
   }
 
-  /** The table as the viewer may see it; waits (up to ~25 s) until it changes past `since`. */
-  async view(siteId: string, userId: number, door: number, since = -1): Promise<EveningTableView> {
+  /**
+   * The table as the viewer may see it; waits (up to ~25 s) until it changes past `since`, or until
+   * `gone` — the screen closed. While a screen waits, its viewer is in the room.
+   */
+  async view(
+    siteId: string,
+    userId: number,
+    door: number,
+    since = -1,
+    gone?: AbortSignal,
+  ): Promise<EveningTableView> {
     const overview = this.overview(siteId).doors[door - 1];
     if (!overview) fail("bad_door");
     const session = this.deps.game.session(siteId)?.start ?? 0;
     const table =
       this.tables.get(siteId)?.get(door) ??
       this.table(siteId, door, (overview as EveningDoor).game, session);
-    table.watchers.set(userId, this.deps.clock.now());
-    if (table.version <= since) {
-      await new Promise<void>((resolve) => {
-        const done = () => {
-          clearTimeout(timer);
-          table.waiters.delete(done);
-          resolve();
-        };
-        const timer = setTimeout(done, LONG_POLL_MS);
-        table.waiters.add(done);
-      });
+    this.arrive(table, userId);
+    try {
+      if (table.version <= since && !gone?.aborted) {
+        await new Promise<void>((resolve) => {
+          const done = () => {
+            clearTimeout(timer);
+            table.waiters.delete(done);
+            gone?.removeEventListener("abort", done);
+            resolve();
+          };
+          const timer = setTimeout(done, LONG_POLL_MS);
+          table.waiters.add(done);
+          gone?.addEventListener("abort", done);
+        });
+      }
+      return this.viewOf(table, userId, (overview as EveningDoor).open);
+    } finally {
+      this.depart(table, userId);
     }
-    return this.viewOf(table, userId, (overview as EveningDoor).open);
   }
 
   // ── internals ───────────────────────────────────────────────────────────────────────────────
@@ -515,10 +569,45 @@ export class EveningService {
     return t.poker.hand !== null && t.poker.hand.street !== "done";
   }
 
-  /** Who watches the table now, not sitting at it (their screens asked lately). */
+  /** Who watches the table now, not sitting at it (their screens on it). */
   private watching(t: Table, now: number): number[] {
-    for (const [id, at] of t.watchers) if (now - at > WATCHING_MS) t.watchers.delete(id);
+    for (const [id, w] of t.watchers)
+      if (w.open === 0 && now - w.last > this.timings.goneMs) this.drop(t, id);
     return [...t.watchers.keys()].filter((id) => !t.seats.some((s) => s.id === id));
+  }
+
+  /** A screen asks for the table: its viewer is in the room — the others learn of one new. */
+  private arrive(t: Table, userId: number): void {
+    const now = this.deps.clock.now();
+    const w = t.watchers.get(userId);
+    const fresh = !w || (w.open === 0 && now - w.last > this.timings.goneMs);
+    if (w?.gone) clearTimeout(w.gone);
+    if (fresh) t.watchers.delete(userId); // the first to come first: back in, at the end
+    t.watchers.set(userId, { open: (fresh ? 0 : (w?.open ?? 0)) + 1, last: now, gone: null });
+    if (fresh && !t.seats.some((s) => s.id === userId)) this.changed(t);
+  }
+
+  /** A screen's request is over (answered, or the screen closed); none asks again soon: gone. */
+  private depart(t: Table, userId: number): void {
+    const w = t.watchers.get(userId);
+    if (!w) return;
+    w.open = Math.max(0, w.open - 1);
+    w.last = this.deps.clock.now();
+    if (w.open > 0) return;
+    if (w.gone) clearTimeout(w.gone);
+    w.gone = setTimeout(() => {
+      if (t.watchers.get(userId) === w && w.open === 0) this.drop(t, userId);
+    }, this.timings.goneMs);
+    w.gone.unref?.();
+  }
+
+  /** One left the room: the others see them gone. */
+  private drop(t: Table, userId: number): void {
+    const w = t.watchers.get(userId);
+    if (!w) return;
+    if (w.gone) clearTimeout(w.gone);
+    t.watchers.delete(userId);
+    if (!t.seats.some((s) => s.id === userId)) this.changed(t);
   }
 
   /** Something changed: wake the screens waiting on it. */
@@ -913,6 +1002,7 @@ export class EveningService {
       seats: t.seats.map(({ id, stake, leaving }) => ({ id, stake, leaving })),
       queue: t.queue.map((q) => q.id),
       watchers,
+      live: this.live(t),
       me: { id: userId, seated, queued: t.queue.some((q) => q.id === userId) },
       battle:
         t.game === "battle" && b

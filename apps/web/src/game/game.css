@@ -2444,6 +2444,11 @@
   transform: translate(-50%, -100%);
 }
 
+/* one watching's: placed by its top left corner under their face, then moving away */
+.g-emote-fall {
+  transform: none;
+}
+
 .g-emote-bubble {
   position: relative;
   display: grid;
@@ -2460,17 +2465,92 @@
   line-height: 1;
 }
 
-/* the bubble's tail, down to the face */
+/* one watching's emoji: smaller, and only the emoji — no card */
+.g-emote-bubble[data-small] {
+  min-width: 0;
+  height: auto;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  font-size: 20px;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.55));
+}
+
+/* a phrase of one watching: words on a plain card, its tail pointing at the face */
+.g-emote-bubble[data-text] {
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 9px;
+  background: #3a3c44;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.35);
+  filter: none;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* the bubble's tail, down to the face (moved along when the bubble keeps off the screen's edge) */
 .g-emote-bubble::after {
   content: "";
   position: absolute;
-  left: 50%;
+  left: var(--tail, 50%);
   bottom: -5px;
   width: 10px;
   height: 10px;
   border-radius: 2px;
   background: #3a3c44;
   transform: translateX(-50%) rotate(45deg);
+}
+
+/* one watching's emoji has no tail; a phrase's, under the face, points up to it */
+.g-emote-bubble[data-small]::after {
+  display: none;
+}
+
+.g-emote-bubble[data-text]::after {
+  display: block;
+  top: -3px;
+  bottom: auto;
+  width: 8px;
+  height: 8px;
+}
+
+/* phrases of one watching, while the table gathers: chips that wrap */
+.g-phrases {
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 18px;
+}
+
+.g-phrase-btn {
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--well);
+  box-shadow: var(--inset-sm);
+  /* the text colour (--text) at 0.7: the chips stay quieter than the game */
+  color: rgba(242, 239, 234, 0.7);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+  cursor: pointer;
+  transition:
+    transform 0.12s ease,
+    opacity 0.2s ease;
+}
+
+.g-phrase-btn:active {
+  transform: scale(0.96);
+}
+
+.g-phrase-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 /* who watches: an eye, their faces small and overlapping in a row, «+N» for the rest */

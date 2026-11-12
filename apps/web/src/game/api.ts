@@ -7,6 +7,8 @@ import type {
   EveningEmote,
   EveningGame,
   EveningMove,
+  EveningPhrase,
+  EveningReaction,
   EveningsOverview,
   EveningTableView,
 } from "../../../core/src/services/evenings.ts";
@@ -28,6 +30,8 @@ export type {
   EveningEmote,
   EveningGame,
   EveningMove,
+  EveningPhrase,
+  EveningReaction,
   EveningsOverview,
   EveningTableView,
   GameBuilding,
@@ -105,8 +109,8 @@ export function gameApi(siteId: string) {
     stand: (n: number) => call<{ ok: true }>("POST", door(n, "leave")),
     move: (n: number, move: EveningMove) =>
       call<{ ok: true }>("POST", door(n, "move"), { body: move }),
-    /** An emoji over my face at the table, on every screen. */
-    emote: (n: number, emoji: EveningEmote) =>
+    /** A reaction over my face at the table (an emoji, or a phrase of one watching), everywhere. */
+    emote: (n: number, emoji: EveningReaction) =>
       call<{ ok: true }>("POST", door(n, "emote"), { body: { emoji } }),
   };
 }
