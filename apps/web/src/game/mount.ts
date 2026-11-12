@@ -30,12 +30,20 @@ import {
   rotate,
   type SlidePuzzle,
   type SparkPuzzle,
+  STORE_LEVELS,
+  STORE_NAMES,
+  type StoreItem,
+  type StorePuzzle,
   type SudokuPuzzle,
   slideFits,
   slideGrid,
   sparkDistance,
   sparkPath,
   sparkSnap,
+  storeHand,
+  storeMerge,
+  storeStart,
+  storeStuck,
   traceBeam,
   type UntanglePuzzle,
   type VoltBlock,
@@ -908,8 +916,15 @@ export function mountCharge(root: HTMLElement, p: ChargePuzzle, ctx: GameCtx): C
 const ITEM_COLORS = ["#ff9a3d", "#8fa3c8", "#d9b86a", "#7cc6a0", "#e2807a", "#b99ad8", "#6cc0c0"];
 const INK = "#1a1208";
 
-/** An icon drawn into the board's SVG, centred on (cx, cy). */
-function svgIcon(parent: Element, name: GameIcon, cx: number, cy: number, size: number) {
+/** An icon drawn into the board's SVG, centred on (cx, cy), in `ink`. */
+function svgIcon(
+  parent: Element,
+  name: GameIcon,
+  cx: number,
+  cy: number,
+  size: number,
+  ink: string = INK,
+) {
   const s = svgEl(
     "svg",
     {
@@ -919,7 +934,7 @@ function svgIcon(parent: Element, name: GameIcon, cx: number, cy: number, size: 
       height: size,
       viewBox: "0 0 24 24",
       fill: "none",
-      stroke: INK,
+      stroke: ink,
       "stroke-width": 1.9,
       "stroke-linecap": "round",
       "stroke-linejoin": "round",
@@ -2986,4 +3001,413 @@ export function mountSpark(root: HTMLElement, p: SparkPuzzle, ctx: GameCtx): Cle
     cancelAnimationFrame(raf);
     document.removeEventListener("keydown", onKey);
   };
+}
+
+// ── Комора ──────────────────────────────────────────────────────────────────────────────────
+
+/** Each thing's icon: the power, the light, the connection, level by level. */
+const STORE_ICONS: readonly (readonly GameIcon[])[] = [
+  ["cell", "bank", "accu", "station", "generator"],
+  ["match", "candle", "flashlight", "lamp", "garland"],
+  ["headphones", "phone", "tablet", "laptop", "tv"],
+];
+/** The kinds' colours: the power blue, the light orange, the connection green (r, g, b for tints). */
+const STORE_INK = ["#b4c6ea", "#ffb36b", "#93dcb6"];
+const STORE_TINT = ["143, 163, 200", "255, 154, 61", "124, 198, 160"];
+
+/** «1 хід», «3 ходи», «7 ходів». */
+const moveWord = (k: number) =>
+  k % 10 === 1 && k % 100 !== 11
+    ? "хід"
+    : k % 10 >= 2 && k % 10 <= 4 && (k % 100 < 12 || k % 100 > 14)
+      ? "ходи"
+      : "ходів";
+
+export function mountStore(root: HTMLElement, p: StorePuzzle, ctx: GameCtx): Cleanup {
+  const { rows, cols } = p;
+  const vw = 320;
+  const ts = Math.min(52, Math.floor((vw - 8) / cols));
+  const bw = ts * cols;
+  const bx = (vw - bw) / 2;
+  // the order on top, a card for each thing wanted; the store under it
+  const n = p.order.length;
+  const ch = 72;
+  const oy = 4;
+  const cw = Math.min(100, (vw - 8 - (n - 1) * 8) / n);
+  const cx0 = (vw - (n * cw + (n - 1) * 8)) / 2;
+  const cardAt = (k: number) => cx0 + k * (cw + 8);
+  const by = oy + ch + 14;
+  const vh = by + ts * rows + 6;
+  const svg = svgRoot(root, vw, vh, "g-drag");
+  const layer = svgEl("g", {}, svg);
+  /** A thing carried sits under the finger, a little above it, so it shows round the fingertip. */
+  const lift = ts * 0.25;
+
+  let s = storeStart(p);
+  let moves = 0;
+  let won = false;
+  let drag: { cell: number; x: number; y: number; sx: number; sy: number; moved: boolean } | null =
+    null;
+  let held: SVGElement | null = null;
+  /** The element each cell's thing is drawn in. */
+  const shown: (SVGElement | undefined)[] = [];
+  /** What has just happened, to be shown: a join, boxes opened, a card filled. */
+  let joined = -1;
+  let opened = new Set<number>();
+  let filled = -1;
+
+  const text = (
+    parent: Element,
+    x: number,
+    y: number,
+    size: number,
+    value: string,
+    fill: string,
+  ) => {
+    const t = svgEl(
+      "text",
+      {
+        x,
+        y,
+        "text-anchor": "middle",
+        style: `font:700 ${size}px "Manrope Variable",sans-serif;fill:${fill}`,
+      },
+      parent,
+    );
+    t.textContent = value;
+  };
+  /** A thing on a tile `size` across, its top left at (x, y): its icon, a dot for each level. */
+  const drawItem = (
+    parent: Element,
+    x: number,
+    y: number,
+    size: number,
+    item: StoreItem,
+    cls = "",
+  ) => {
+    const g = svgEl("g", cls ? { class: cls } : {}, parent);
+    const tint = STORE_TINT[item.kind] as string;
+    const ink = STORE_INK[item.kind] as string;
+    svgEl(
+      "rect",
+      {
+        x: x + 3,
+        y: y + 3,
+        width: size - 6,
+        height: size - 6,
+        rx: 10,
+        style: `fill:rgba(${tint},${0.08 + item.level * 0.05});stroke:rgba(${tint},${0.22 + item.level * 0.09});stroke-width:1.3`,
+      },
+      g,
+    );
+    svgIcon(
+      g,
+      (STORE_ICONS[item.kind] as GameIcon[])[item.level - 1] as GameIcon,
+      x + size / 2,
+      y + size * 0.44,
+      size * 0.5,
+      ink,
+    );
+    const r = size * 0.042;
+    const gap = r * 2.7;
+    const x0 = x + size / 2 - ((item.level - 1) * gap) / 2;
+    for (let k = 0; k < item.level; k++)
+      svgEl("circle", { cx: x0 + k * gap, cy: y + size * 0.82, r, style: `fill:${ink}` }, g);
+    return g;
+  };
+  /** A box, shut: boards, a brace across, nails. */
+  const drawBox = (parent: Element, x: number, y: number, size: number, cls = "") => {
+    const g = svgEl("g", cls ? { class: cls } : {}, parent);
+    const m = 4;
+    svgEl(
+      "rect",
+      {
+        x: x + m,
+        y: y + m,
+        width: size - 2 * m,
+        height: size - 2 * m,
+        rx: 6,
+        style: "fill:#5e4730;stroke:#7d6142;stroke-width:1.5",
+      },
+      g,
+    );
+    const inner = size - 2 * m;
+    svgEl(
+      "path",
+      {
+        d: `M${x + m} ${y + m + inner / 3}h${inner}M${x + m} ${y + m + (inner * 2) / 3}h${inner}`,
+        style: "stroke:#3e2e1d;stroke-width:1.4",
+      },
+      g,
+    );
+    svgEl(
+      "path",
+      {
+        d: `M${x + m + 4} ${y + size - m - 4}L${x + size - m - 4} ${y + m + 4}`,
+        style: "stroke:#8a6c4a;stroke-width:3;stroke-linecap:round",
+      },
+      g,
+    );
+    for (const [nx, ny] of [
+      [x + m + 5, y + m + 5],
+      [x + size - m - 5, y + m + 5],
+      [x + m + 5, y + size - m - 5],
+      [x + size - m - 5, y + size - m - 5],
+    ] as const)
+      svgEl("circle", { cx: nx, cy: ny, r: 1.3, style: "fill:#2c2014" }, g);
+    return g;
+  };
+  const cellXY = (i: number): [number, number] => [
+    bx + (i % cols) * ts,
+    by + Math.floor(i / cols) * ts,
+  ];
+  const left = () => p.moves - moves;
+  const status = () =>
+    `Тягни річ на таку саму: дві стануть однією, рівнем вище. З'єднай поруч з коробкою і вона відкриється · лишилось ${left()} ${moveWord(left())}`;
+
+  const draw = () => {
+    layer.replaceChildren();
+    held = null;
+    const carried = drag?.moved ? s.cells[drag.cell] : null;
+    // the order: each card lights up when the thing carried is the one it wants
+    p.order.forEach((o, k) => {
+      const x = cardAt(k);
+      const done = s.handed[k];
+      const wants = !done && carried && carried.kind === o.kind && carried.level === o.level;
+      const g = svgEl(
+        "g",
+        {
+          ...(k === filled ? { class: "g-store-pop" } : {}),
+          style: done ? "opacity:0.5" : "",
+        },
+        layer,
+      );
+      svgEl(
+        "rect",
+        {
+          x,
+          y: oy,
+          width: cw,
+          height: ch,
+          rx: 12,
+          style: `fill:${wants ? "rgba(255,154,61,0.16)" : "rgba(242,239,234,0.04)"};stroke:${wants ? LIGHT : DIM};stroke-width:${wants ? 2 : 1.2};${done ? "" : "stroke-dasharray:5 4"}`,
+        },
+        g,
+      );
+      const ink = STORE_INK[o.kind] as string;
+      svgIcon(
+        g,
+        (STORE_ICONS[o.kind] as GameIcon[])[o.level - 1] as GameIcon,
+        x + cw / 2,
+        oy + 23,
+        28,
+        ink,
+      );
+      text(
+        g,
+        x + cw / 2,
+        oy + 50,
+        10.5,
+        (STORE_NAMES[o.kind] as readonly string[])[o.level - 1] as string,
+        TEXT,
+      );
+      const r = 2.2;
+      const x0 = x + cw / 2 - ((o.level - 1) * r * 2.7) / 2;
+      for (let d = 0; d < o.level; d++)
+        svgEl("circle", { cx: x0 + d * r * 2.7, cy: oy + 61, r, style: `fill:${ink}` }, g);
+      if (done) {
+        svgEl("circle", { cx: x + cw - 12, cy: oy + 12, r: 8, style: `fill:${LIGHT}` }, g);
+        svgEl(
+          "path",
+          {
+            d: `M${x + cw - 16} ${oy + 12}l3 3 5-6`,
+            style: `fill:none;stroke:${INK};stroke-width:2;stroke-linecap:round;stroke-linejoin:round`,
+          },
+          g,
+        );
+      }
+    });
+    // the store: its floor, the cells, the things and the boxes
+    svgEl(
+      "rect",
+      { x: bx - 4, y: by - 4, width: bw + 8, height: ts * rows + 8, rx: 12, style: `fill:${TILE}` },
+      layer,
+    );
+    for (let i = 0; i < rows * cols; i++) {
+      const [x, y] = cellXY(i);
+      svgEl(
+        "rect",
+        {
+          x: x + 3,
+          y: y + 3,
+          width: ts - 6,
+          height: ts - 6,
+          rx: 10,
+          style: "fill:rgba(0,0,0,0.18)",
+        },
+        layer,
+      );
+    }
+    s.cells.forEach((item, i) => {
+      if (!item) return;
+      const [x, y] = cellXY(i);
+      if (s.boxed.has(i)) {
+        shown[i] = drawBox(layer, x, y, ts);
+        return;
+      }
+      const cls = i === joined ? "g-store-pop" : opened.has(i) ? "g-store-open" : "";
+      shown[i] = drawItem(layer, x, y, ts, item, cls);
+      // the same as the one carried: where it may go
+      if (
+        carried &&
+        i !== drag?.cell &&
+        item.kind === carried.kind &&
+        item.level === carried.level &&
+        item.level < STORE_LEVELS
+      )
+        svgEl(
+          "rect",
+          {
+            x: x + 2,
+            y: y + 2,
+            width: ts - 4,
+            height: ts - 4,
+            rx: 11,
+            style: `fill:none;stroke:${LIGHT};stroke-width:2`,
+          },
+          layer,
+        );
+      if (i === joined)
+        svgEl(
+          "circle",
+          {
+            cx: x + ts / 2,
+            cy: y + ts / 2,
+            r: ts * 0.42,
+            class: "g-store-ring",
+            style: `fill:none;stroke:${LIGHT};stroke-width:3`,
+          },
+          layer,
+        );
+      if (opened.has(i)) drawBox(layer, x, y, ts, "g-store-gone");
+    });
+    // the thing carried, over everything, above the finger
+    if (drag?.moved && carried) {
+      shown[drag.cell]?.setAttribute("display", "none");
+      const g = svgEl(
+        "g",
+        { transform: `translate(${drag.x - ts / 2} ${drag.y - lift - ts / 2})` },
+        layer,
+      );
+      svgEl(
+        "rect",
+        { x: 5, y: 9, width: ts - 6, height: ts - 6, rx: 10, style: "fill:rgba(0,0,0,0.35)" },
+        g,
+      );
+      svgEl(
+        "rect",
+        { x: 3, y: 3, width: ts - 6, height: ts - 6, rx: 10, style: "fill:#2a2c31" },
+        g,
+      );
+      drawItem(g, 0, 0, ts, carried);
+      held = g;
+    }
+    joined = -1;
+    opened = new Set();
+    filled = -1;
+  };
+  /** Something wanted lying out there to hand in. */
+  const handable = () =>
+    p.order.some(
+      (o, k) =>
+        !s.handed[k] &&
+        s.cells.some((c, i) => !s.boxed.has(i) && c?.kind === o.kind && c.level === o.level),
+    );
+  const report = () => {
+    if (won) return;
+    const out = left() <= 0 && !handable();
+    ctx.say(
+      status(),
+      out
+        ? "ходи скінчилися, почни спочатку"
+        : storeStuck(p, s)
+          ? "ходів більше немає, почни спочатку"
+          : undefined,
+    );
+  };
+
+  const cellAt = (x: number, y: number) => {
+    const c = Math.floor((x - bx) / ts);
+    const r = Math.floor((y - by) / ts);
+    return r >= 0 && r < rows && c >= 0 && c < cols ? r * cols + c : -1;
+  };
+  svg.addEventListener("pointerdown", (e) => {
+    if (won || drag) return;
+    const [x, y] = pointIn(svg, e, vw, vh);
+    const cell = cellAt(x, y);
+    if (cell < 0 || !s.cells[cell] || s.boxed.has(cell)) return;
+    drag = { cell, x, y, sx: x, sy: y, moved: false };
+    try {
+      svg.setPointerCapture(e.pointerId);
+    } catch {
+      // a pointer gone already: the moves still come to the board
+    }
+  });
+  svg.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    const [x, y] = pointIn(svg, e, vw, vh);
+    drag.x = x;
+    drag.y = y;
+    if (!drag.moved) {
+      if (Math.hypot(x - drag.sx, y - drag.sy) <= 6) return;
+      drag.moved = true;
+      draw();
+      return;
+    }
+    held?.setAttribute("transform", `translate(${x - ts / 2} ${y - lift - ts / 2})`);
+  });
+  svg.addEventListener("pointerup", () => {
+    if (!drag) return;
+    const d = drag;
+    drag = null;
+    if (!d.moved) return;
+    // where the thing carried is let go: on a card that wants it, or on a thing just like it
+    const cx = d.x;
+    const cy = d.y - lift;
+    const slot = p.order.findIndex(
+      (_, k) => cx >= cardAt(k) && cx <= cardAt(k) + cw && cy >= oy && cy <= oy + ch,
+    );
+    if (slot >= 0) {
+      const next = storeHand(p, s, d.cell, slot);
+      if (next) {
+        s = next;
+        filled = slot;
+        navigator.vibrate?.(20);
+      }
+    } else {
+      const to = cellAt(cx, cy);
+      const next = to >= 0 && left() > 0 ? storeMerge(p, s, d.cell, to) : null;
+      if (next) {
+        s = next.state;
+        joined = to;
+        opened = new Set(next.opened);
+        moves++;
+        navigator.vibrate?.(next.opened.length ? [12, 40, 20] : 12);
+      }
+    }
+    if (s.handed.every(Boolean)) {
+      won = true;
+      ctx.done(`замовлення зібрано за ${moves} ${moveWord(moves)} з ${p.moves}`);
+    }
+    draw();
+    report();
+  });
+  svg.addEventListener("pointercancel", () => {
+    drag = null;
+    draw();
+  });
+
+  draw();
+  report();
+  return undefined;
 }

@@ -2890,3 +2890,213 @@ export function sparkSnap(
   const off = Math.abs(x - cx - (y - cy) * dir) / Math.SQRT2;
   return off <= SPARK_SNAP * p.width ? best : null;
 }
+
+// ── «Комора»: drag a thing onto one just like it, and the two become the next one up ──────────
+
+/**
+ * A thing in the store: of the power (a battery up to a generator), the light (a match up to a
+ * garland) or the connection (headphones up to a TV), and its level.
+ */
+export type StoreItem = { kind: StoreKind; level: number };
+export type StoreKind = 0 | 1 | 2;
+/** How many kinds of things there are. */
+export const STORE_KINDS = 3;
+/** The levels of each kind. */
+export const STORE_LEVELS = 5;
+export const STORE_NAMES = [
+  ["Батарейка", "Павербанк", "Акумулятор", "Зарядна станція", "Генератор"],
+  ["Сірник", "Свічка", "Ліхтарик", "Лампа", "Гірлянда"],
+  ["Навушники", "Телефон", "Планшет", "Ноутбук", "Телевізор"],
+] as const;
+
+export type StorePuzzle = {
+  rows: number;
+  cols: number;
+  /** What lies in each cell, row by row (in a box too), or null. */
+  cells: (StoreItem | null)[];
+  /** The cells under a box: it opens when two things become one next to it. */
+  boxed: number[];
+  /** What is wanted. */
+  order: StoreItem[];
+  /** One way through: things dragged (from, onto) in turn; then the order handed in. */
+  solution: [number, number][];
+  /** How many joins there are to do it in: the way through's, and a few to spare. */
+  moves: number;
+};
+
+/**
+ * Per tier: the store's size, the levels wanted, the boxes, spare pairs (tempting, a join wasted),
+ * odd things lying about, how many small things are split once more, and the joins to spare.
+ */
+export const STORE_TIERS = [
+  { rows: 5, cols: 5, order: [4, 3], boxes: 4, spare: 1, odd: 1, extra: 3, slack: 2 },
+  { rows: 6, cols: 6, order: [4, 4, 3], boxes: 8, spare: 1, odd: 2, extra: 4, slack: 1 },
+  { rows: 6, cols: 6, order: [5, 4, 4], boxes: 11, spare: 0, odd: 3, extra: 5, slack: 0 },
+] as const;
+
+export type StoreState = {
+  cells: (StoreItem | null)[];
+  boxed: ReadonlySet<number>;
+  /** Which of the order is handed in. */
+  handed: boolean[];
+};
+
+const storeSame = (a: StoreItem | null | undefined, b: StoreItem | null | undefined) =>
+  Boolean(a && b && a.kind === b.kind && a.level === b.level);
+
+/** The cells next to `i`: up, down, left, right. */
+export function storeAround(p: Pick<StorePuzzle, "rows" | "cols">, i: number): number[] {
+  const r = Math.floor(i / p.cols);
+  const c = i % p.cols;
+  const out: number[] = [];
+  if (r > 0) out.push(i - p.cols);
+  if (r < p.rows - 1) out.push(i + p.cols);
+  if (c > 0) out.push(i - 1);
+  if (c < p.cols - 1) out.push(i + 1);
+  return out;
+}
+
+export const storeStart = (p: StorePuzzle): StoreState => ({
+  cells: p.cells.map((c) => (c ? { ...c } : null)),
+  boxed: new Set(p.boxed),
+  handed: p.order.map(() => false),
+});
+
+/**
+ * `from` dragged onto `to`: the two become one a level up where it was dropped, and the boxes
+ * round that cell open. Null if they are not alike, either is in a box, or they are at the top.
+ */
+export function storeMerge(
+  p: Pick<StorePuzzle, "rows" | "cols">,
+  s: StoreState,
+  from: number,
+  to: number,
+): { state: StoreState; opened: number[] } | null {
+  const a = s.cells[from];
+  if (from === to || !a || s.boxed.has(from) || s.boxed.has(to)) return null;
+  if (!storeSame(a, s.cells[to]) || a.level >= STORE_LEVELS) return null;
+  const cells = s.cells.slice();
+  cells[from] = null;
+  cells[to] = { kind: a.kind, level: a.level + 1 };
+  const boxed = new Set(s.boxed);
+  const opened = storeAround(p, to).filter((c) => boxed.has(c));
+  for (const c of opened) boxed.delete(c);
+  return { state: { cells, boxed, handed: s.handed }, opened };
+}
+
+/** The thing in `cell` handed in for the order's `slot`: null if that slot wants another, or has one. */
+export function storeHand(
+  p: Pick<StorePuzzle, "order">,
+  s: StoreState,
+  cell: number,
+  slot: number,
+): StoreState | null {
+  if (s.boxed.has(cell) || s.handed[slot] !== false || !storeSame(s.cells[cell], p.order[slot]))
+    return null;
+  const cells = s.cells.slice();
+  cells[cell] = null;
+  const handed = s.handed.slice();
+  handed[slot] = true;
+  return { cells, boxed: s.boxed, handed };
+}
+
+/** Nothing left to do: no two alike out of the boxes (below the top), nothing to hand in. */
+export function storeStuck(p: Pick<StorePuzzle, "order">, s: StoreState): boolean {
+  const free = s.cells.filter((c, i): c is StoreItem => Boolean(c) && !s.boxed.has(i));
+  const pair = free.some(
+    (a, i) => a.level < STORE_LEVELS && free.some((b, j) => j !== i && storeSame(a, b)),
+  );
+  const hand = p.order.some((o, k) => !s.handed[k] && free.some((a) => storeSame(a, o)));
+  return !pair && !hand && s.handed.some((h) => !h);
+}
+
+/**
+ * A store of its own, built backwards from the order: each thing wanted split in two (the halves
+ * on a free cell anywhere), the biggest first, down to small things; beside where two halves will
+ * meet, now and then a small thing is shut in a box — it opens only when they are joined there.
+ * Spare pairs and odd things are put about. Played forwards, the splits are a way through.
+ */
+export function storePuzzle(rng: Rng, tier: Tier): StorePuzzle {
+  const t = STORE_TIERS[tier];
+  const { rows, cols } = t;
+  const size = rows * cols;
+  const p = { rows, cols };
+  let last: StorePuzzle | null = null;
+  for (let attempt = 0; attempt < 60; attempt++) {
+    const cells: (StoreItem | null)[] = new Array(size).fill(null);
+    const boxed = new Set<number>();
+    // each thing wanted of a kind of its own
+    const kinds = shuffle(rng, [0, 1, 2] as StoreKind[]);
+    const order: StoreItem[] = t.order.map((level, k) => ({
+      kind: kinds[k % STORE_KINDS] as StoreKind,
+      level,
+    }));
+    const free = () =>
+      shuffle(rng, [...Array(size).keys()]).find((c) => !cells[c] && !boxed.has(c));
+    for (const item of order) {
+      const c = free();
+      if (c !== undefined) cells[c] = { ...item };
+    }
+    const steps: [number, number][] = [];
+    const split = (x: number) => {
+      // the other half often right beside it: things lie in heaps, boxes have things round them
+      const beside = storeAround(p, x).filter((c) => !cells[c] && !boxed.has(c));
+      const y = beside.length && rng() < 0.5 ? beside[ri(rng, beside.length)] : free();
+      if (y === undefined) return false;
+      const a = cells[x] as StoreItem;
+      cells[x] = { kind: a.kind, level: a.level - 1 };
+      cells[y] = { kind: a.kind, level: a.level - 1 };
+      steps.push([y, x]);
+      if (boxed.size < t.boxes && rng() < 0.75) {
+        // a small thing beside it shut in a box; with none there, a box with a small thing of its own
+        const round = storeAround(p, x).filter((c) => c !== y && !boxed.has(c));
+        const near = round.filter((c) => cells[c] && (cells[c] as StoreItem).level <= 2);
+        const room = round.filter((c) => !cells[c]);
+        if (near.length) boxed.add(near[ri(rng, near.length)] as number);
+        else if (room.length) {
+          const c = room[ri(rng, room.length)] as number;
+          cells[c] = { kind: ri(rng, STORE_KINDS) as StoreKind, level: 1 };
+          boxed.add(c);
+        }
+      }
+      return true;
+    };
+    const open = (c: number) => !boxed.has(c) && cells[c];
+    for (;;) {
+      const big = [...cells.keys()].filter((c) => open(c) && (cells[c] as StoreItem).level > 2);
+      if (!big.length) break;
+      const top = Math.max(...big.map((c) => (cells[c] as StoreItem).level));
+      const pick = big.filter((c) => (cells[c] as StoreItem).level === top);
+      if (!split(pick[ri(rng, pick.length)] as number)) break;
+    }
+    for (let k = 0; k < t.extra; k++) {
+      const two = [...cells.keys()].filter((c) => open(c) && (cells[c] as StoreItem).level === 2);
+      if (!two.length || !split(two[ri(rng, two.length)] as number)) break;
+    }
+    for (let k = 0; k < t.spare; k++) {
+      const item = { kind: ri(rng, STORE_KINDS) as StoreKind, level: 1 + ri(rng, 2) };
+      for (let h = 0; h < 2; h++) {
+        const c = free();
+        if (c !== undefined) cells[c] = { ...item };
+      }
+    }
+    for (let k = 0; k < t.odd; k++) {
+      const c = free();
+      if (c !== undefined)
+        cells[c] = { kind: ri(rng, STORE_KINDS) as StoreKind, level: 1 + ri(rng, 3) };
+    }
+    last = {
+      rows,
+      cols,
+      cells,
+      boxed: [...boxed].sort((a, b) => a - b),
+      order,
+      solution: steps.reverse(),
+      moves: steps.length + t.slack,
+    };
+    // all the boxes, and nothing wanted lying there to hand in from the start
+    const ready = order.some((o) => cells.some((c, i) => !boxed.has(i) && storeSame(c, o)));
+    if (boxed.size === t.boxes && !ready) return last;
+  }
+  return last as StorePuzzle;
+}

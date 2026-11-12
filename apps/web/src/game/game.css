@@ -2874,3 +2874,87 @@
   touch-action: none;
   cursor: pointer;
 }
+
+/* Комора: a join pops, a box opened falls apart and the thing in it comes out, a card filled */
+.g-store-pop,
+.g-store-open,
+.g-store-gone,
+.g-store-ring {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.g-store-pop {
+  animation: g-store-pop 0.32s ease-out;
+}
+
+@keyframes g-store-pop {
+  0% {
+    transform: scale(0.7);
+  }
+  60% {
+    transform: scale(1.12);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.g-store-open {
+  animation: g-store-open 0.35s ease-out 0.12s both;
+}
+
+@keyframes g-store-open {
+  from {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.g-store-gone {
+  pointer-events: none;
+  animation: g-store-gone 0.4s ease-in forwards;
+}
+
+@keyframes g-store-gone {
+  from {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.35) rotate(8deg);
+  }
+}
+
+.g-store-ring {
+  pointer-events: none;
+  animation: g-store-ring 0.5s ease-out forwards;
+}
+
+@keyframes g-store-ring {
+  from {
+    opacity: 0.9;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.5);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .g-store-pop,
+  .g-store-open {
+    animation: none;
+  }
+
+  .g-store-gone,
+  .g-store-ring {
+    display: none;
+  }
+}

@@ -15,6 +15,7 @@ import {
   mountPets,
   mountSlide,
   mountSpark,
+  mountStore,
   mountSudoku,
   mountUntangle,
   mountVolt,
@@ -30,6 +31,7 @@ import {
   petsPuzzle,
   slidePuzzle,
   sparkPuzzle,
+  storePuzzle,
   sudokuPuzzle,
   type Tier,
   tierOf,
@@ -71,6 +73,7 @@ export const GAMES: readonly GameDef[] = [
   game("jigsaw", "Пазл", jigsawPuzzle, mountJigsaw),
   game("sudoku", "Судоку", sudokuPuzzle, mountSudoku),
   game("spark", "Іскра", sparkPuzzle, mountSpark),
+  game("store", "Комора", storePuzzle, mountStore),
 ];
 
 export const TIER_LABEL = ["легкий рівень", "середній рівень", "важкий рівень"] as const;

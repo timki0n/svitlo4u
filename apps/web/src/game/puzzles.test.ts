@@ -38,6 +38,10 @@ import {
   SPARK_REACH,
   SPARK_SNAP,
   SPARK_TIERS,
+  STORE_LEVELS,
+  STORE_TIERS,
+  type StoreItem,
+  type StorePuzzle,
   SUDOKU_TIERS,
   slideMinMoves,
   slidePuzzle,
@@ -46,6 +50,12 @@ import {
   sparkPuzzle,
   sparkSlack,
   sparkSnap,
+  storeAround,
+  storeHand,
+  storeMerge,
+  storePuzzle,
+  storeStart,
+  storeStuck,
   sudokuPuzzle,
   sudokuReason,
   type Tier,
@@ -96,6 +106,7 @@ describe("window games", () => {
       jigsawPuzzle,
       sudokuPuzzle,
       sparkPuzzle,
+      storePuzzle,
     ])
       for (const t of TIERS) expect(make(rngOf(`k${t}`), t)).toEqual(make(rngOf(`k${t}`), t));
     expect(slidePuzzle(rngOf("k"), 1)).toEqual(slidePuzzle(rngOf("k"), 1));
@@ -533,5 +544,101 @@ describe("difficulty: no puzzle is a tap or two away", () => {
           expect(sparkSnap(p, path, cx, cy, came)).toBeNull();
         }
       }
+  });
+
+  it("Комора: built backwards from the order — its own way through opens the boxes and makes every thing wanted", () => {
+    for (const k of keys(60))
+      for (const t of TIERS) {
+        const p = storePuzzle(rngOf(k), t);
+        const tier = STORE_TIERS[t];
+        expect([p.rows, p.cols]).toEqual([tier.rows, tier.cols]);
+        expect(p.cells).toHaveLength(p.rows * p.cols);
+        expect(p.order.map((o) => o.level)).toEqual([...tier.order]);
+        // each thing wanted of a kind of its own
+        expect(new Set(p.order.map((o) => o.kind)).size).toBe(p.order.length);
+        expect(p.boxed).toHaveLength(tier.boxes);
+        expect(p.moves).toBe(p.solution.length + tier.slack);
+        for (const c of p.boxed) expect(p.cells[c]).not.toBeNull();
+        let s = storeStart(p);
+        // nothing wanted lying there from the start; something to do
+        for (const o of p.order)
+          expect(
+            s.cells.some((c, i) => !s.boxed.has(i) && c?.kind === o.kind && c.level === o.level),
+          ).toBe(false);
+        expect(storeStuck(p, s)).toBe(false);
+        for (const [from, to] of p.solution) {
+          const next = storeMerge(p, s, from, to);
+          expect(next).not.toBeNull();
+          s = (next as { state: typeof s }).state;
+        }
+        p.order.forEach((o, slot) => {
+          const cell = s.cells.findIndex(
+            (c, i) => !s.boxed.has(i) && c?.kind === o.kind && c.level === o.level,
+          );
+          const next = storeHand(p, s, cell, slot);
+          expect(next).not.toBeNull();
+          s = next as typeof s;
+        });
+        expect(s.handed.every(Boolean)).toBe(true);
+      }
+  });
+
+  it("Комора: only two alike join, out of the boxes and below the top; the boxes round the join open", () => {
+    const item = (kind: 0 | 1, level: number): StoreItem => ({ kind, level });
+    // 3 × 3: a pair of batteries, a match, a box (a candle in it) beside the middle, two generators
+    const p: StorePuzzle = {
+      rows: 3,
+      cols: 3,
+      cells: [
+        item(0, 1),
+        item(1, 1),
+        item(0, 1),
+        null,
+        null,
+        item(1, 2),
+        item(0, STORE_LEVELS),
+        null,
+        item(0, STORE_LEVELS),
+      ],
+      boxed: [5],
+      order: [item(0, 2), item(1, 2)],
+      solution: [],
+      moves: 1,
+    };
+    expect(storeAround(p, 4).sort()).toEqual([1, 3, 5, 7]);
+    expect(storeAround(p, 0).sort()).toEqual([1, 3]);
+    let s = storeStart(p);
+    expect(storeMerge(p, s, 0, 1)).toBeNull(); // a battery onto a match
+    expect(storeMerge(p, s, 0, 0)).toBeNull(); // onto itself
+    expect(storeMerge(p, s, 6, 8)).toBeNull(); // two generators: the top already
+    expect(storeHand(p, s, 5, 1)).toBeNull(); // the candle is in its box
+    expect(storeStuck(p, s)).toBe(false);
+    // the batteries joined at the top right corner: the box below it opens
+    const joined = storeMerge(p, s, 0, 2);
+    expect(joined?.opened).toEqual([5]);
+    s = (joined as { state: typeof s }).state;
+    expect(s.cells[2]).toEqual(item(0, 2));
+    expect(s.cells[0]).toBeNull();
+    // handed in where wanted, not twice, not for the other slot
+    expect(storeHand(p, s, 2, 1)).toBeNull();
+    s = storeHand(p, s, 2, 0) as typeof s;
+    expect(storeHand(p, s, 5, 0)).toBeNull();
+    s = storeHand(p, s, 5, 1) as typeof s;
+    expect(s.handed).toEqual([true, true]);
+    expect(storeStuck(p, s)).toBe(false);
+    // a match alone and two generators at the top, the order not in: stuck
+    expect(
+      storeStuck({ order: [item(1, 3)] }, { cells: p.cells, boxed: new Set([5]), handed: [false] }),
+    ).toBe(false);
+    expect(
+      storeStuck(
+        { order: [item(1, 3)] },
+        {
+          cells: [item(1, 1), null, null, null, null, null, item(0, 5), null, item(0, 5)],
+          boxed: new Set(),
+          handed: [false],
+        },
+      ),
+    ).toBe(true);
   });
 });

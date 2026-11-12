@@ -38,6 +38,24 @@ const PATHS = {
   thermos: '<rect x="7" y="6" width="10" height="15.5" rx="2.5"/><path d="M9 2.5h6V6H9zM7 11h10"/>',
   book: '<path d="M4 4.5h5.5a2.5 2.5 0 0 1 2.5 2.5v14a2 2 0 0 0-2-2H4zM20 4.5h-5.5A2.5 2.5 0 0 0 12 7v14a2 2 0 0 1 2-2h6z"/>',
   plug: '<path d="M9 2.5v5M15 2.5v5M6.5 7.5h11v3a5.5 5.5 0 0 1-11 0zM12 16v5.5"/>',
+  // «Комора»: the power, from a battery up to a generator (the power bank is «bank»)
+  cell: '<rect x="7.5" y="5" width="9" height="16.5" rx="2"/><path d="M10.5 5V2.8h3V5M12 10.2v4.6M9.7 12.5h4.6"/>',
+  accu: '<rect x="2.5" y="7.5" width="19" height="13" rx="2"/><path d="M5.5 7.5V5h3.5v2.5M15 7.5V5h3.5v2.5M5.8 14h3.4M14.8 14h3.4M16.5 12.3v3.4"/>',
+  station:
+    '<rect x="3" y="7" width="18" height="14" rx="2.5"/><path d="M8 7V3.5h8V7"/><rect x="6" y="10.5" width="6.5" height="4.5" rx="1"/><path d="M16 11.5h2M16 14.5h2M7 18h.01M10 18h.01"/>',
+  generator:
+    '<rect x="3.5" y="8.5" width="17" height="11" rx="2"/><path d="M6.5 8.5V5.5h6v3M6 22v-2.5M18 22v-2.5M13.2 11l-2.6 3.5h3l-2.6 3.5"/>',
+  // the light, from a match up to a garland (the candle, torch and lamp are above)
+  // a match burning: the stick, its head, a flame well above it
+  match:
+    '<path d="M6 21.5 12.6 13"/><circle cx="13.6" cy="11.7" r="1.9" fill="currentColor" stroke="none"/><path d="M15.4 9.6c-2-1.3-2.4-3.8-.2-7.1.5 2.3 2.8 3.2 3.3 5.3.5 2.1-1.4 3.3-3.1 1.8z"/>',
+  garland:
+    '<path d="M2.5 5.5c3 3.6 6 5.3 9.5 5.3s6.5-1.7 9.5-5.3M6 8.6v1.6M12 10.8v1.7M18 8.6v1.6"/><path d="M6 10.2c-1.3 0-2 1.2-2 2.5S4.9 15.5 6 15.5s2-1.5 2-2.8-.7-2.5-2-2.5zM12 12.5c-1.3 0-2 1.2-2 2.5s.9 2.8 2 2.8 2-1.5 2-2.8-.7-2.5-2-2.5zM18 10.2c-1.3 0-2 1.2-2 2.5s.9 2.8 2 2.8 2-1.5 2-2.8-.7-2.5-2-2.5z"/>',
+  // a torch standing up, shining: its head, its body, the switch, the light above
+  flashlight:
+    '<path d="M8 8.5h8l-1.5 3.5v8a1.5 1.5 0 0 1-1.5 1.5h-2A1.5 1.5 0 0 1 9.5 20v-8z"/><path d="M12 15v2M12 2.5V5M7 3.8l1.4 2M17 3.8l-1.4 2"/>',
+  // the connection, from headphones up to a TV (headphones, phone, tablet and laptop are above)
+  tv: '<rect x="2.5" y="6" width="19" height="12.5" rx="2"/><path d="M8.5 2.5 12 6l3.5-3.5M8 21.5h8"/>',
 } as const;
 
 export type GameIcon = keyof typeof PATHS;
