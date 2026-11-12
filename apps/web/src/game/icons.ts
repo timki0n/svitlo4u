@@ -1,7 +1,9 @@
 /** Line icons of the window games (24 × 24, stroked with currentColor). */
 const PATHS = {
   cat: '<path d="M5 20c-1-1-1.5-2.5-1.5-4.5V5l4 3.5h9l4-3.5v10.5c0 2-.5 3.5-1.5 4.5-1.6 1.3-4 2-7 2s-5.4-.7-7-2z"/><path d="M9.5 14h.01M14.5 14h.01M11 17.5h2"/>',
-  dog: '<path d="M8 4h8a3 3 0 0 1 3 3v8a7 7 0 0 1-14 0V7a3 3 0 0 1 3-3z"/><path d="M5 7 2.5 13.5 5 15M19 7l2.5 6.5L19 15"/><path d="M9.5 11h.01M14.5 11h.01M10.5 15.5h3"/>',
+  // a head like a bell, wide at the bottom, floppy ears hanging off its sides, dots for eyes and a
+  // rounded triangle of a nose
+  dog: '<path d="M12 3.4c3 0 4.6 1.4 5.4 3.8l2.4 8.4c.8 3-.8 5.2-3.8 5.2H8c-3 0-4.6-2.2-3.8-5.2l2.4-8.4C7.4 4.8 9 3.4 12 3.4z"/><path d="M8.4 4.5C6.4 4.2 4.2 4.7 3 5.9 1.6 7.3 1.4 10.2 2 12.2c.3 1 1.3 1.3 2.1.7l1.3-1.1M15.6 4.5c2-.3 4.2.2 5.4 1.4 1.4 1.4 1.6 4.3 1 6.3-.3 1-1.3 1.3-2.1.7l-1.3-1.1"/><g fill="currentColor" stroke="none"><circle cx="9.1" cy="11" r=".95"/><circle cx="14.9" cy="11" r=".95"/></g><path d="M9.9 14.8h4.2c.7 0 1 .8.6 1.3L13 18c-.5.5-1.3.5-1.8 0l-1.7-1.9c-.4-.5-.1-1.3.6-1.3z"/>',
   man: '<circle cx="12" cy="8" r="4"/><path d="M4.5 21c0-4.1 3.4-7 7.5-7s7.5 2.9 7.5 7"/>',
   phone: '<rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/>',
   lamp: '<path d="M9 18h6M10 21.5h4M12 2.5a6.5 6.5 0 0 0-3.9 11.7c.6.5.9 1.1.9 1.8v.5h6V16c0-.7.3-1.3.9-1.8A6.5 6.5 0 0 0 12 2.5z"/>',

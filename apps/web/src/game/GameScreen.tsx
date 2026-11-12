@@ -826,18 +826,19 @@ function Board({
     if (!root) return;
     root.replaceChildren();
     fitBoard(root); // before the game mounts: the ones that size themselves read the room
-    const started = performance.now();
-    const cleanup = info.game.start(root, info.key, info.tier, {
-      say: (text, warn) => handlers.current.onSay(text, warn),
-      done: (note) =>
-        handlers.current.onDone(note, Math.round((performance.now() - started) / 1000)),
-    });
-    fitBoard(root);
     let raf = 0;
     const refit = () => {
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => fitBoard(root));
     };
+    const started = performance.now();
+    const cleanup = info.game.start(root, info.key, info.tier, {
+      say: (text, warn) => handlers.current.onSay(text, warn),
+      done: (note) =>
+        handlers.current.onDone(note, Math.round((performance.now() - started) / 1000)),
+      fit: refit,
+    });
+    fitBoard(root);
     window.addEventListener("resize", refit);
     return () => {
       window.removeEventListener("resize", refit);

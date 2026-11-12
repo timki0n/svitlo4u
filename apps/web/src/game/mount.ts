@@ -34,6 +34,8 @@ export type GameCtx = {
   /** The line above the board; `warn` is shown after it in red. */
   say(text: string, warn?: string): void;
   done(note: string): void;
+  /** The board changed its height: fit it to the screen again. */
+  fit?(): void;
 };
 export type Cleanup = (() => void) | undefined;
 
@@ -69,7 +71,8 @@ function pointIn(svg: SVGSVGElement, e: PointerEvent, w: number, h: number): [nu
 // ── Ланцюг ──────────────────────────────────────────────────────────────────────────────────
 
 export function mountChain(root: HTMLElement, p: ChainPuzzle, ctx: GameCtx): Cleanup {
-  ctx.say("Повертай плитки, щоб струм від батареї дійшов до всіх лампочок");
+  // won only when every tile is lit, not the bulbs alone: the line says so
+  ctx.say("Повертай плитки, щоб струм від батареї засвітив усі дроти й лампочки");
   const { n, source } = p;
   const tiles = p.tiles.slice();
   const size = 300;
@@ -1103,6 +1106,7 @@ export function mountPack(root: HTMLElement, p: PackPuzzle, ctx: GameCtx): Clean
     draw();
     if (!won && packed()) {
       won = true;
+      fold();
       ctx.done("усе влізло");
     }
   };
@@ -1111,8 +1115,35 @@ export function mountPack(root: HTMLElement, p: PackPuzzle, ctx: GameCtx): Clean
     drag = null;
     draw();
   });
+
+  // all packed: the shelf under the bag folds away, so what comes after is in reach without
+  // scrolling down past it
+  let raf = 0;
+  const fold = () => {
+    const end = by + h * cs + 6;
+    const set = (height: number) => {
+      svg.setAttribute("viewBox", `0 0 ${vw} ${height}`);
+      svg.setAttribute("height", String(height));
+    };
+    const still =
+      document.hidden || (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
+    if (still) {
+      set(end);
+      ctx.fit?.();
+      return;
+    }
+    const t0 = performance.now();
+    const step = (now: number) => {
+      const k = Math.min(1, (now - t0) / 420);
+      set(vh + (end - vh) * (1 - (1 - k) ** 3));
+      if (k < 1) raf = requestAnimationFrame(step);
+      else ctx.fit?.();
+    };
+    raf = requestAnimationFrame(step);
+  };
+
   draw();
-  return undefined;
+  return () => cancelAnimationFrame(raf);
 }
 
 // ── Батарейки по зарядках ───────────────────────────────────────────────────────────────────
