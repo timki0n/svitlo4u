@@ -3206,7 +3206,7 @@ export const SNAKE_DIRS = [
   [0, 1],
   [-1, 0],
 ] as const;
-/** A puddle comes no nearer the head than this (steps across plus down). */
+/** A puddle comes no nearer the head than this (steps across plus down, the short way round the edges). */
 export const SNAKE_CLEAR = 5;
 
 export const SNAKE_TIERS = [
@@ -3262,7 +3262,10 @@ export type SnakeState = {
   score: number;
 };
 
-/** A free cell (not under the wire, the bolt or a puddle), at least `clear` steps from the head. */
+/**
+ * A free cell (not under the wire, the bolt or a puddle), at least `clear` steps from the head —
+ * counted the short way, through the edges too (the wire goes through them).
+ */
 export function snakeSpot(
   p: Pick<SnakePuzzle, "cols" | "rows">,
   s: Pick<SnakeState, "body" | "bolt" | "puddles">,
@@ -3274,10 +3277,12 @@ export function snakeSpot(
   const hy = Math.floor(head / p.cols);
   const taken = new Set([...s.body, s.bolt, ...s.puddles.map((w) => w.cell)]);
   const free: number[] = [];
+  const gap = (a: number, b: number, size: number) =>
+    Math.min(Math.abs(a - b), size - Math.abs(a - b));
   for (let c = 0; c < p.cols * p.rows; c++)
     if (
       !taken.has(c) &&
-      Math.abs((c % p.cols) - hx) + Math.abs(Math.floor(c / p.cols) - hy) >= clear
+      gap(c % p.cols, hx, p.cols) + gap(Math.floor(c / p.cols), hy, p.rows) >= clear
     )
       free.push(c);
   return free.length ? (free[ri(rng, free.length)] as number) : null;
@@ -3294,23 +3299,22 @@ export function snakeStart(p: Pick<SnakePuzzle, "cols" | "rows">, rng: Rng): Sna
 }
 
 /**
- * One step the way `dir` (turning straight back is not a turn): off the board, into itself or a
- * puddle, it is over; onto the bolt, it eats it, grows a cell and a new bolt comes.
+ * One step the way `dir` (turning straight back is not a turn): off one edge of the board it comes
+ * in at the other; into itself or a puddle, it is over; onto the bolt, it eats it, grows a cell and
+ * a new bolt comes.
  */
 export function snakeStep(
   p: Pick<SnakePuzzle, "cols" | "rows" | "goal">,
   s: SnakeState,
   dir: number,
   rng: Rng,
-): { state: SnakeState; ate: boolean; died: "wall" | "self" | "puddle" | null } {
+): { state: SnakeState; ate: boolean; died: "self" | "puddle" | null } {
   const d = (dir + 2) % 4 === s.dir ? s.dir : dir;
   const head = s.body[0] as number;
   const [dx, dy] = SNAKE_DIRS[d] as readonly [number, number];
   const x = (head % p.cols) + dx;
   const y = Math.floor(head / p.cols) + dy;
-  if (x < 0 || x >= p.cols || y < 0 || y >= p.rows)
-    return { state: { ...s, dir: d }, ate: false, died: "wall" };
-  const cell = y * p.cols + x;
+  const cell = ((y + p.rows) % p.rows) * p.cols + ((x + p.cols) % p.cols);
   if (s.puddles.some((w) => w.cell === cell))
     return { state: { ...s, dir: d }, ate: false, died: "puddle" };
   const ate = cell === s.bolt;

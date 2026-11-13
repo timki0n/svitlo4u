@@ -1701,6 +1701,8 @@ export function mountVolt(root: HTMLElement, p: VoltPuzzle, ctx: GameCtx): Clean
 
 /** Each mount names its picture and pieces apart (two boards on one page never mix them up). */
 let jigsawMounts = 0;
+/** Under the pieces: a neutral grey, lighter than the page, for pictures dark and light alike. */
+const JIGSAW_GROUND = "#6a6d76";
 
 /** The picture as an SVG document of its own, `k` times its size: one image for every piece. */
 function jigsawPicture(p: JigsawPuzzle, k: number): string {
@@ -1905,10 +1907,23 @@ export function mountJigsaw(root: HTMLElement, p: JigsawPuzzle, ctx: GameCtx): C
     joins = 0;
     held = null;
     ctx.say(status());
-    // the board: nothing on it to go by
+    // the board, nothing on it to go by, and the shelf of pieces under it: a lighter grey, the same
+    // for every picture, so dark pieces (a night sky) stand out from it as well as light ones
     svgEl(
       "rect",
-      { x: bx - 4, y: by - 4, width: B + 8, height: B + 8, rx: 10, style: `fill:${TILE}` },
+      { x: bx - 4, y: by - 4, width: B + 8, height: B + 8, rx: 10, style: `fill:${JIGSAW_GROUND}` },
+      layer,
+    );
+    svgEl(
+      "rect",
+      {
+        x: 4,
+        y: trayY - box * 0.25 - 8,
+        width: vw - 8,
+        height: Math.ceil(total / perRow) * pitch + 6,
+        rx: 12,
+        style: `fill:${JIGSAW_GROUND}`,
+      },
       layer,
     );
     // the pieces on the board, each group as one; once all are home, the picture whole
@@ -2313,12 +2328,46 @@ export function mountSudoku(root: HTMLElement, p: SudokuPuzzle, ctx: GameCtx): C
   eraser.className = "g-btn g-sdk-tool";
   eraser.textContent = "Стерти";
   eraser.addEventListener("click", () => put(0));
-  tools.append(pencilKey, eraser);
+  // a step back: an icon, first in the row
+  const back = document.createElement("button");
+  back.type = "button";
+  back.className = "g-btn g-sdk-tool g-sdk-undo";
+  back.innerHTML = icon("undo", 22);
+  back.setAttribute("aria-label", "Відмінити");
+  back.title = "Відмінити";
+  back.addEventListener("click", () => undo());
+  tools.append(back, pencilKey, eraser);
   root.appendChild(tools);
+
+  /** How the grid was before each change, and which cell changed: undone one by one. */
+  const history: { now: number[]; marks: number[]; cell: number }[] = [];
+  function undo() {
+    const last = history.pop();
+    if (won || !last) return;
+    now.splice(0, now.length, ...last.now);
+    marks.splice(0, marks.length, ...last.marks);
+    pick = last.cell;
+    paint();
+  }
 
   /** Digit `d` into the cell picked (0: clear it), or with the pencil, its mark there or not. */
   function put(d: number) {
     if (won || pick < 0 || given[pick]) return;
+    const was = { now: now.slice(), marks: marks.slice(), cell: pick };
+    change(d);
+    if (now.some((v, i) => v !== was.now[i]) || marks.some((v, i) => v !== was.marks[i]))
+      history.push(was);
+    const bad = clashes();
+    if (now.every(Boolean) && bad.size === 0) {
+      won = true;
+      pick = -1;
+      paint();
+      ctx.done(`сітка ${n}×${n} заповнена`);
+      return;
+    }
+    paint();
+  }
+  function change(d: number) {
     if (d === 0) {
       now[pick] = 0;
       marks[pick] = 0;
@@ -2333,15 +2382,6 @@ export function mountSudoku(root: HTMLElement, p: SudokuPuzzle, ctx: GameCtx): C
       for (let j = 0; j < n * n; j++)
         if (near(pick, j)) marks[j] = (marks[j] as number) & ~(1 << (d - 1));
     }
-    const bad = clashes();
-    if (now.every(Boolean) && bad.size === 0) {
-      won = true;
-      pick = -1;
-      paint();
-      ctx.done(`сітка ${n}×${n} заповнена`);
-      return;
-    }
-    paint();
   }
 
   /** The cells whose digit is also in their row, column or box. */
@@ -2389,10 +2429,16 @@ export function mountSudoku(root: HTMLElement, p: SudokuPuzzle, ctx: GameCtx): C
     pencilKey.setAttribute("aria-pressed", String(pencil));
     pencilKey.disabled = won;
     eraser.disabled = won;
+    back.disabled = won || history.length === 0;
   }
 
-  // with a keyboard: digits, the eraser, the arrows to move
+  // with a keyboard: digits, the eraser, the arrows to move, Ctrl+Z to undo
   const onKey = (e: KeyboardEvent) => {
+    if (!won && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+      e.preventDefault();
+      undo();
+      return;
+    }
     if (won || e.ctrlKey || e.metaKey || e.altKey) return;
     const d = Number(e.key);
     if (Number.isInteger(d) && d >= 1 && d <= n) put(d);
@@ -3546,7 +3592,7 @@ export function mountSnake(root: HTMLElement, p: SnakePuzzle, ctx: GameCtx): Cle
   let boltShown = since;
   let boltFrom = since;
   let boltUntil = Number.POSITIVE_INFINITY;
-  let died: "wall" | "self" | "puddle" | null = null;
+  let died: "self" | "puddle" | null = null;
   let reported = false;
   let raf = 0;
   let lastFrame = since;
@@ -3623,13 +3669,7 @@ export function mountSnake(root: HTMLElement, p: SnakePuzzle, ctx: GameCtx): Cle
       burst(s.body[0] as number, 30, ["#fff3c0", "#ffb347", "#ff6b57"], 6);
       if (died === "puddle") burst(s.body[0] as number, 16, ["#9fd0ff", "#4da3ff"], 4);
       navigator.vibrate?.([30, 40, 30]);
-      say(
-        died === "wall"
-          ? "дріт врізався в стіну"
-          : died === "self"
-            ? "дріт заплутався сам у собі"
-            : "вода й струм: коротке замикання",
-      );
+      say(died === "self" ? "дріт заплутався сам у собі" : "вода й струм: коротке замикання");
       return;
     }
     before = s.body.slice();
@@ -3762,9 +3802,23 @@ export function mountSnake(root: HTMLElement, p: SnakePuzzle, ctx: GameCtx): Cle
     // cell it lies on (and the one its tail is leaving), each corner a quarter circle — so its bends
     // hold their shape as it goes (moving each cell's point on its own made them shake)
     const t = mode === "run" ? Math.min(1, (now - lastStep) / stepMs()) : 1;
-    const track = [...s.body, before.at(-1) ?? (s.body.at(-1) as number)].map(
-      (c) => [cx(c), cy(c)] as const,
-    );
+    // through an edge the track goes on past it (as if the board were laid side by side), and the
+    // cable is drawn over again a board across, so what is past one edge comes in at the other
+    const across = cols * u;
+    const down = rows * u;
+    const track: (readonly [number, number])[] = [];
+    for (const c of [...s.body, before.at(-1) ?? (s.body.at(-1) as number)]) {
+      let x = cx(c);
+      let y = cy(c);
+      const last = track.at(-1);
+      if (last) {
+        if (x - last[0] > across / 2) x -= across;
+        else if (last[0] - x > across / 2) x += across;
+        if (y - last[1] > down / 2) y -= down;
+        else if (last[1] - y > down / 2) y += down;
+      }
+      track.push([x, y]);
+    }
     const n = track.length - 1;
     const mid = (k: number) => {
       const [ax, ay] = track[k] as readonly [number, number];
@@ -3814,115 +3868,133 @@ export function mountSnake(root: HTMLElement, p: SnakePuzzle, ctx: GameCtx): Cle
       });
     };
     const thick = u * 0.46;
-    cord(1.5, 2.5);
-    g.strokeStyle = "rgba(0, 0, 0, 0.45)";
-    g.lineWidth = thick + 2;
-    g.stroke();
-    const [tx, ty] = along(q1);
-    const [px, py] = along(Math.max(q0, q1 - 0.1));
-    const tl = Math.hypot(tx - px, ty - py) || 1;
-    g.strokeStyle = "#c98a4b";
-    g.lineWidth = thick * 0.4;
-    g.beginPath();
-    g.moveTo(tx, ty);
-    g.lineTo(tx + ((tx - px) / tl) * u * 0.34, ty + ((ty - py) / tl) * u * 0.34);
-    g.stroke();
-    cord();
-    g.strokeStyle = mode === "won" ? "#c9762c" : "#8b8f99";
-    g.lineWidth = thick;
-    g.stroke();
-    g.strokeStyle = mode === "won" ? "#ffb35c" : "#d3d6dd";
-    g.lineWidth = thick * 0.74;
-    g.stroke();
-    cord(-thick * 0.14, -thick * 0.14);
-    g.strokeStyle = "rgba(255, 255, 255, 0.7)";
-    g.lineWidth = thick * 0.18;
-    g.stroke();
-    if (mode === "won") {
-      g.globalCompositeOperation = "lighter";
-      cord();
-      g.strokeStyle = `rgba(255, 170, 70, ${0.25 + 0.15 * Math.sin(now / 200)})`;
-      g.lineWidth = u * 1.1;
-      g.stroke();
-      g.globalCompositeOperation = "source-over";
-    }
-    // the head: a white plug turned the way it goes, two pins ahead, a light on it
-    const [hx, hy] = along(q0);
-    const [nx, ny] = along(Math.min(q1, q0 + 0.1));
-    const [dx, dy] = SNAKE_DIRS[s.dir] as readonly [number, number];
-    const ang = hx === nx && hy === ny ? Math.atan2(dy, dx) : Math.atan2(hy - ny, hx - nx);
-    const rounded = (x: number, y: number, w2: number, h2: number, r: number) => {
-      g.beginPath();
-      g.moveTo(x + r, y);
-      g.arcTo(x + w2, y, x + w2, y + h2, r);
-      g.arcTo(x + w2, y + h2, x, y + h2, r);
-      g.arcTo(x, y + h2, x, y, r);
-      g.arcTo(x, y, x + w2, y, r);
-      g.closePath();
-    };
-    const plug = (ox: number, oy: number, shadow: boolean) => {
+    const xs = points.map(([x]) => x);
+    const ys = points.map(([, y]) => y);
+    const shifts: [number, number][] = [];
+    for (const ox of [0, -across, across])
+      for (const oy of [0, -down, down])
+        if (
+          Math.min(...xs) + ox < across + u &&
+          Math.max(...xs) + ox > -u &&
+          Math.min(...ys) + oy < down + u &&
+          Math.max(...ys) + oy > -u
+        )
+          shifts.push([ox, oy]);
+    for (const [ox, oy] of shifts) {
       g.save();
-      g.translate(hx + ox, hy + oy);
-      g.rotate(ang);
-      if (shadow) {
-        g.fillStyle = "rgba(0, 0, 0, 0.45)";
-        rounded(-0.52 * u, -0.3 * u, 0.82 * u, 0.6 * u, 0.13 * u);
-        g.fill();
-        g.restore();
-        return;
-      }
-      // the pins
-      for (const side of [-1, 1]) {
-        const pin = g.createLinearGradient(
-          0,
-          side * 0.13 * u - 0.05 * u,
-          0,
-          side * 0.13 * u + 0.05 * u,
-        );
-        pin.addColorStop(0, "#f4f5f8");
-        pin.addColorStop(1, "#8d929c");
-        g.fillStyle = pin;
-        rounded(0.2 * u, side * 0.13 * u - 0.045 * u, 0.32 * u, 0.09 * u, 0.04 * u);
-        g.fill();
-      }
-      // where the cord goes in, narrowing
-      g.fillStyle = "#a3a7b0";
-      g.beginPath();
-      g.moveTo(-0.32 * u, -0.19 * u);
-      g.lineTo(-0.52 * u, -0.14 * u);
-      g.lineTo(-0.52 * u, 0.14 * u);
-      g.lineTo(-0.32 * u, 0.19 * u);
-      g.closePath();
-      g.fill();
-      // the body
-      const shell = g.createLinearGradient(0, -0.3 * u, 0, 0.3 * u);
-      shell.addColorStop(0, "#f6f7f9");
-      shell.addColorStop(1, "#b4b8c2");
-      g.fillStyle = mode === "won" ? "#ffcf8a" : shell;
-      rounded(-0.34 * u, -0.3 * u, 0.56 * u, 0.6 * u, 0.13 * u);
-      g.fill();
-      g.strokeStyle = "#7d818b";
-      g.lineWidth = 1;
+      g.translate(ox, oy);
+      cord(1.5, 2.5);
+      g.strokeStyle = "rgba(0, 0, 0, 0.45)";
+      g.lineWidth = thick + 2;
       g.stroke();
+      const [tx, ty] = along(q1);
+      const [px, py] = along(Math.max(q0, q1 - 0.1));
+      const tl = Math.hypot(tx - px, ty - py) || 1;
+      g.strokeStyle = "#c98a4b";
+      g.lineWidth = thick * 0.4;
+      g.beginPath();
+      g.moveTo(tx, ty);
+      g.lineTo(tx + ((tx - px) / tl) * u * 0.34, ty + ((ty - py) / tl) * u * 0.34);
+      g.stroke();
+      cord();
+      g.strokeStyle = mode === "won" ? "#c9762c" : "#8b8f99";
+      g.lineWidth = thick;
+      g.stroke();
+      g.strokeStyle = mode === "won" ? "#ffb35c" : "#d3d6dd";
+      g.lineWidth = thick * 0.74;
+      g.stroke();
+      cord(-thick * 0.14, -thick * 0.14);
+      g.strokeStyle = "rgba(255, 255, 255, 0.7)";
+      g.lineWidth = thick * 0.18;
+      g.stroke();
+      if (mode === "won") {
+        g.globalCompositeOperation = "lighter";
+        cord();
+        g.strokeStyle = `rgba(255, 170, 70, ${0.25 + 0.15 * Math.sin(now / 200)})`;
+        g.lineWidth = u * 1.1;
+        g.stroke();
+        g.globalCompositeOperation = "source-over";
+      }
+      // the head: a white plug turned the way it goes, two pins ahead, a light on it
+      const [hx, hy] = along(q0);
+      const [nx, ny] = along(Math.min(q1, q0 + 0.1));
+      const [dx, dy] = SNAKE_DIRS[s.dir] as readonly [number, number];
+      const ang = hx === nx && hy === ny ? Math.atan2(dy, dx) : Math.atan2(hy - ny, hx - nx);
+      const rounded = (x: number, y: number, w2: number, h2: number, r: number) => {
+        g.beginPath();
+        g.moveTo(x + r, y);
+        g.arcTo(x + w2, y, x + w2, y + h2, r);
+        g.arcTo(x + w2, y + h2, x, y + h2, r);
+        g.arcTo(x, y + h2, x, y, r);
+        g.arcTo(x, y, x + w2, y, r);
+        g.closePath();
+      };
+      const plug = (ox: number, oy: number, shadow: boolean) => {
+        g.save();
+        g.translate(hx + ox, hy + oy);
+        g.rotate(ang);
+        if (shadow) {
+          g.fillStyle = "rgba(0, 0, 0, 0.45)";
+          rounded(-0.52 * u, -0.3 * u, 0.82 * u, 0.6 * u, 0.13 * u);
+          g.fill();
+          g.restore();
+          return;
+        }
+        // the pins
+        for (const side of [-1, 1]) {
+          const pin = g.createLinearGradient(
+            0,
+            side * 0.13 * u - 0.05 * u,
+            0,
+            side * 0.13 * u + 0.05 * u,
+          );
+          pin.addColorStop(0, "#f4f5f8");
+          pin.addColorStop(1, "#8d929c");
+          g.fillStyle = pin;
+          rounded(0.2 * u, side * 0.13 * u - 0.045 * u, 0.32 * u, 0.09 * u, 0.04 * u);
+          g.fill();
+        }
+        // where the cord goes in, narrowing
+        g.fillStyle = "#a3a7b0";
+        g.beginPath();
+        g.moveTo(-0.32 * u, -0.19 * u);
+        g.lineTo(-0.52 * u, -0.14 * u);
+        g.lineTo(-0.52 * u, 0.14 * u);
+        g.lineTo(-0.32 * u, 0.19 * u);
+        g.closePath();
+        g.fill();
+        // the body
+        const shell = g.createLinearGradient(0, -0.3 * u, 0, 0.3 * u);
+        shell.addColorStop(0, "#f6f7f9");
+        shell.addColorStop(1, "#b4b8c2");
+        g.fillStyle = mode === "won" ? "#ffcf8a" : shell;
+        rounded(-0.34 * u, -0.3 * u, 0.56 * u, 0.6 * u, 0.13 * u);
+        g.fill();
+        g.strokeStyle = "#7d818b";
+        g.lineWidth = 1;
+        g.stroke();
+        g.restore();
+      };
+      plug(1.5, 2.5, true);
+      plug(0, 0, false);
+      // its light: orange waiting and running, red when it is over, bright at the end
+      const lx = hx + Math.cos(ang) * -0.08 * u;
+      const ly = hy + Math.sin(ang) * -0.08 * u;
+      const lit =
+        mode === "out" ? "255, 107, 87" : mode === "won" ? "255, 236, 170" : "255, 154, 61";
+      const pulse = mode === "ready" && !still ? 0.55 + 0.45 * Math.abs(Math.sin(now / 400)) : 1;
+      g.globalCompositeOperation = "lighter";
+      glow(lx, ly, u * 0.45, [
+        [0, `rgba(${lit}, ${0.6 * pulse})`],
+        [1, `rgba(${lit}, 0)`],
+      ]);
+      g.globalCompositeOperation = "source-over";
+      g.fillStyle = `rgba(${lit}, ${pulse})`;
+      g.beginPath();
+      g.arc(lx, ly, u * 0.07, 0, Math.PI * 2);
+      g.fill();
       g.restore();
-    };
-    plug(1.5, 2.5, true);
-    plug(0, 0, false);
-    // its light: orange waiting and running, red when it is over, bright at the end
-    const lx = hx + Math.cos(ang) * -0.08 * u;
-    const ly = hy + Math.sin(ang) * -0.08 * u;
-    const lit = mode === "out" ? "255, 107, 87" : mode === "won" ? "255, 236, 170" : "255, 154, 61";
-    const pulse = mode === "ready" && !still ? 0.55 + 0.45 * Math.abs(Math.sin(now / 400)) : 1;
-    g.globalCompositeOperation = "lighter";
-    glow(lx, ly, u * 0.45, [
-      [0, `rgba(${lit}, ${0.6 * pulse})`],
-      [1, `rgba(${lit}, 0)`],
-    ]);
-    g.globalCompositeOperation = "source-over";
-    g.fillStyle = `rgba(${lit}, ${pulse})`;
-    g.beginPath();
-    g.arc(lx, ly, u * 0.07, 0, Math.PI * 2);
-    g.fill();
+    }
     g.globalAlpha = 1;
     // sparks
     g.globalCompositeOperation = "lighter";

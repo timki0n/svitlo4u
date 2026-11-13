@@ -669,7 +669,7 @@ describe("difficulty: no puzzle is a tap or two away", () => {
       }
   });
 
-  it("Змійка: it crawls, turns but not straight back, eats and grows; walls, itself and puddles end it", () => {
+  it("Змійка: it crawls, turns but not straight back, eats and grows, goes through the edges; itself and puddles end it", () => {
     for (const t of TIERS) {
       const p = snakePuzzle(rngOf(`snake${t}`), t);
       expect(p.goal).toBe(SNAKE_TIERS[t].goal);
@@ -704,8 +704,13 @@ describe("difficulty: no puzzle is a tap or two away", () => {
     expect(
       snakeStep(p, { ...s, puddles: [{ cell: at(0, 1), from: 0, until: 1 }] }, 3, rng).died,
     ).toBe("puddle");
-    // up twice: the bolt, then the wall
-    expect(snakeStep(p, ate.state, 0, rng).died).toBe("wall");
+    // up twice: the bolt, then out at the top and in at the bottom
+    const through = snakeStep(p, ate.state, 0, rng);
+    expect(through.died).toBeNull();
+    expect(through.state.body[0]).toBe(at(1, 4));
+    // and out at the left, in at the right
+    const side: SnakeState = { ...s, body: [at(0, 3), at(1, 3), at(2, 3)], dir: 3, bolt: at(4, 0) };
+    expect(snakeStep(p, side, 3, rng).state.body[0]).toBe(at(4, 3));
     // the last bolt eaten: no new one
     expect(snakeStep({ ...p, goal: 1 }, s, 0, rng).state.bolt).toBe(-1);
   });
@@ -724,8 +729,9 @@ describe("difficulty: no puzzle is a tap or two away", () => {
         expect(s.body).not.toContain(c);
         expect(c).not.toBe(s.bolt);
         const head = s.body[0] as number;
-        const far =
-          Math.abs((c % 14) - (head % 14)) + Math.abs(Math.floor(c / 14) - Math.floor(head / 14));
+        // counted the short way, through the edges too
+        const gap = (a: number, b: number) => Math.min(Math.abs(a - b), 14 - Math.abs(a - b));
+        const far = gap(c % 14, head % 14) + gap(Math.floor(c / 14), Math.floor(head / 14));
         expect(far).toBeGreaterThanOrEqual(SNAKE_CLEAR);
         s = { ...s, puddles: [...s.puddles, { cell: c, from: 0, until: 1 }].slice(-3) };
       }

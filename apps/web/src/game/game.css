@@ -2837,6 +2837,13 @@
   opacity: 0.4;
 }
 
+.g-sdk-undo {
+  flex: 0 0 56px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+
 .g-sdk[data-n="6"] .g-sdk-cell {
   font-size: 24px;
 }

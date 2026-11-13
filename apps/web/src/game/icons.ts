@@ -56,6 +56,8 @@ const PATHS = {
     '<path d="M8 8.5h8l-1.5 3.5v8a1.5 1.5 0 0 1-1.5 1.5h-2A1.5 1.5 0 0 1 9.5 20v-8z"/><path d="M12 15v2M12 2.5V5M7 3.8l1.4 2M17 3.8l-1.4 2"/>',
   // the connection, from headphones up to a TV (headphones, phone, tablet and laptop are above)
   tv: '<rect x="2.5" y="6" width="19" height="12.5" rx="2"/><path d="M8.5 2.5 12 6l3.5-3.5M8 21.5h8"/>',
+  // a step back: an arrow turning round to the left
+  undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
 } as const;
 
 export type GameIcon = keyof typeof PATHS;
