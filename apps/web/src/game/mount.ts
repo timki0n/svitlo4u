@@ -1323,41 +1323,6 @@ export function mountVolt(root: HTMLElement, p: VoltPuzzle, ctx: GameCtx): Clean
     ox + ((i % n) + 0.5) * cs,
     oy + (Math.floor(i / n) + 0.5) * cs,
   ];
-  const portsAt = (i: number, on: ReadonlyMap<number, VoltBlock>) => {
-    const c = cells[i];
-    if (!c || c.kind === "lock") return 0;
-    return c.kind === "free" ? (on.get(i)?.ports ?? 0) : c.ports;
-  };
-
-  /**
-   * The turn of block `i` on `cell` that joins the most of what is around it — the current's end
-   * above all — reckoned without it (nor a block it would push off that cell) on the board.
-   */
-  const bestTurn = (cell: number, i: number) => {
-    const ports = (blocks[i] as (typeof blocks)[number]).ports;
-    const on = laid((j) => j === i || blocks[j]?.at === cell);
-    const t = voltTrace(p, on);
-    const end = t.path[t.path.length - 1];
-    let best = ports;
-    let score = -1;
-    for (const turn of voltTurns(ports)) {
-      let sc = 0;
-      for (const [dx, dy, bit, back] of DIRS) {
-        if (!(turn & bit)) continue;
-        const x = (cell % n) + dx;
-        const y = Math.floor(cell / n) + dy;
-        if (x < 0 || y < 0 || x >= n || y >= n) continue;
-        const next = y * n + x;
-        if (portsAt(next, on) & back) sc += next === end ? 3 : 1;
-      }
-      if (sc > score) {
-        score = sc;
-        best = turn;
-      }
-    }
-    return best;
-  };
-
   const text = (
     parent: Element,
     x: number,
@@ -1631,13 +1596,12 @@ export function mountVolt(root: HTMLElement, p: VoltPuzzle, ctx: GameCtx): Clean
       drawBlock(x, y, ts, b.ports, b.value, WIRE_OFF, false, "", 0.42);
     });
 
-    // a block carried: where it would land — shown faintly there, turned as it would lie (turned
-    // to join what is around it; put back where it was, as it was) — and the block itself, turned
-    // so too, above the finger
+    // a block carried: where it would land, shown faintly there, and the block itself above the
+    // finger; it keeps the turn it has, only a tap turns it
     if (drag?.moved) {
       const b = blocks[drag.i] as (typeof blocks)[number];
       const cell = landing(drag.x, drag.y);
-      const ports = cell >= 0 && cell !== b.at ? bestTurn(cell, drag.i) : b.ports;
+      const ports = b.ports;
       if (cell >= 0) {
         const [x, y] = centre(cell);
         drawBlock(x - cs / 2, y - cs / 2, cs, ports, b.value, WIRE_OFF, false, "opacity:0.4");
@@ -1718,9 +1682,7 @@ export function mountVolt(root: HTMLElement, p: VoltPuzzle, ctx: GameCtx): Clean
     } else {
       const cell = landing(d.x, d.y);
       if (cell >= 0) {
-        // laid there, turned to join what is around it (put back where it was, as it was); a
-        // block that lay there goes back next to the board
-        if (cell !== b.at) b.ports = bestTurn(cell, d.i);
+        // laid there as it is turned; a block that lay there goes back next to the board
         for (const o of blocks) if (o !== b && o.at === cell) o.at = null;
         b.at = cell;
       } else if (cellAt(d.x, d.y - lift) < 0) b.at = null;
@@ -2305,7 +2267,13 @@ export function mountSudoku(root: HTMLElement, p: SudokuPuzzle, ctx: GameCtx): C
   const near = (i: number, j: number) =>
     rowOf(i) === rowOf(j) || colOf(i) === colOf(j) || boxOf(i) === boxOf(j);
   const area = n === 6 ? "прямокутнику" : "квадраті";
+  /** The cells picked (a swipe picks several), and the last one picked. */
+  let picked = new Set<number>();
   let pick = -1;
+  const pickOnly = (i: number) => {
+    picked = new Set(i < 0 ? [] : [i]);
+    pick = i;
+  };
   let pencil = false;
   let won = false;
 
@@ -2327,9 +2295,11 @@ export function mountSudoku(root: HTMLElement, p: SudokuPuzzle, ctx: GameCtx): C
       cell.type = "button";
       cell.className = "g-sdk-cell";
       cell.setAttribute("aria-label", `Рядок ${r + 1}, стовпець ${c + 1}`);
-      cell.addEventListener("click", () => {
-        if (won) return;
-        pick = r * n + c;
+      cell.dataset.i = String(r * n + c);
+      // a finger or a mouse picks on press (below); this is Enter or Space on a cell in focus
+      cell.addEventListener("click", (e) => {
+        if (won || e.detail !== 0) return;
+        pickOnly(r * n + c);
         paint();
       });
       group.appendChild(cell);
@@ -2337,6 +2307,48 @@ export function mountSudoku(root: HTMLElement, p: SudokuPuzzle, ctx: GameCtx): C
     }
   }
   root.appendChild(board);
+
+  // a press picks the cell under it; a swipe on from there picks every cell it passes over too
+  let swipe: { id: number; x: number; y: number } | null = null;
+  const cellUnder = (x: number, y: number) => {
+    const el = document.elementFromPoint(x, y)?.closest<HTMLElement>(".g-sdk-cell");
+    return el && board.contains(el) ? Number(el.dataset.i) : -1;
+  };
+  board.addEventListener("pointerdown", (e) => {
+    if (won || e.button !== 0) return;
+    const i = cellUnder(e.clientX, e.clientY);
+    if (i < 0) return;
+    swipe = { id: e.pointerId, x: e.clientX, y: e.clientY };
+    try {
+      board.setPointerCapture(e.pointerId);
+    } catch {}
+    pickOnly(i);
+    paint();
+  });
+  board.addEventListener("pointermove", (e) => {
+    if (!swipe || e.pointerId !== swipe.id) return;
+    // every few pixels along the way, so a quick swipe does not skip a cell
+    const steps = Math.max(1, Math.ceil(Math.hypot(e.clientX - swipe.x, e.clientY - swipe.y) / 6));
+    let grew = false;
+    for (let s = 1; s <= steps; s++) {
+      const i = cellUnder(
+        swipe.x + ((e.clientX - swipe.x) * s) / steps,
+        swipe.y + ((e.clientY - swipe.y) * s) / steps,
+      );
+      if (i < 0 || picked.has(i)) continue;
+      picked.add(i);
+      pick = i;
+      grew = true;
+    }
+    swipe.x = e.clientX;
+    swipe.y = e.clientY;
+    if (grew) paint();
+  });
+  const endSwipe = (e: PointerEvent) => {
+    if (swipe && e.pointerId === swipe.id) swipe = null;
+  };
+  board.addEventListener("pointerup", endSwipe);
+  board.addEventListener("pointercancel", endSwipe);
 
   // the digits to put in, the pencil, the eraser
   const pad = document.createElement("div");
@@ -2379,28 +2391,33 @@ export function mountSudoku(root: HTMLElement, p: SudokuPuzzle, ctx: GameCtx): C
   tools.append(back, pencilKey, eraser);
   root.appendChild(tools);
 
-  /** How the grid was before each change, and which cell changed: undone one by one. */
-  const history: { now: number[]; marks: number[]; cell: number }[] = [];
+  /** How the grid was before each change, and which cells were picked: undone one by one. */
+  const history: { now: number[]; marks: number[]; picked: number[]; pick: number }[] = [];
   function undo() {
     const last = history.pop();
     if (won || !last) return;
     now.splice(0, now.length, ...last.now);
     marks.splice(0, marks.length, ...last.marks);
-    pick = last.cell;
+    picked = new Set(last.picked);
+    pick = last.pick;
     paint();
   }
 
-  /** Digit `d` into the cell picked (0: clear it), or with the pencil, its mark there or not. */
+  /**
+   * Digit `d` into the cells picked (0: clear them), or with the pencil, its mark in them or not.
+   * The given ones among them stay as they are.
+   */
   function put(d: number) {
-    if (won || pick < 0 || given[pick]) return;
-    const was = { now: now.slice(), marks: marks.slice(), cell: pick };
-    change(d);
+    const at = [...picked].filter((i) => !given[i]);
+    if (won || at.length === 0) return;
+    const was = { now: now.slice(), marks: marks.slice(), picked: [...picked], pick };
+    change(d, at);
     if (now.some((v, i) => v !== was.now[i]) || marks.some((v, i) => v !== was.marks[i]))
       history.push(was);
     const bad = clashes();
     if (now.every(Boolean) && bad.size === 0) {
       won = true;
-      pick = -1;
+      pickOnly(-1);
       paint();
       foldAway([pad, tools], ctx);
       ctx.done(`сітка ${n}×${n} заповнена`);
@@ -2408,21 +2425,27 @@ export function mountSudoku(root: HTMLElement, p: SudokuPuzzle, ctx: GameCtx): C
     }
     paint();
   }
-  function change(d: number) {
-    if (d === 0) {
-      now[pick] = 0;
-      marks[pick] = 0;
-    } else if (pencil) {
-      if (now[pick]) return;
-      marks[pick] = (marks[pick] as number) ^ (1 << (d - 1));
-    } else if (now[pick] === d) now[pick] = 0;
-    else {
-      now[pick] = d;
-      marks[pick] = 0;
-      // the digit is taken here: out of the marks round it
-      for (let j = 0; j < n * n; j++)
-        if (near(pick, j)) marks[j] = (marks[j] as number) & ~(1 << (d - 1));
-    }
+  /** Into several cells at once as into one: a digit (or mark) all of them have comes out of all. */
+  function change(d: number, at: number[]) {
+    const bit = 1 << (d - 1);
+    if (d === 0)
+      for (const i of at) {
+        now[i] = 0;
+        marks[i] = 0;
+      }
+    else if (pencil) {
+      const open = at.filter((i) => !now[i]);
+      const all = open.every((i) => (marks[i] as number) & bit);
+      for (const i of open)
+        marks[i] = all ? (marks[i] as number) & ~bit : (marks[i] as number) | bit;
+    } else if (at.every((i) => now[i] === d)) for (const i of at) now[i] = 0;
+    else
+      for (const i of at) {
+        now[i] = d;
+        marks[i] = 0;
+        // the digit is taken here: out of the marks round it
+        for (let j = 0; j < n * n; j++) if (near(i, j)) marks[j] = (marks[j] as number) & ~bit;
+      }
   }
 
   /** The cells whose digit is also in their row, column or box. */
@@ -2442,16 +2465,18 @@ export function mountSudoku(root: HTMLElement, p: SudokuPuzzle, ctx: GameCtx): C
     const empty = now.filter((d) => !d).length;
     if (!won)
       ctx.say(
-        `Цифри від 1 до ${n}: кожна раз у рядку, стовпці й ${area} · лишилось ${empty}`,
+        `Цифри від 1 до ${n}: кожна раз у рядку, стовпці й ${area} · проведи пальцем, щоб вибрати кілька клітинок · лишилось ${empty}`,
         bad.size ? "є повтори" : undefined,
       );
-    const mine = pick >= 0 ? (now[pick] as number) : 0;
+    // its row, column and box, and the same digit elsewhere: shown for a cell picked alone
+    const one = picked.size === 1 ? pick : -1;
+    const mine = one >= 0 ? (now[one] as number) : 0;
     cells.forEach((cell, i) => {
       const d = now[i] as number;
       cell.toggleAttribute("data-given", given[i] as boolean);
-      cell.toggleAttribute("data-pick", i === pick);
-      cell.toggleAttribute("data-near", pick >= 0 && i !== pick && near(pick, i));
-      cell.toggleAttribute("data-same", mine > 0 && d === mine && i !== pick);
+      cell.toggleAttribute("data-pick", picked.has(i));
+      cell.toggleAttribute("data-near", one >= 0 && i !== one && near(one, i));
+      cell.toggleAttribute("data-same", mine > 0 && d === mine && i !== one);
       cell.toggleAttribute("data-bad", bad.has(i));
       cell.toggleAttribute("data-won", won);
       if (d) cell.textContent = String(d);
@@ -2473,7 +2498,7 @@ export function mountSudoku(root: HTMLElement, p: SudokuPuzzle, ctx: GameCtx): C
     back.disabled = won || history.length === 0;
   }
 
-  // with a keyboard: digits, the eraser, the arrows to move, Ctrl+Z to undo
+  // with a keyboard: digits, the eraser, the arrows to move (with Shift, picking on), Ctrl+Z to undo
   const onKey = (e: KeyboardEvent) => {
     if (!won && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
       e.preventDefault();
@@ -2489,7 +2514,11 @@ export function mountSudoku(root: HTMLElement, p: SudokuPuzzle, ctx: GameCtx): C
       if (!step) return;
       e.preventDefault();
       const at = Math.max(pick, 0);
-      pick = ((rowOf(at) + step[0] + n) % n) * n + ((colOf(at) + step[1] + n) % n);
+      const next = ((rowOf(at) + step[0] + n) % n) * n + ((colOf(at) + step[1] + n) % n);
+      if (e.shiftKey && pick >= 0) {
+        picked.add(next);
+        pick = next;
+      } else pickOnly(next);
       paint();
     }
   };

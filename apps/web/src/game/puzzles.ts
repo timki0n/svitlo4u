@@ -2573,12 +2573,13 @@ export type SudokuPuzzle = {
 
 /**
  * Per tier: the side and its boxes, how many cells are given (fewest and most; 0: as few as the
- * reasoning allows), and whether it takes more than singles to solve.
+ * reasoning allows), whether it takes more than singles to solve, and how many more cells than
+ * that fewest to give back (a share of it).
  */
 export const SUDOKU_TIERS = [
-  { n: 4, box: [2, 2], givens: [6, 8], deep: false },
-  { n: 6, box: [2, 3], givens: [11, 14], deep: false },
-  { n: 9, box: [3, 3], givens: [0, 0], deep: true },
+  { n: 4, box: [2, 2], givens: [6, 8], deep: false, more: 0 },
+  { n: 6, box: [2, 3], givens: [11, 14], deep: false, more: 0 },
+  { n: 9, box: [3, 3], givens: [0, 0], deep: true, more: 0.25 },
 ] as const;
 
 /** A grid's lines: its rows, columns and boxes (cells row by row), and which three hold a cell. */
@@ -2749,7 +2750,8 @@ function sudokuFull(rng: Rng, p: Pick<SudokuPuzzle, "n" | "box">): number[] {
  * A grid of its own with cells taken out two at a time, each facing the other across the centre,
  * for as long as reasoning still fills it (so it has one solution, found without guessing) and
  * the tier's count of givens allows. The hard one must take more than singles: if the grid it got
- * to can be solved without, another grid is tried.
+ * to can be solved without, another grid is tried. Then the tier's share more is given back, again
+ * a pair at a time, skipping any pair that would let singles alone solve it.
  */
 export function sudokuPuzzle(rng: Rng, tier: Tier): SudokuPuzzle {
   const t = SUDOKU_TIERS[tier];
@@ -2773,9 +2775,26 @@ export function sudokuPuzzle(rng: Rng, tier: Tier): SudokuPuzzle {
       else [givens[i], givens[j]] = kept as [number, number];
     }
     last = { n, box, givens, solution };
-    if (!t.deep || !sudokuReason(shape, givens, false)) return last;
+    if (!t.deep || !sudokuReason(shape, givens, false)) break;
   }
-  return last as SudokuPuzzle;
+  const p = last as SudokuPuzzle;
+  if (t.more > 0) {
+    const g = p.givens;
+    let count = g.filter(Boolean).length;
+    const goal = count + Math.round(count * t.more);
+    for (const i of shuffle(rng, [...Array(Math.ceil((n * n) / 2)).keys()])) {
+      if (count >= goal) break;
+      const j = n * n - 1 - i;
+      if (g[i]) continue;
+      g[i] = p.solution[i] as number;
+      g[j] = p.solution[j] as number;
+      if (t.deep && sudokuReason(shape, g, false)) {
+        g[i] = 0;
+        g[j] = 0;
+      } else count += i === j ? 1 : 2;
+    }
+  }
+  return p;
 }
 
 // ── «Іскра»: a spark runs up a zigzag wire; a tap turns it; off the wire it goes out ───────────

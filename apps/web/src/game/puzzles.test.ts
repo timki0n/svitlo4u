@@ -447,7 +447,8 @@ describe("difficulty: no puzzle is a tap or two away", () => {
     const range = [
       [6, 9],
       [11, 15],
-      [20, 32],
+      // as few as reasoning allows, then a quarter more given back
+      [26, 42],
     ] as const;
     for (const k of keys(30))
       for (const t of TIERS) {

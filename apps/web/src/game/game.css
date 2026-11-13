@@ -2709,7 +2709,10 @@
   border-radius: 16px;
   background: var(--well);
   box-shadow: var(--inset);
-  touch-action: manipulation;
+  /* a swipe picks cells instead of scrolling the page */
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 /* a box: a block of its own with an edge round it; the cells in it apart by a faint line */
@@ -2731,7 +2734,8 @@
   padding: 0;
   border: 0;
   background: #1a1b1f;
-  color: var(--light);
+  /* a digit you put in: green, apart from the given ones */
+  color: #7cd6a0;
   font:
     700 19px "Manrope Variable",
     sans-serif;
