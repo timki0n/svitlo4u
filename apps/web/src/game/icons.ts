@@ -58,7 +58,9 @@ const PATHS = {
   tv: '<rect x="2.5" y="6" width="19" height="12.5" rx="2"/><path d="M8.5 2.5 12 6l3.5-3.5M8 21.5h8"/>',
   // a step back: an arrow turning round to the left
   undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
-  // «Замикання»: a marker on a shut cell, and a fault found
+  // the pencil of «Судоку»: marks, not digits
+  pencil: '<path d="M15.5 4.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4z"/><path d="m13.5 6.5 3 3"/>',
+  // «Сапер»: a marker on a shut cell, and a fault found
   flag: '<path d="M6 21V3.5"/><path d="M6 4h11l-2.5 4L17 12H6"/>',
   zap: '<path d="M13 2.5 4.5 13.5h6.5l-1 8 8.5-11h-6.5z"/>',
 } as const;

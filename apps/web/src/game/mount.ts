@@ -71,7 +71,21 @@ export type GameCtx = {
   done(note: string): void;
   /** The board changed its height: fit it to the screen again. */
   fit?(): void;
+  /**
+   * What this board kept last time it was left half done (its game's own shape, as it saved it:
+   * to be checked, an older version may have kept something else), or undefined.
+   */
+  saved?: unknown;
+  /** Keep the board as it is now, to find it so on coming back; null: forget it. */
+  save?(state: unknown): void;
 };
+
+/** A list of whole numbers from 0 up to (not with) `below`, or null if `v` is not one. */
+function indices(v: unknown, below: number): number[] | null {
+  return Array.isArray(v) && v.every((x) => Number.isInteger(x) && x >= 0 && x < below)
+    ? (v as number[])
+    : null;
+}
 export type Cleanup = (() => void) | undefined;
 
 const NS = "http://www.w3.org/2000/svg";
@@ -1830,6 +1844,21 @@ export function mountJigsaw(root: HTMLElement, p: JigsawPuzzle, ctx: GameCtx): C
 
   /** The cell each piece lies on (row by row), or null: next to the board. */
   const at = new Array<number | null>(total).fill(null);
+  // a board left half done: each piece where it lay (on a cell of its own, or next to the board)
+  const kept = (ctx.saved as { at?: unknown } | undefined)?.at;
+  if (Array.isArray(kept) && kept.length === total) {
+    const cells = kept.filter((c) => c !== null);
+    if (
+      indices(cells, total) &&
+      new Set(cells).size === cells.length &&
+      !kept.every((c, j) => c === j)
+    )
+      kept.forEach((c, j) => {
+        at[j] = c as number | null;
+      });
+  }
+  /** The board kept as it is now, to find it so on coming back. */
+  const keep = () => ctx.save?.({ at });
   /** The element each piece is drawn in (the pieces of a group share one). */
   const shown: (SVGElement | undefined)[] = [];
   /** A drag: the pieces carried (a group moves whole), the one held by the finger. */
@@ -2036,7 +2065,7 @@ export function mountJigsaw(root: HTMLElement, p: JigsawPuzzle, ctx: GameCtx): C
       // whole: the shelf folds away, the picture stands alone
       unfold = foldShelf(svg, vw, vh, by + B + 8, ctx);
       ctx.done(`усі ${total} шматків на місці`);
-    }
+    } else if (d.moved) keep();
     if (d.moved || won) draw();
   };
   svg.addEventListener("pointerup", drop);
@@ -2261,6 +2290,18 @@ export function mountSudoku(root: HTMLElement, p: SudokuPuzzle, ctx: GameCtx): C
   const now = p.givens.slice();
   const marks = new Array<number>(n * n).fill(0);
   const given = p.givens.map((d) => d > 0);
+  // a board left half done: its digits and marks as they were, the given ones still in place
+  const kept = ctx.saved as { now?: unknown; marks?: unknown } | undefined;
+  const keptNow = indices(kept?.now, n + 1);
+  const keptMarks = indices(kept?.marks, 1 << n);
+  if (
+    keptNow?.length === n * n &&
+    keptMarks?.length === n * n &&
+    p.givens.every((d, i) => !d || keptNow[i] === d)
+  ) {
+    now.splice(0, now.length, ...keptNow);
+    marks.splice(0, marks.length, ...keptMarks);
+  }
   const rowOf = (i: number) => Math.floor(i / n);
   const colOf = (i: number) => i % n;
   const boxOf = (i: number) => Math.floor(rowOf(i) / bh) * (n / bw) + Math.floor(colOf(i) / bw);
@@ -2369,7 +2410,7 @@ export function mountSudoku(root: HTMLElement, p: SudokuPuzzle, ctx: GameCtx): C
   const pencilKey = document.createElement("button");
   pencilKey.type = "button";
   pencilKey.className = "g-btn g-sdk-tool";
-  pencilKey.textContent = "Олівець";
+  pencilKey.innerHTML = `${icon("pencil", 18)}<span>Олівець</span>`;
   pencilKey.setAttribute("aria-pressed", "false");
   pencilKey.addEventListener("click", () => {
     pencil = !pencil;
@@ -2400,8 +2441,11 @@ export function mountSudoku(root: HTMLElement, p: SudokuPuzzle, ctx: GameCtx): C
     marks.splice(0, marks.length, ...last.marks);
     picked = new Set(last.picked);
     pick = last.pick;
+    keep();
     paint();
   }
+  /** The digits and marks kept, to find them so on coming back. */
+  const keep = () => ctx.save?.({ now, marks });
 
   /**
    * Digit `d` into the cells picked (0: clear them), or with the pencil, its mark in them or not.
@@ -2412,8 +2456,9 @@ export function mountSudoku(root: HTMLElement, p: SudokuPuzzle, ctx: GameCtx): C
     if (won || at.length === 0) return;
     const was = { now: now.slice(), marks: marks.slice(), picked: [...picked], pick };
     change(d, at);
-    if (now.some((v, i) => v !== was.now[i]) || marks.some((v, i) => v !== was.marks[i]))
-      history.push(was);
+    const changed =
+      now.some((v, i) => v !== was.now[i]) || marks.some((v, i) => v !== was.marks[i]);
+    if (changed) history.push(was);
     const bad = clashes();
     if (now.every(Boolean) && bad.size === 0) {
       won = true;
@@ -2423,6 +2468,7 @@ export function mountSudoku(root: HTMLElement, p: SudokuPuzzle, ctx: GameCtx): C
       ctx.done(`сітка ${n}×${n} заповнена`);
       return;
     }
+    if (changed) keep();
     paint();
   }
   /** Into several cells at once as into one: a digit (or mark) all of them have comes out of all. */
@@ -2491,8 +2537,11 @@ export function mountSudoku(root: HTMLElement, p: SudokuPuzzle, ctx: GameCtx): C
       key.toggleAttribute("data-spent", now.filter((d) => d === k + 1).length >= n);
       key.disabled = won;
     });
+    // the pencil on: its button lit, the board framed in the same light, the digits drawn as marks
     pencilKey.toggleAttribute("data-on", pencil);
     pencilKey.setAttribute("aria-pressed", String(pencil));
+    board.toggleAttribute("data-pencil", pencil && !won);
+    pad.toggleAttribute("data-pencil", pencil);
     pencilKey.disabled = won;
     eraser.disabled = won;
     back.disabled = won || history.length === 0;
@@ -4193,7 +4242,7 @@ export function mountSnake(root: HTMLElement, p: SnakePuzzle, ctx: GameCtx): Cle
   };
 }
 
-// ── Замикання ───────────────────────────────────────────────────────────────────────────────
+// ── Сапер ───────────────────────────────────────────────────────────────────────────────────
 
 /** The numbers' colours, 1 to 8. */
 const MINE_INK = [
@@ -4243,6 +4292,27 @@ export function mountMine(root: HTMLElement, p: MinePuzzle, ctx: GameCtx): Clean
   let over = false;
   let won = false;
   let boom = -1;
+  /** The first cell opened: the faults are laid from it. */
+  let first = -1;
+
+  // a board left half done: the faults laid from the same first cell, the cells open and marked as
+  // they were (none of the open ones a fault, else it is not this board's)
+  const kept = ctx.saved as { first?: unknown; open?: unknown; marked?: unknown } | undefined;
+  const keptOpen = indices(kept?.open, size);
+  const keptMarked = indices(kept?.marked, size);
+  const keptFirst = kept?.first;
+  if (keptOpen && keptMarked && Number.isInteger(keptFirst)) {
+    const f = keptFirst as number;
+    const laid = f >= 0 && f < size ? mineLay(p, f) : null;
+    if ((laid || (f === -1 && keptOpen.length === 0)) && !keptOpen.some((i) => laid?.has(i))) {
+      faults = laid;
+      first = f;
+      for (const i of keptOpen) open.add(i);
+      for (const i of keptMarked) if (!open.has(i)) marked.add(i);
+    }
+  }
+  /** The board kept as it is now, to find it so on coming back; a lost one is not kept. */
+  const keep = () => ctx.save?.(over ? null : { first, open: [...open], marked: [...marked] });
 
   const status = (warn?: string) =>
     ctx.say(
@@ -4275,9 +4345,11 @@ export function mountMine(root: HTMLElement, p: MinePuzzle, ctx: GameCtx): Clean
         b.style.color = "";
       }
     });
+    // marking on: its button lit, the board framed in the same light
     mode.toggleAttribute("data-on", marking);
     mode.setAttribute("aria-pressed", String(marking));
     mode.disabled = over || won;
+    grid.toggleAttribute("data-marking", marking && !over && !won);
   };
 
   const mark = (i: number) => {
@@ -4285,11 +4357,15 @@ export function mountMine(root: HTMLElement, p: MinePuzzle, ctx: GameCtx): Clean
     if (marked.has(i)) marked.delete(i);
     else marked.add(i);
     navigator.vibrate?.(10);
+    keep();
     paint();
     status();
   };
   const openCell = (i: number) => {
-    if (!faults) faults = mineLay(p, i);
+    if (!faults) {
+      first = i;
+      faults = mineLay(p, i);
+    }
     if (faults.has(i)) {
       over = true;
       boom = i;
@@ -4301,21 +4377,23 @@ export function mountMine(root: HTMLElement, p: MinePuzzle, ctx: GameCtx): Clean
       marked.delete(c);
     }
   };
-  /** A tap: a shut cell opens; a number with its faults all marked round it opens the rest round it. */
+  /**
+   * A tap: a shut cell opens (marking: is marked or not); a number with its faults all marked round
+   * it opens the rest round it, marking or not.
+   */
   const act = (i: number) => {
     if (over || won) return;
-    if (marking) {
-      mark(i);
-      return;
-    }
-    if (marked.has(i)) return;
     if (open.has(i)) {
       if (!faults) return;
       const k = mineCount(p, faults, i);
       const round = mineAround(p, i);
       if (!k || round.filter((j) => marked.has(j)).length !== k) return;
       for (const j of round) if (!open.has(j) && !marked.has(j) && !over) openCell(j);
-    } else openCell(i);
+    } else if (marking) {
+      mark(i);
+      return;
+    } else if (marked.has(i)) return;
+    else openCell(i);
     if (!over && open.size === size - p.faults) {
       won = true;
       for (const f of faults ?? []) marked.add(f);
@@ -4325,6 +4403,7 @@ export function mountMine(root: HTMLElement, p: MinePuzzle, ctx: GameCtx): Clean
       ctx.done(`усі ${p.faults} замикань знайдено`);
       return;
     }
+    keep();
     paint();
     status(over ? "замикання! Почни спочатку" : undefined);
   };

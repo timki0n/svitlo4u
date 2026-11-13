@@ -2734,8 +2734,8 @@
   padding: 0;
   border: 0;
   background: #1a1b1f;
-  /* a digit you put in: green, apart from the given ones */
-  color: #7cd6a0;
+  /* a digit you put in: blue, apart from the given ones */
+  color: #8fb4ff;
   font:
     700 19px "Manrope Variable",
     sans-serif;
@@ -2750,18 +2750,19 @@
   background: #212228;
 }
 
+/* picked, and the same digit elsewhere: in the blue of the digits you put in */
 .g-sdk-cell[data-same] {
-  background: rgba(255, 154, 61, 0.14);
+  background: rgba(143, 180, 255, 0.14);
 }
 
+/* a repeat: the cell goes red, its digit keeps its own colour */
 .g-sdk-cell[data-bad] {
   background: rgba(255, 107, 87, 0.18);
-  color: var(--warn);
 }
 
 .g-sdk-cell[data-pick] {
-  background: rgba(255, 154, 61, 0.3);
-  box-shadow: inset 0 0 0 2px var(--light);
+  background: rgba(143, 180, 255, 0.22);
+  box-shadow: inset 0 0 0 2px #8fb4ff;
 }
 
 .g-sdk-cell[data-pick][data-bad] {
@@ -2829,12 +2830,44 @@
 }
 
 .g-sdk-tool {
+  display: flex;
   flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
 }
 
+/* the pencil on: its button lit up, the board framed in the same light, the digits to put in
+   drawn as marks (small, orange, ringed) */
 .g-sdk-tool[data-on] {
+  background: var(--light);
+  box-shadow: 0 0 14px rgba(255, 154, 61, 0.35);
+  color: #1a1208;
+}
+
+.g-sdk {
+  transition: box-shadow 0.2s ease;
+}
+
+.g-sdk[data-pencil] {
+  box-shadow:
+    var(--inset),
+    0 0 0 2px var(--light);
+}
+
+/* with the pencil, the cells picked in its orange too (a repeat stays red) */
+.g-sdk[data-pencil] .g-sdk-cell[data-pick]:not([data-bad]) {
+  background: rgba(255, 154, 61, 0.22);
+  box-shadow: inset 0 0 0 2px var(--light);
+}
+
+.g-sdk-pad[data-pencil] .g-sdk-key {
+  box-shadow:
+    var(--raised-sm),
+    inset 0 0 0 1.5px rgba(255, 154, 61, 0.6);
   color: var(--light);
-  box-shadow: var(--inset-sm);
+  font-size: 15px;
+  font-weight: 600;
 }
 
 .g-sdk-tool:disabled {
@@ -3080,7 +3113,7 @@
   cursor: pointer;
 }
 
-/* Замикання: shut cells raised, open ones sunk with their numbers; a mark, a fault, the one hit */
+/* Сапер: shut cells raised, open ones sunk with their numbers; a mark, a fault, the one hit */
 .g-mine {
   display: grid;
   grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
@@ -3091,6 +3124,14 @@
   background: var(--well);
   box-shadow: var(--inset);
   touch-action: manipulation;
+  transition: box-shadow 0.2s ease;
+}
+
+/* marking on: the board framed in the light of its button */
+.g-mine[data-marking] {
+  box-shadow:
+    var(--inset),
+    0 0 0 2px var(--light);
 }
 
 .g-mine-cell {
@@ -3156,6 +3197,7 @@
 }
 
 .g-mine-mode[data-on] {
-  color: var(--light);
-  box-shadow: var(--inset-sm);
+  background: var(--light);
+  box-shadow: 0 0 14px rgba(255, 154, 61, 0.35);
+  color: #1a1208;
 }

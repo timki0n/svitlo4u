@@ -751,7 +751,7 @@ describe("difficulty: no puzzle is a tap or two away", () => {
     ).toBeNull();
   });
 
-  it("Замикання: the faults are laid after the first cell, never on it or round it, and clear by reasoning alone", () => {
+  it("Сапер: the faults are laid after the first cell, never on it or round it, and clear by reasoning alone", () => {
     for (const k of keys(30))
       for (const t of TIERS) {
         const p = minePuzzle(rngOf(k), t);
@@ -774,7 +774,7 @@ describe("difficulty: no puzzle is a tap or two away", () => {
       }
   });
 
-  it("Замикання: the numbers count the faults round a cell; an empty patch opens out to its edge of numbers", () => {
+  it("Сапер: the numbers count the faults round a cell; an empty patch opens out to its edge of numbers", () => {
     // 4 × 3, row by row: one fault at the top right
     const p = { cols: 4, rows: 3 };
     const faults = new Set([3]);

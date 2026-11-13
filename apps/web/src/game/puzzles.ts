@@ -3205,7 +3205,7 @@ export type SnakePuzzle = {
   rows: number;
   /** Bolts to eat. */
   goal: number;
-  /** Cells a second at the start, and more for each bolt eaten. */
+  /** Cells a second at the start, and more for each bolt eaten (both a tenth under what they were). */
   speed: number;
   speedup: number;
   /** Puddles at once at most, a new one every so many seconds, each lasting so long. */
@@ -3233,8 +3233,8 @@ export const SNAKE_TIERS = [
     cols: 12,
     rows: 12,
     goal: 10,
-    speed: 5.5,
-    speedup: 0.08,
+    speed: 4.95,
+    speedup: 0.072,
     puddles: 1,
     every: 3,
     life: 5,
@@ -3244,8 +3244,8 @@ export const SNAKE_TIERS = [
     cols: 14,
     rows: 14,
     goal: 15,
-    speed: 6.5,
-    speedup: 0.1,
+    speed: 5.85,
+    speedup: 0.09,
     puddles: 2,
     every: 2.2,
     life: 5,
@@ -3255,8 +3255,8 @@ export const SNAKE_TIERS = [
     cols: 15,
     rows: 15,
     goal: 20,
-    speed: 7.5,
-    speedup: 0.12,
+    speed: 6.75,
+    speedup: 0.108,
     puddles: 3,
     every: 1.6,
     life: 4.5,
@@ -3345,7 +3345,7 @@ export function snakeStep(
   return { state, ate, died: null };
 }
 
-// ── «Замикання»: faults hidden under the cells; a number says how many are round it ─────────────
+// ── «Сапер»: faults hidden under the cells; a number says how many are round it ─────────────
 
 export type MinePuzzle = {
   cols: number;

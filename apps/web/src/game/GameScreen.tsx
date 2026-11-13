@@ -22,6 +22,7 @@ import { DoorCard, EveningScreen } from "./Evenings.tsx";
 import { partGame, TIER_LABEL, type WindowGame, windowGame } from "./games.ts";
 import { Avatar, avatarLetter, avatarShade, Bolt, playerName, RatingScreen } from "./Rating.tsx";
 import { rngOf } from "./rng.ts";
+import { boardName, dropBoard, loadBoard, saveBoard } from "./saved.ts";
 import "./game.css";
 
 /** The facade is re-read this often while it is on screen. */
@@ -789,6 +790,8 @@ function Play({
           type="button"
           className="g-btn"
           onClick={() => {
+            // a board kept half done is forgotten: it starts over clean
+            dropBoard(boardName(info.key, info.game.id));
             setLine({ text: "" });
             setRound((r) => r + 1);
           }}
@@ -804,6 +807,11 @@ function Play({
 const BOARD_BELOW = 40;
 /** Under the gauge of «Запобіжник»: its lights and its button. */
 const FUSE_CONTROLS = 90;
+/**
+ * A board found half done may be finished at once, but the core counts a window only some seconds
+ * after it was opened (anew on coming back): its solving is told no sooner than this.
+ */
+const KEPT_SOLVE_MS = 3_500;
 
 /**
  * Fit a tall board into the screen's height, so its bottom (the bag's last items, the fuse's
@@ -852,16 +860,38 @@ function Board({
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => fitBoard(root));
     };
+    // a board left half done comes back as it was, its time played so far counted on
+    const name = boardName(info.key, info.game.id);
+    const kept = loadBoard(name);
     const started = performance.now();
+    const played = () => (kept?.ms ?? 0) + performance.now() - started;
+    let finished = false;
+    let telling = 0;
     const cleanup = info.game.start(root, info.key, info.tier, {
       say: (text, warn) => handlers.current.onSay(text, warn),
-      done: (note) =>
-        handlers.current.onDone(note, Math.round((performance.now() - started) / 1000)),
+      done: (note) => {
+        finished = true;
+        const seconds = Math.round(played() / 1000);
+        const tell = () => {
+          dropBoard(name);
+          handlers.current.onDone(note, seconds);
+        };
+        const wait = kept ? started + KEPT_SOLVE_MS - performance.now() : 0;
+        if (wait > 0) telling = window.setTimeout(tell, wait);
+        else tell();
+      },
       fit: refit,
+      saved: kept?.state,
+      save: (state) => {
+        if (finished) return;
+        if (state === null) dropBoard(name);
+        else saveBoard(name, state, played());
+      },
     });
     fitBoard(root);
     window.addEventListener("resize", refit);
     return () => {
+      window.clearTimeout(telling);
       window.removeEventListener("resize", refit);
       cancelAnimationFrame(raf);
       cleanup?.();
