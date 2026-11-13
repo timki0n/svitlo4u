@@ -506,6 +506,7 @@ export function mountFuse(root: HTMLElement, p: FusePuzzle, ctx: GameCtx): Clean
     if (hits >= need) {
       alive = false;
       show();
+      foldAway([button], ctx);
       ctx.done(attempt === 1 ? "з першої спроби" : `зі спроби ${attempt}`);
       return;
     }
@@ -1013,6 +1014,37 @@ function foldShelf(svg: SVGSVGElement, vw: number, from: number, to: number, ctx
   };
   raf = requestAnimationFrame(step);
   return () => cancelAnimationFrame(raf);
+}
+
+/**
+ * Solved: controls under a board that are no use any more (a pad, a button) fold away, their
+ * height down to nothing, so what comes after is in reach without scrolling past them; then the
+ * screen fits the board again.
+ */
+function foldAway(els: HTMLElement[], ctx: GameCtx) {
+  const still =
+    document.hidden || (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
+  for (const el of els) {
+    if (still) {
+      el.style.display = "none";
+      continue;
+    }
+    el.style.overflow = "hidden";
+    el.style.height = `${el.offsetHeight}px`;
+    el.style.transition = "height 0.42s cubic-bezier(0.2, 0.7, 0.3, 1), opacity 0.3s ease";
+    void el.offsetHeight;
+    el.style.height = "0px";
+    el.style.opacity = "0";
+    el.addEventListener(
+      "transitionend",
+      () => {
+        el.style.display = "none";
+        ctx.fit?.();
+      },
+      { once: true },
+    );
+  }
+  if (still) ctx.fit?.();
 }
 
 export function mountPack(root: HTMLElement, p: PackPuzzle, ctx: GameCtx): Cleanup {
@@ -1636,10 +1668,13 @@ export function mountVolt(root: HTMLElement, p: VoltPuzzle, ctx: GameCtx): Clean
     }
   };
 
+  let unfold = () => {};
   const check = () => {
     const t = voltTrace(p, laid());
     if (!won && t.lit && t.sum === target) {
       won = true;
+      // lit: the shelf of blocks folds away, the board stands alone
+      unfold = foldShelf(svg, vw, vh, oy + n * cs + 6, ctx);
       ctx.done(`рівно ${target} В`);
     }
   };
@@ -1699,7 +1734,7 @@ export function mountVolt(root: HTMLElement, p: VoltPuzzle, ctx: GameCtx): Clean
   });
 
   draw();
-  return undefined;
+  return () => unfold();
 }
 
 // ── Пазл ─────────────────────────────────────────────────────────────────────────────────────
@@ -2367,6 +2402,7 @@ export function mountSudoku(root: HTMLElement, p: SudokuPuzzle, ctx: GameCtx): C
       won = true;
       pick = -1;
       paint();
+      foldAway([pad, tools], ctx);
       ctx.done(`сітка ${n}×${n} заповнена`);
       return;
     }
@@ -4256,6 +4292,7 @@ export function mountMine(root: HTMLElement, p: MinePuzzle, ctx: GameCtx): Clean
       for (const f of faults ?? []) marked.add(f);
       paint();
       status();
+      foldAway([tools], ctx);
       ctx.done(`усі ${p.faults} замикань знайдено`);
       return;
     }
