@@ -3542,7 +3542,8 @@ export function mountSnake(root: HTMLElement, p: SnakePuzzle, ctx: GameCtx): Cle
   let turns: number[] = [];
   let lastStep = since;
   let lastPuddle = since;
-  /** When the bolt came, and when it goes if not eaten (it waits at the start). */
+  /** When the bolt came into sight; its time running from when, until when (none at the start). */
+  let boltShown = since;
   let boltFrom = since;
   let boltUntil = Number.POSITIVE_INFINITY;
   let died: "wall" | "self" | "puddle" | null = null;
@@ -3594,8 +3595,10 @@ export function mountSnake(root: HTMLElement, p: SnakePuzzle, ctx: GameCtx): Cle
       mode = "run";
       const now = performance.now();
       since = now;
-      lastStep = now;
+      // the first step at once, sliding on from where it lies (not a cell back, then forwards)
+      lastStep = now - stepMs();
       lastPuddle = now;
+      // the bolt's time starts; it stays in sight as it was
       boltFrom = now;
       boltUntil = now + p.boltLife * 1000;
       turns = [d];
@@ -3637,6 +3640,7 @@ export function mountSnake(root: HTMLElement, p: SnakePuzzle, ctx: GameCtx): Cle
     }
     s = next.state;
     if (next.ate) {
+      boltShown = now;
       boltFrom = now;
       boltUntil = now + p.boltLife * 1000;
       say();
@@ -3687,7 +3691,7 @@ export function mountSnake(root: HTMLElement, p: SnakePuzzle, ctx: GameCtx): Cle
     if (s.bolt >= 0) {
       const bx = cx(s.bolt);
       const by = cy(s.bolt);
-      const born = Math.min(1, (now - boltFrom) / 250);
+      const born = Math.min(1, (now - boltShown) / 250);
       const left = Number.isFinite(boltUntil)
         ? Math.max(0, (boltUntil - now) / (boltUntil - boltFrom))
         : 1;
@@ -3942,6 +3946,7 @@ export function mountSnake(root: HTMLElement, p: SnakePuzzle, ctx: GameCtx): Cle
       // a bolt not eaten in time goes, and another comes elsewhere
       if (s.bolt >= 0 && now >= boltUntil) {
         s = { ...s, bolt: snakeSpot(p, s, rng, 3) ?? s.bolt };
+        boltShown = now;
         boltFrom = now;
         boltUntil = now + p.boltLife * 1000;
       }
@@ -3966,6 +3971,7 @@ export function mountSnake(root: HTMLElement, p: SnakePuzzle, ctx: GameCtx): Cle
       rng = rngOf(p.seed);
       s = snakeStart(p, rng);
       before = s.body.slice();
+      boltShown = now;
       boltFrom = now;
       boltUntil = Number.POSITIVE_INFINITY;
       turns = [];
