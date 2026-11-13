@@ -12,6 +12,7 @@ import {
   mountFuse,
   mountJigsaw,
   mountMemo,
+  mountMine,
   mountPack,
   mountPets,
   mountSlide,
@@ -30,6 +31,7 @@ import {
   fusePuzzle,
   jigsawPuzzle,
   memoPuzzle,
+  minePuzzle,
   packPuzzle,
   petsPuzzle,
   slidePuzzle,
@@ -80,6 +82,7 @@ export const GAMES: readonly GameDef[] = [
   game("store", "Комора", storePuzzle, mountStore),
   game("memo", "Запам'яталка", memoPuzzle, mountMemo),
   game("snake", "Змійка", snakePuzzle, mountSnake),
+  game("mine", "Замикання", minePuzzle, mountMine),
 ];
 
 export const TIER_LABEL = ["легкий рівень", "середній рівень", "важкий рівень"] as const;

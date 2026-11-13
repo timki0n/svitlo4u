@@ -33,7 +33,14 @@ import {
   MIN_CHAIN_TAPS,
   MIN_SLIDE_MOVES,
   MIN_UNTANGLE_CROSSINGS,
+  MINE_TIERS,
   memoPuzzle,
+  mineAround,
+  mineCount,
+  mineLay,
+  mineOpen,
+  minePuzzle,
+  mineSolvable,
   packPuzzle,
   packShapeOf,
   packSolutions,
@@ -119,6 +126,7 @@ describe("window games", () => {
       storePuzzle,
       memoPuzzle,
       snakePuzzle,
+      minePuzzle,
     ])
       for (const t of TIERS) expect(make(rngOf(`k${t}`), t)).toEqual(make(rngOf(`k${t}`), t));
     expect(slidePuzzle(rngOf("k"), 1)).toEqual(slidePuzzle(rngOf("k"), 1));
@@ -740,6 +748,49 @@ describe("difficulty: no puzzle is a tap or two away", () => {
     expect(
       snakeSpot({ cols: 3, rows: 3 }, { body: [4], bolt: 0, puddles: [] }, rngOf("c"), 5),
     ).toBeNull();
+  });
+
+  it("Замикання: the faults are laid after the first cell, never on it or round it, and clear by reasoning alone", () => {
+    for (const k of keys(30))
+      for (const t of TIERS) {
+        const p = minePuzzle(rngOf(k), t);
+        expect([p.cols, p.rows, p.faults]).toEqual([
+          MINE_TIERS[t].cols,
+          MINE_TIERS[t].rows,
+          MINE_TIERS[t].faults,
+        ]);
+        const first = Math.floor(rngOf(`${k}:first`)() * p.cols * p.rows);
+        const faults = mineLay(p, first);
+        expect(faults.size).toBe(p.faults);
+        for (const c of [first, ...mineAround(p, first)]) expect(faults.has(c)).toBe(false);
+        expect(mineSolvable(p, faults, first)).toBe(true);
+        // the same first cell, the same faults
+        expect([...mineLay(p, first)].sort()).toEqual([...faults].sort());
+        // the first cell opens a patch, nothing in it a fault
+        const patch = mineOpen(p, faults, new Set(), first);
+        expect(patch.length).toBeGreaterThan(1);
+        for (const c of patch) expect(faults.has(c)).toBe(false);
+      }
+  });
+
+  it("Замикання: the numbers count the faults round a cell; an empty patch opens out to its edge of numbers", () => {
+    // 4 × 3, row by row: one fault at the top right
+    const p = { cols: 4, rows: 3 };
+    const faults = new Set([3]);
+    expect(mineAround(p, 0).sort((a, b) => a - b)).toEqual([1, 4, 5]);
+    expect(mineAround(p, 5)).toHaveLength(8);
+    expect([2, 6, 7].map((c) => mineCount(p, faults, c))).toEqual([1, 1, 1]);
+    expect(mineCount(p, faults, 0)).toBe(0);
+    // from the bottom left everything opens but the fault
+    expect(mineOpen(p, faults, new Set(), 8).sort((a, b) => a - b)).toEqual([
+      0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 11,
+    ]);
+    // a number opens alone
+    expect(mineOpen(p, faults, new Set(), 2)).toEqual([2]);
+    // a board you would have to guess: two cells at the bottom, one fault, nothing to tell them apart
+    expect(mineSolvable({ cols: 2, rows: 3 }, new Set([4]), 0)).toBe(false);
+    // and one you need not: a single shut cell next to a 1
+    expect(mineSolvable({ cols: 2, rows: 1 }, new Set([1]), 0)).toBe(true);
   });
 });
 

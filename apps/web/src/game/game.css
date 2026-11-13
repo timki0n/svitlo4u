@@ -3075,3 +3075,83 @@
   touch-action: none;
   cursor: pointer;
 }
+
+/* Замикання: shut cells raised, open ones sunk with their numbers; a mark, a fault, the one hit */
+.g-mine {
+  display: grid;
+  grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
+  gap: 3px;
+  width: min(100%, 340px);
+  padding: 8px;
+  border-radius: 16px;
+  background: var(--well);
+  box-shadow: var(--inset);
+  touch-action: manipulation;
+}
+
+.g-mine-cell {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: #3a3d45;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 1px 2px rgba(0, 0, 0, 0.35);
+  color: var(--text);
+  font:
+    800 16px "Manrope Variable",
+    sans-serif;
+  cursor: pointer;
+  -webkit-touch-callout: none;
+}
+
+.g-mine-cell[data-open] {
+  background: #1d1e22;
+  box-shadow: none;
+  cursor: default;
+}
+
+.g-mine-cell[data-mark] {
+  color: var(--light);
+}
+
+.g-mine-cell[data-fault] {
+  background: #3a1f1c;
+  color: var(--warn);
+}
+
+.g-mine-cell[data-wrong] {
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+.g-mine-cell[data-boom] {
+  background: var(--warn);
+  color: #1a1208;
+}
+
+.g-mine-cell:disabled {
+  cursor: default;
+}
+
+.g-mine-tools {
+  display: flex;
+  width: min(100%, 340px);
+}
+
+.g-mine-mode {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.g-mine-mode[data-on] {
+  color: var(--light);
+  box-shadow: var(--inset-sm);
+}

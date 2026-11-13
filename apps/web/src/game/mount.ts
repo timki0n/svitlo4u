@@ -24,7 +24,12 @@ import {
   jigsawGroup,
   jigsawOutline,
   type MemoPuzzle,
+  type MinePuzzle,
   type Mirror,
+  mineAround,
+  mineCount,
+  mineLay,
+  mineOpen,
   type PackPuzzle,
   type PetsPuzzle,
   type Point,
@@ -4121,4 +4126,182 @@ export function mountSnake(root: HTMLElement, p: SnakePuzzle, ctx: GameCtx): Cle
     cancelAnimationFrame(raf);
     document.removeEventListener("keydown", onKey);
   };
+}
+
+// ── Замикання ───────────────────────────────────────────────────────────────────────────────
+
+/** The numbers' colours, 1 to 8. */
+const MINE_INK = [
+  "",
+  "#8fb4ff",
+  "#7cd6a0",
+  "#ffb36b",
+  "#c39bff",
+  "#ff7a6b",
+  "#6fd6d6",
+  "#f2efea",
+  "#a3a5ad",
+];
+
+export function mountMine(root: HTMLElement, p: MinePuzzle, ctx: GameCtx): Cleanup {
+  const size = p.cols * p.rows;
+  const grid = document.createElement("div");
+  grid.className = "g-mine";
+  grid.style.setProperty("--cols", String(p.cols));
+  root.appendChild(grid);
+  const cells = Array.from({ length: size }, (_, i) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "g-mine-cell";
+    b.setAttribute(
+      "aria-label",
+      `Рядок ${Math.floor(i / p.cols) + 1}, стовпець ${(i % p.cols) + 1}`,
+    );
+    grid.appendChild(b);
+    return b;
+  });
+  const tools = document.createElement("div");
+  tools.className = "g-mine-tools";
+  const mode = document.createElement("button");
+  mode.type = "button";
+  mode.className = "g-btn g-mine-mode";
+  mode.innerHTML = `${icon("flag", 18)}<span>Позначати</span>`;
+  mode.setAttribute("aria-pressed", "false");
+  tools.appendChild(mode);
+  root.appendChild(tools);
+
+  /** The faults, laid at the first cell opened. */
+  let faults: Set<number> | null = null;
+  const open = new Set<number>();
+  const marked = new Set<number>();
+  let marking = false;
+  let over = false;
+  let won = false;
+  let boom = -1;
+
+  const status = (warn?: string) =>
+    ctx.say(
+      `Відкривай клітинки: цифра — скільки замикань поруч. Утримуй клітинку, щоб позначити\nпозначено ${marked.size} з ${p.faults}`,
+      warn,
+    );
+  const paint = () => {
+    cells.forEach((b, i) => {
+      const isOpen = open.has(i);
+      const fault = faults?.has(i) ?? false;
+      const shown = (over || won) && fault;
+      b.toggleAttribute("data-open", isOpen);
+      b.toggleAttribute("data-mark", marked.has(i) && !isOpen);
+      b.toggleAttribute("data-fault", shown);
+      b.toggleAttribute("data-boom", i === boom);
+      b.toggleAttribute("data-wrong", over && marked.has(i) && !fault);
+      b.disabled = over || won;
+      if (isOpen && faults) {
+        const k = mineCount(p, faults, i);
+        b.textContent = k ? String(k) : "";
+        b.style.color = MINE_INK[k] ?? "";
+      } else if (shown && !marked.has(i)) {
+        b.innerHTML = icon("zap", 16);
+        b.style.color = "";
+      } else if (marked.has(i)) {
+        b.innerHTML = icon("flag", 16);
+        b.style.color = "";
+      } else {
+        b.textContent = "";
+        b.style.color = "";
+      }
+    });
+    mode.toggleAttribute("data-on", marking);
+    mode.setAttribute("aria-pressed", String(marking));
+    mode.disabled = over || won;
+  };
+
+  const mark = (i: number) => {
+    if (over || won || open.has(i)) return;
+    if (marked.has(i)) marked.delete(i);
+    else marked.add(i);
+    navigator.vibrate?.(10);
+    paint();
+    status();
+  };
+  const openCell = (i: number) => {
+    if (!faults) faults = mineLay(p, i);
+    if (faults.has(i)) {
+      over = true;
+      boom = i;
+      navigator.vibrate?.([40, 50, 40]);
+      return;
+    }
+    for (const c of mineOpen(p, faults, open, i)) {
+      open.add(c);
+      marked.delete(c);
+    }
+  };
+  /** A tap: a shut cell opens; a number with its faults all marked round it opens the rest round it. */
+  const act = (i: number) => {
+    if (over || won) return;
+    if (marking) {
+      mark(i);
+      return;
+    }
+    if (marked.has(i)) return;
+    if (open.has(i)) {
+      if (!faults) return;
+      const k = mineCount(p, faults, i);
+      const round = mineAround(p, i);
+      if (!k || round.filter((j) => marked.has(j)).length !== k) return;
+      for (const j of round) if (!open.has(j) && !marked.has(j) && !over) openCell(j);
+    } else openCell(i);
+    if (!over && open.size === size - p.faults) {
+      won = true;
+      for (const f of faults ?? []) marked.add(f);
+      paint();
+      status();
+      ctx.done(`усі ${p.faults} замикань знайдено`);
+      return;
+    }
+    paint();
+    status(over ? "замикання! Почни спочатку" : undefined);
+  };
+
+  // a tap opens, a hold (or a right click) marks
+  let hold = 0;
+  let held = -1;
+  let pressed = -1;
+  cells.forEach((b, i) => {
+    b.addEventListener("pointerdown", (e) => {
+      if (e.button === 2) return;
+      pressed = i;
+      held = -1;
+      window.clearTimeout(hold);
+      hold = window.setTimeout(() => {
+        held = i;
+        mark(i);
+      }, 380);
+    });
+    b.addEventListener("pointerup", () => {
+      window.clearTimeout(hold);
+      if (pressed === i && held !== i) act(i);
+      pressed = -1;
+    });
+    b.addEventListener("pointerleave", () => {
+      window.clearTimeout(hold);
+      pressed = -1;
+    });
+    b.addEventListener("pointercancel", () => {
+      window.clearTimeout(hold);
+      pressed = -1;
+    });
+    b.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      if (held !== i) mark(i);
+    });
+  });
+  mode.addEventListener("click", () => {
+    marking = !marking;
+    paint();
+  });
+
+  paint();
+  status();
+  return () => window.clearTimeout(hold);
 }

@@ -4,7 +4,7 @@
  */
 import { type GameTier, gameTier } from "../../../../packages/domain/src/game.ts";
 import type { GameIcon } from "./icons.ts";
-import { type Rng, ri, shuffle } from "./rng.ts";
+import { type Rng, ri, rngOf, shuffle } from "./rng.ts";
 
 /** Difficulty from the floor (shared with the core, which scores by it). */
 export type Tier = GameTier;
@@ -3324,4 +3324,152 @@ export function snakeStep(
   const state: SnakeState = { ...s, body, dir: d, score: s.score + (ate ? 1 : 0) };
   if (ate) state.bolt = state.score >= p.goal ? -1 : (snakeSpot(p, state, rng, 2) ?? -1);
   return { state, ate, died: null };
+}
+
+// ── «Замикання»: faults hidden under the cells; a number says how many are round it ─────────────
+
+export type MinePuzzle = {
+  cols: number;
+  rows: number;
+  /** Faults hidden. */
+  faults: number;
+  /** Where they go, given the first cell opened: the same for everyone opening there. */
+  seed: string;
+};
+
+export const MINE_TIERS = [
+  { cols: 8, rows: 8, faults: 10 },
+  { cols: 9, rows: 11, faults: 17 },
+  { cols: 10, rows: 13, faults: 26 },
+] as const;
+
+export function minePuzzle(rng: Rng, tier: Tier): MinePuzzle {
+  return { ...MINE_TIERS[tier], seed: `mine:${Math.floor(rng() * 1e9)}` };
+}
+
+/** The cells round `i` (up to eight). */
+export function mineAround(p: Pick<MinePuzzle, "cols" | "rows">, i: number): number[] {
+  const x = i % p.cols;
+  const y = Math.floor(i / p.cols);
+  const out: number[] = [];
+  for (let dy = -1; dy <= 1; dy++)
+    for (let dx = -1; dx <= 1; dx++) {
+      if (!dx && !dy) continue;
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx >= 0 && nx < p.cols && ny >= 0 && ny < p.rows) out.push(ny * p.cols + nx);
+    }
+  return out;
+}
+
+/** How many faults are round cell `i`. */
+export const mineCount = (
+  p: Pick<MinePuzzle, "cols" | "rows">,
+  faults: ReadonlySet<number>,
+  i: number,
+) => mineAround(p, i).filter((j) => faults.has(j)).length;
+
+/** Cell `i` opened: it, and if no fault is round it, its neighbours too, and on (an empty patch spreads). */
+export function mineOpen(
+  p: Pick<MinePuzzle, "cols" | "rows">,
+  faults: ReadonlySet<number>,
+  open: ReadonlySet<number>,
+  i: number,
+): number[] {
+  const out: number[] = [];
+  const seen = new Set(open);
+  const queue = [i];
+  seen.add(i);
+  while (queue.length) {
+    const c = queue.shift() as number;
+    out.push(c);
+    if (faults.has(c) || mineCount(p, faults, c) > 0) continue;
+    for (const j of mineAround(p, c))
+      if (!seen.has(j) && !faults.has(j)) {
+        seen.add(j);
+        queue.push(j);
+      }
+  }
+  return out;
+}
+
+/**
+ * Whether a person could clear the board from cell `first` by reasoning alone: a number with as
+ * many shut cells round it as faults still to find marks them all; one with its faults all marked
+ * opens the rest; and of two numbers, where one's shut cells are all among the other's, what is
+ * left of the bigger one is all faults or all clear when the counts say so.
+ */
+export function mineSolvable(
+  p: Pick<MinePuzzle, "cols" | "rows">,
+  faults: ReadonlySet<number>,
+  first: number,
+): boolean {
+  const size = p.cols * p.rows;
+  const open = new Set<number>(mineOpen(p, faults, new Set(), first));
+  const marked = new Set<number>();
+  const around = Array.from({ length: size }, (_, i) => mineAround(p, i));
+  const count = Array.from({ length: size }, (_, i) => mineCount(p, faults, i));
+  const shut = (i: number) => (around[i] as number[]).filter((j) => !open.has(j) && !marked.has(j));
+  const need = (i: number) =>
+    (count[i] as number) - (around[i] as number[]).filter((j) => marked.has(j)).length;
+  const reveal = (j: number) => {
+    if (faults.has(j)) return false;
+    for (const c of mineOpen(p, faults, open, j)) open.add(c);
+    return true;
+  };
+  for (;;) {
+    let moved = false;
+    const edge = [...open].filter((i) => shut(i).length > 0);
+    for (const i of edge) {
+      const hidden = shut(i);
+      if (!hidden.length) continue;
+      if (need(i) === hidden.length) {
+        for (const j of hidden) marked.add(j);
+        moved = true;
+      } else if (need(i) === 0) {
+        for (const j of hidden) if (!reveal(j)) return false;
+        moved = true;
+      }
+    }
+    if (!moved)
+      for (const a of edge) {
+        const ha = shut(a);
+        if (!ha.length) continue;
+        for (const b of edge) {
+          if (a === b) continue;
+          const hb = shut(b);
+          if (!ha.every((j) => hb.includes(j)) || ha.length === hb.length) continue;
+          const rest = hb.filter((j) => !ha.includes(j));
+          const diff = need(b) - need(a);
+          if (diff === 0) {
+            for (const j of rest) if (!reveal(j)) return false;
+            moved = true;
+          } else if (diff === rest.length) {
+            for (const j of rest) marked.add(j);
+            moved = true;
+          }
+          if (moved) break;
+        }
+        if (moved) break;
+      }
+    if (!moved) break;
+  }
+  return open.size === size - faults.size;
+}
+
+/**
+ * Where the faults lie, laid when the first cell is opened: none on it or round it (the first
+ * cell always opens a patch), and the board clear by reasoning alone from there — other layouts
+ * are tried until one is. The same first cell lays them the same way for everyone.
+ */
+export function mineLay(p: MinePuzzle, first: number): Set<number> {
+  const rng = rngOf(`${p.seed}:${first}`);
+  const keep = new Set([first, ...mineAround(p, first)]);
+  const cells = [...Array(p.cols * p.rows).keys()].filter((c) => !keep.has(c));
+  let faults = new Set<number>();
+  for (let attempt = 0; attempt < 400; attempt++) {
+    faults = new Set(shuffle(rng, cells).slice(0, p.faults));
+    if (mineSolvable(p, faults, first)) return faults;
+  }
+  return faults;
 }
