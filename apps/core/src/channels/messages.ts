@@ -150,6 +150,51 @@ export function feedText(on: boolean): string {
 export const FEED_USAGE_TEXT =
   "/feed у треді чи групі — підписати його на сповіщення й дозволити писати там лише адмінам; /feed off — вимкнути. Команда й відповідь бота зникнуть за кілька секунд.";
 
+/** After /start <building>: this chat follows the building. */
+export function followText(site: SiteConfig): string {
+  return `✅ Сюди приходитимуть сповіщення про світло в «${escapeHtml(site.name)}». /sub — вимкнути.`;
+}
+
+/** The address of a building's page. */
+export function sitePageUrl(site: SiteConfig): string {
+  return `${site.linkUrl.replace(/\/+$/, "")}/${site.id}`;
+}
+
+export const CLAIM_PRIVATE_TEXT = "Відкрийте це посилання в особистому чаті з ботом.";
+export const CLAIM_BAD_CODE_TEXT =
+  "❌ Код не підходить. Відскануйте QR-код з наклейки хаба ще раз.";
+export const CLAIM_TAKEN_TEXT =
+  "🔒 У цього хаба вже є власник. Якщо хаб тепер ваш, попросіть попереднього власника звільнити його: «Мій хаб» → «Звільнити хаб».";
+export const CLAIM_FAILED_TEXT =
+  "❌ Не вдалося створити будинок. Відскануйте QR-код з наклейки хаба ще раз.";
+
+export function claimGroupText(hubId: string): string {
+  return [
+    `🔑 Хаб ${escapeHtml(hubId)} тепер ваш.`,
+    "",
+    "Оберіть свою чергу відключень (Київ). Її видно на сайті YASNO або в рахунку за світло.",
+  ].join("\n");
+}
+
+export function claimNameText(group: string): string {
+  return [
+    `Черга ${escapeHtml(group)}.`,
+    "",
+    "Як назвати будинок? Напишіть назву у відповідь, наприклад «Дім на Оболоні».",
+  ].join("\n");
+}
+
+/** The owner's welcome: the building, its page, where the notices go. */
+export function ownerWelcomeText(site: SiteConfig, hubId: string): string {
+  return [
+    `✅ Готово! Хаб ${escapeHtml(hubId)} ваш: «${escapeHtml(site.name)}», черга ${escapeHtml(site.yasno.group)}.`,
+    "",
+    `Сторінка будинку: ${sitePageUrl(site)}${site.access === "link" ? " (лише за посиланням)" : ""}`,
+    "Сповіщення про світло і про стан хаба приходитимуть сюди.",
+    "Щоб їх отримував увесь дім, додайте бота в чат будинку кнопкою нижче.",
+  ].join("\n");
+}
+
 export const SUB_ADMINS_ONLY_TEXT =
   "🔒 Підписати групу чи топік на сповіщення може лише адміністратор групи.";
 

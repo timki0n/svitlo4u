@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { Guard } from "./Guard.tsx";
 import { HistoryScreen } from "./History.tsx";
 import { useLive } from "./live.ts";
+import { MyHubScreen } from "./MyHub.tsx";
 import { NowScreen } from "./Now.tsx";
 import { RenderSchedule } from "./Render.tsx";
 import { ScheduleScreen } from "./Schedule.tsx";
@@ -22,14 +23,30 @@ function renderTarget(): { siteId: string; which: "today" | "tomorrow" } | null 
   return m ? { siteId: m[1] as string, which: m[2] as "today" | "tomorrow" } : null;
 }
 
-export function App() {
-  const render = renderTarget();
-  return render ? <RenderSchedule siteId={render.siteId} which={render.which} /> : <Site />;
+/** The page in the address: «Мій хаб» (/my), a building (/<id>) or the default one (/). */
+function pageFromPath(): { page: "my" } | { page: "site"; siteId: string | null } {
+  const path = location.pathname.replace(/\/+$/, "");
+  if (path === "/my") return { page: "my" };
+  const m = /^\/([a-z0-9][a-z0-9-]{0,39})$/.exec(path);
+  return { page: "site", siteId: m ? (m[1] as string) : null };
 }
 
-function Site() {
+export function App() {
+  const render = renderTarget();
+  if (render) return <RenderSchedule siteId={render.siteId} which={render.which} />;
+  const page = pageFromPath();
+  return page.page === "my" ? (
+    <div className="app">
+      <MyHubScreen />
+    </div>
+  ) : (
+    <Site siteId={page.siteId} />
+  );
+}
+
+function Site({ siteId }: { siteId: string | null }) {
   const [tab, setTab] = useState<Tab>(tabFromHash);
-  const live = useLive();
+  const live = useLive(siteId);
 
   useEffect(() => {
     const onHash = () => {
@@ -45,6 +62,20 @@ function Site() {
     const title = live.widget?.title;
     document.title = title ? `${title} · ${name}` : `Світло · ${name}`;
   }, [live.site, live.widget]);
+
+  if (live.notFound) {
+    return (
+      <div className="app">
+        <main className="screen card empty">
+          <h2>Такого будинку немає</h2>
+          <p>Перевірте адресу. Можливо, посилання застаріло.</p>
+          <a className="button" href="/">
+            На головну
+          </a>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="app">
@@ -72,7 +103,7 @@ function Site() {
           </Suspense>
         )}
       </Guard>
-      <Nav tab={tab} />
+      <Nav tab={tab} site={live.site} />
     </div>
   );
 }

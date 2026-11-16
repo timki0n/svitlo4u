@@ -36,18 +36,26 @@ export class SiteStateStore {
   private readonly states = new Map<string, SiteState>();
 
   constructor(sites: readonly SiteConfig[]) {
-    for (const site of sites) {
-      this.sites.set(site.id, site);
-      this.states.set(site.id, {
-        siteId: site.id,
-        power: "unknown",
-        since: null,
-        schedule: null,
-        lastEspAt: null,
-        lastPlugAt: null,
-        lastVoltage: null,
-      });
-    }
+    for (const site of sites) this.add(site);
+  }
+
+  /** A building added while the core runs (an owner created it in the bot). */
+  add(site: SiteConfig): void {
+    this.sites.set(site.id, site);
+    if (this.states.has(site.id)) return;
+    this.states.set(site.id, {
+      siteId: site.id,
+      power: "unknown",
+      since: null,
+      schedule: null,
+      lastEspAt: null,
+      lastPlugAt: null,
+      lastVoltage: null,
+    });
+  }
+
+  has(siteId: string): boolean {
+    return this.sites.has(siteId);
   }
 
   get(siteId: string): SiteState {

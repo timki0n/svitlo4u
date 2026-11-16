@@ -29,6 +29,9 @@ const site: SiteConfig = {
   name: "ЖК 4U",
   tz: KYIV_TZ,
   linkUrl: "https://svitlo4u.info",
+  access: "public",
+  scene: "4u",
+  origin: "config",
   yasno: { region: 25, dso: 902, group: "12.1" },
   esp: [
     {

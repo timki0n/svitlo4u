@@ -23,6 +23,7 @@ import {
   gameSolves,
   gameUnlocks,
   heartbeatMinutes,
+  hubs,
   notificationOutbox,
   outages,
   powerEvents,
@@ -31,10 +32,12 @@ import {
   scheduleSnapshots,
   sites,
   telegramSubscribers,
+  telegramUsers,
   voltageSamples,
 } from "./schema.ts";
 
 export type SiteRow = typeof sites.$inferInsert;
+export type HubRow = typeof hubs.$inferSelect;
 export type OutboxItem = typeof notificationOutbox.$inferSelect;
 
 export type Store = ReturnType<typeof createStore>;
@@ -53,6 +56,85 @@ export function createStore(db: Db) {
       },
       list() {
         return db.select().from(sites).orderBy(asc(sites.id)).all();
+      },
+      /** Buildings their owners created in the bot (origin "owner"), oldest first. */
+      listOwned() {
+        return db
+          .select()
+          .from(sites)
+          .where(eq(sites.origin, "owner"))
+          .orderBy(asc(sites.updatedAt))
+          .all();
+      },
+      rename(id: string, name: string, now = Date.now()): boolean {
+        return (
+          db.update(sites).set({ name, updatedAt: now }).where(eq(sites.id, id)).run().changes > 0
+        );
+      },
+    },
+
+    hubs: {
+      get(id: string): HubRow | null {
+        return db.select().from(hubs).where(eq(hubs.id, id)).get() ?? null;
+      },
+      /** A hub made at the bench: its secret, no site and no owner yet. */
+      create(id: string, secret: string | null, now = Date.now()): HubRow {
+        const row = { id, secret, createdAt: now };
+        db.insert(hubs).values(row).run();
+        return store.hubs.get(id) as HubRow;
+      },
+      /** The row of a sites.yaml hub (its secret stays in the environment). */
+      ensure(id: string, siteId: string, now = Date.now()): HubRow {
+        db.insert(hubs)
+          .values({ id, secret: null, siteId, createdAt: now })
+          .onConflictDoNothing()
+          .run();
+        return store.hubs.get(id) as HubRow;
+      },
+      /** Bench hubs (with their own secret). */
+      listWithSecret(): HubRow[] {
+        return db
+          .select()
+          .from(hubs)
+          .where(sql`${hubs.secret} is not null`)
+          .orderBy(asc(hubs.createdAt))
+          .all();
+      },
+      listByOwner(userId: number): HubRow[] {
+        return db
+          .select()
+          .from(hubs)
+          .where(eq(hubs.ownerUserId, userId))
+          .orderBy(asc(hubs.claimedAt))
+          .all();
+      },
+      /** The owner takes the hub (and, for a new building, puts it there). */
+      claim(id: string, userId: number, siteId: string | null, now = Date.now()): void {
+        db.update(hubs)
+          .set({ ownerUserId: userId, claimedAt: now, ...(siteId !== null ? { siteId } : {}) })
+          .where(eq(hubs.id, id))
+          .run();
+      },
+      setOwner(id: string, userId: number | null, now = Date.now()): void {
+        db.update(hubs).set({ ownerUserId: userId, claimedAt: now }).where(eq(hubs.id, id)).run();
+      },
+    },
+
+    telegramUsers: {
+      site(userId: number): string | null {
+        return (
+          db
+            .select({ siteId: telegramUsers.siteId })
+            .from(telegramUsers)
+            .where(eq(telegramUsers.userId, userId))
+            .get()?.siteId ?? null
+        );
+      },
+      setSite(userId: number, siteId: string, now = Date.now()): void {
+        db.insert(telegramUsers)
+          .values({ userId, siteId, updatedAt: now })
+          .onConflictDoUpdate({ target: telegramUsers.userId, set: { siteId, updatedAt: now } })
+          .run();
       },
     },
 
@@ -800,6 +882,27 @@ export function createStore(db: Db) {
           if (store.telegram.unsubscribe(siteId, chatId, threadId)) return false;
           store.telegram.subscribe(siteId, chatId, threadId, now);
           return true;
+        });
+      },
+      /** Buildings a chat (topic) is subscribed to. */
+      sitesOf(chatId: number, threadId = 0): string[] {
+        return db
+          .select({ siteId: telegramSubscribers.siteId })
+          .from(telegramSubscribers)
+          .where(
+            and(eq(telegramSubscribers.chatId, chatId), eq(telegramSubscribers.threadId, threadId)),
+          )
+          .orderBy(asc(telegramSubscribers.createdAt))
+          .all()
+          .map((r) => r.siteId);
+      },
+      /** The chat (topic) follows this building only: its other subscriptions go. */
+      follow(siteId: string, chatId: number, threadId = 0, now = Date.now()): void {
+        db.transaction(() => {
+          for (const other of store.telegram.sitesOf(chatId, threadId)) {
+            if (other !== siteId) store.telegram.unsubscribe(other, chatId, threadId);
+          }
+          store.telegram.subscribe(siteId, chatId, threadId, now);
         });
       },
       /** A group became a supergroup: its chat id changed. */

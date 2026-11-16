@@ -52,7 +52,7 @@ describe("sites config", () => {
     expect(() => parseSitesConfig("sites: []", env)).toThrow(/sites config/);
   });
 
-  it("parses per-site Telegram settings with forum topics; one bot per site", () => {
+  it("parses per-site Telegram settings with forum topics; buildings may share a bot", () => {
     const telegram = (site: string, tokenEnv: string) => `
   - id: ${site}
     name: ${site}
@@ -80,13 +80,16 @@ describe("sites config", () => {
     expect(() => parseSitesConfig(`sites:${telegram("a", "TG_A")}`, env)).toThrow(
       /env TG_A \(bot of a\) is not set/,
     );
-    expect(() =>
-      parseSitesConfig(`sites:${telegram("a", "TG_A")}${telegram("b", "TG_B")}`, {
-        ...env,
-        TG_A: "1:x",
-        TG_B: "1:x",
-      }),
-    ).toThrow(/reuses another site's Telegram bot/);
+    // One bot, many buildings: a chat's commands answer for the building it follows.
+    const shared = parseSitesConfig(`sites:${telegram("a", "TG_A")}${telegram("b", "TG_B")}`, {
+      ...env,
+      TG_A: "1:x",
+      TG_B: "1:x",
+    });
+    expect(shared.map((s) => [s.id, s.telegram?.botToken, s.telegram?.commands])).toEqual([
+      ["a", "1:x", true],
+      ["b", "1:x", true],
+    ]);
     expect(() =>
       parseSitesConfig(`sites:${telegram("a", "TG_A").replace('"-1001"', '"@chan"')}`, {
         ...env,
@@ -148,12 +151,27 @@ sites:
       commands: false,
       announce: ["power", "voltage"],
     });
-    expect(() =>
-      parseSitesConfig(yaml.replace("commands: false, ", ""), {
-        ...env,
-        TG_4U: "1:x",
-        HUB_SECRET: "h",
-      }),
-    ).toThrow(/reuses another site's Telegram bot/);
+  });
+
+  it("a building is public unless said otherwise, has no 3D figure, and cannot take a reserved address", () => {
+    const yaml = (extra: string, id = "a") => `
+sites:
+  - id: ${id}
+    name: A
+    yasno: { region: 25, dso: 902, group: "1.1" }
+    devices:
+      - { id: esp-a, kind: esp, transport: http, secretEnv: ESP_4U_SECRET }
+${extra}`;
+    expect(parseSitesConfig(yaml(""), env)[0]).toMatchObject({
+      access: "public",
+      scene: "none",
+      origin: "config",
+    });
+    expect(parseSitesConfig(yaml("    access: link\n    scene: 4u"), env)[0]).toMatchObject({
+      access: "link",
+      scene: "4u",
+    });
+    expect(() => parseSitesConfig(yaml("", "my"), env)).toThrow(/reserved/);
+    expect(() => parseSitesConfig(yaml("", "api"), env)).toThrow(/reserved/);
   });
 });

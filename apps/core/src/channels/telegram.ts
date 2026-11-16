@@ -1,10 +1,17 @@
 /**
- * Telegram channel: one grammY bot per site (a site may keep a bot of its own, e.g. a legacy one
- * with its subscribers). Announcements go through the outbox; command replies are sent directly.
+ * Telegram channel: one grammY bot per token, shared by the buildings that use it (a building may
+ * keep a bot of its own, e.g. a legacy one with its subscribers). Announcements go through the
+ * outbox; command replies are sent directly.
  *
- * Updates arrive by webhook (`POST /telegram/:siteId`, checked with the secret token header) or,
- * without a public URL, by long polling. `shadow` sites send every announcement to the admin chat
- * only, with measured latency — the new core runs next to the legacy bots until switch-over.
+ * One bot, many buildings: a chat talks about the building it follows — a chat named in
+ * sites.yaml, a /sub or t.me/<bot>?start=<building> (startgroup for a group), a person's own
+ * building — else about the bot's home (the first building in sites.yaml, ЖК 4U). The sticker of
+ * a hub opens /start own-<hub>-<code>: its owner claims it and creates the building (ownership.ts).
+ *
+ * Updates arrive by webhook (`POST /telegram/<home building>`, checked with the secret token
+ * header) or, without a public URL, by long polling. `shadow` sites send every announcement to the
+ * admin chat only, with measured latency — the new core runs next to the legacy bots until
+ * switch-over.
  */
 import { createHash, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -22,6 +29,7 @@ import { Bot, type Context, GrammyError, HttpError, InputFile, type Transformer 
 import type { Update, UserFromGetMe } from "grammy/types";
 import type { Clock, Timer } from "../runtime/clock.ts";
 import type { ScheduleImages } from "../services/images.ts";
+import { cleanName, type HubOwnership, YASNO_FEEDS, YASNO_GROUPS } from "../services/ownership.ts";
 import { lastFixedSchedule } from "../services/schedule.ts";
 import type { SiteStateStore } from "../services/state.ts";
 import {
@@ -31,10 +39,18 @@ import {
   type TelegramSiteConfig,
 } from "../sites-config.ts";
 import {
+  CLAIM_BAD_CODE_TEXT,
+  CLAIM_FAILED_TEXT,
+  CLAIM_PRIVATE_TEXT,
+  CLAIM_TAKEN_TEXT,
+  claimGroupText,
+  claimNameText,
   escapeHtml,
   FEED_USAGE_TEXT,
   feedText,
+  followText,
   latencyFooter,
+  ownerWelcomeText,
   SUB_ADMINS_ONLY_TEXT,
   shadowHeader,
   startText,
@@ -67,6 +83,8 @@ export type AnnounceOptions = {
 export type AdminReports = {
   health: (siteId: string) => string;
   stats: (siteId: string) => string;
+  /** /hubs: every hub, its building, owner and last report. */
+  hubs?: () => string;
 };
 
 export type TelegramDeps = {
@@ -94,6 +112,8 @@ export type TelegramDeps = {
   images?: ScheduleImages | null;
   /** How long the /feed notice stays in the topic. */
   noticeMs?: number;
+  /** Hub owners (claims by the sticker's QR, their buildings); null: no hubs. */
+  ownership?: () => HubOwnership | null;
 };
 
 const COMMANDS = [
@@ -117,6 +137,9 @@ const DEAD_CHAT = [
 ];
 
 const SEND_OPTIONS = { parse_mode: "HTML", link_preview_options: { is_disabled: true } } as const;
+/** Messages, plus the buttons of a hub's claim. */
+const ALLOWED_UPDATES: ("message" | "callback_query")[] = ["message", "callback_query"];
+const DEFAULT_HOUSE_NAME = "Мій дім";
 /** Telegram's caption limit, in characters of the rendered text. */
 const CAPTION_MAX = 1024;
 /** Room for the latency footer that shadow copies get at send time. */
@@ -156,11 +179,15 @@ function matches(targets: readonly ChatTarget[], chatId: number, threadId: numbe
   return targets.some((t) => t.chatId === chatId && t.threadId === threadId);
 }
 
-class SiteBot {
-  readonly site: SiteConfig;
-  readonly config: TelegramSiteConfig;
+/** One bot (token), shared by the buildings that name it in sites.yaml (and the owners' ones). */
+class BotConn {
   readonly bot: Bot;
   readonly secret: string;
+  /** Buildings on this bot in config order; the first receiving one is its home. */
+  readonly siteIds: string[] = [];
+  /** Some building on it receives updates (commands, moderation). */
+  receiving = false;
+  handled = false;
   ready = false;
   /** Set up with Telegram since the start (commands, webhook): the network is good for sends. */
   connected = false;
@@ -168,11 +195,9 @@ class SiteBot {
   private nextSendAt = 0;
   private readonly admins = new Map<string, { admin: boolean; until: number }>();
 
-  constructor(site: SiteConfig, config: TelegramSiteConfig, deps: TelegramDeps) {
-    this.site = site;
-    this.config = config;
-    this.secret = webhookSecret(config.botToken);
-    this.bot = new Bot(config.botToken, {
+  constructor(token: string, deps: TelegramDeps) {
+    this.secret = webhookSecret(token);
+    this.bot = new Bot(token, {
       ...(deps.botInfo ? { botInfo: deps.botInfo } : {}),
       client: { timeoutSeconds: 15 },
     });
@@ -207,14 +232,24 @@ class SiteBot {
   }
 }
 
+/** A building's side of its bot: its chats, admin chat, shadow mode. */
+type SiteBot = { site: SiteConfig; config: TelegramSiteConfig; conn: BotConn };
+
+/** The claim of a hub without a building, between the scan and the name (by Telegram user). */
+type PendingClaim = { hubId: string; group: string | null; until: number };
+const CLAIM_TTL_MS = 30 * 60_000;
+
 export class TelegramChannel {
   private readonly deps: TelegramDeps;
   private readonly bots = new Map<string, SiteBot>();
+  private readonly conns = new Map<string, BotConn>();
+  private readonly pending = new Map<number, PendingClaim>();
   private readonly retryTimers = new Set<NodeJS.Timeout>();
   /** Delayed deletions of /feed notices; run at once on stop. */
   private readonly cleanups = new Map<NodeJS.Timeout, () => Promise<unknown>>();
   /** Uploaded pictures: file → Telegram file_id, so other chats get it without a new upload. */
   private readonly photoIds = new Map<string, string>();
+  private started = false;
   private stopped = false;
   /** Until then sends wait for the bot to connect; later they go anyway. */
   private holdUntil: number;
@@ -223,18 +258,36 @@ export class TelegramChannel {
   constructor(deps: TelegramDeps) {
     this.deps = deps;
     this.holdUntil = deps.clock.now() + SEND_HOLD_MAX_MS;
-    for (const site of deps.sites) {
-      if (!site.telegram) continue;
-      const siteBot = new SiteBot(site, site.telegram, deps);
-      if (site.telegram.shadow && site.telegram.adminChatId === undefined) {
-        deps.log.warn(
-          { site: site.id },
-          "telegram shadow mode without adminChatId: nothing is sent",
-        );
-      }
-      this.setupHandlers(siteBot);
-      this.bots.set(site.id, siteBot);
+    for (const site of deps.sites) this.attach(site);
+    for (const conn of this.conns.values()) if (conn.receiving) this.setupHandlers(conn);
+  }
+
+  /** A building added while the core runs: it joins its bot (the home bot for owners' ones). */
+  addSite(site: SiteConfig): void {
+    const conn = this.attach(site);
+    if (!conn) return;
+    if (conn.receiving && !conn.handled) this.setupHandlers(conn);
+    if (this.started && !conn.ready) void this.connect(conn);
+  }
+
+  private attach(site: SiteConfig): BotConn | null {
+    if (!site.telegram || this.bots.has(site.id)) return this.bots.get(site.id)?.conn ?? null;
+    const config = site.telegram;
+    let conn = this.conns.get(config.botToken);
+    if (!conn) {
+      conn = new BotConn(config.botToken, this.deps);
+      this.conns.set(config.botToken, conn);
     }
+    if (config.shadow && config.adminChatId === undefined) {
+      this.deps.log.warn(
+        { site: site.id },
+        "telegram shadow mode without adminChatId: nothing is sent",
+      );
+    }
+    conn.siteIds.push(site.id);
+    if (config.commands) conn.receiving = true;
+    this.bots.set(site.id, { site, config, conn });
+    return conn;
   }
 
   get enabled(): boolean {
@@ -242,13 +295,21 @@ export class TelegramChannel {
   }
 
   bot(siteId: string): Bot | null {
-    return this.bots.get(siteId)?.bot ?? null;
+    return this.bots.get(siteId)?.conn.bot ?? null;
+  }
+
+  /** The @username of the bot that receives updates (t.me links), null until it has connected. */
+  botUsername(): string | null {
+    for (const conn of this.conns.values()) {
+      if (conn.receiving && conn.bot.isInited()) return conn.bot.botInfo.username;
+    }
+    return null;
   }
 
   /** The outbox may send for the site: its bot has connected, or waiting for it took too long. */
   canSend(siteId: string): boolean {
     const siteBot = this.bots.get(siteId);
-    return !siteBot || siteBot.connected || this.deps.clock.now() >= this.holdUntil;
+    return !siteBot || siteBot.conn.connected || this.deps.clock.now() >= this.holdUntil;
   }
 
   /** Queue a message for the site's chats and subscribers (only the admin chat in shadow mode). */
@@ -328,6 +389,25 @@ export class TelegramChannel {
     if (items.length > 0) this.deps.outbox.enqueue(items);
   }
 
+  /** Message the owners of the building's hubs in their private chats (not the admin twice). */
+  toOwners(siteId: string, text: string, options: { silent?: boolean } = {}): number {
+    const siteBot = this.bots.get(siteId);
+    const ownership = this.deps.ownership?.();
+    if (!siteBot || !ownership) return 0;
+    const owners = ownership
+      .ownersOf(siteId)
+      .filter((userId) => userId !== siteBot.config.adminChatId);
+    return this.deps.outbox.enqueue(
+      owners.map((userId) => ({
+        siteId,
+        channel: TELEGRAM,
+        target: String(userId),
+        kind: "owner",
+        payload: { text, ...(options.silent ? { silent: true } : {}) } satisfies TelegramPayload,
+      })),
+    );
+  }
+
   /** Configured chats + /sub subscribers, without duplicates. */
   private audience(siteId: string, config: TelegramSiteConfig): string[] {
     const targets = new Set(config.chats.map(formatTarget));
@@ -341,9 +421,10 @@ export class TelegramChannel {
   readonly send = async (item: OutboxItem): Promise<DeliveryResult> => {
     const siteBot = this.bots.get(item.siteId);
     if (!siteBot) return { status: "failed", error: `no Telegram bot for site ${item.siteId}` };
+    const { bot } = siteBot.conn;
     const payload = JSON.parse(item.payloadJson) as TelegramPayload;
     const target = parseChatTarget(item.target);
-    await siteBot.pace(this.deps.paceMs ?? 40);
+    await siteBot.conn.pace(this.deps.paceMs ?? 40);
     let text = payload.text;
     if (payload.latency) {
       text += `\n\n${latencyFooter(payload.latency.eventAt, payload.latency.detectedAt, this.deps.clock.now())}`;
@@ -352,7 +433,7 @@ export class TelegramChannel {
       const known = this.photoIds.get(payload.photo);
       if (known || existsSync(payload.photo)) {
         try {
-          const message = await siteBot.bot.api.sendPhoto(
+          const message = await bot.api.sendPhoto(
             target.chatId,
             known ?? new InputFile(payload.photo),
             {
@@ -372,7 +453,7 @@ export class TelegramChannel {
       if (!text) return { status: "failed", error: "picture file is gone", quiet: true };
     }
     try {
-      await siteBot.bot.api.sendMessage(target.chatId, text, {
+      await bot.api.sendMessage(target.chatId, text, {
         ...SEND_OPTIONS,
         ...(target.threadId !== null ? { message_thread_id: target.threadId } : {}),
         ...(payload.silent ? { disable_notification: true } : {}),
@@ -442,24 +523,84 @@ export class TelegramChannel {
 
   // ─── updates ────────────────────────────────────────────────────────────────────────────
 
-  private setupHandlers(siteBot: SiteBot): void {
-    const { bot, config, site } = siteBot;
+  /** The bot's home building: answers chats that follow nothing (ЖК 4U). */
+  private home(conn: BotConn): SiteBot {
+    const id = conn.siteIds.find((s) => this.bots.get(s)?.config.commands) ?? conn.siteIds[0];
+    return this.bots.get(id as string) as SiteBot;
+  }
+
+  /**
+   * The building a chat talks about: a chat named in sites.yaml, then what the chat (topic) follows,
+   * then a person's own building in a private chat, then the bot's home.
+   */
+  private siteFor(conn: BotConn, ctx: Context): SiteBot {
+    const chatId = ctx.chat?.id;
+    if (chatId === undefined) return this.home(conn);
+    const sites = conn.siteIds.map((id) => this.bots.get(id) as SiteBot);
+    const configured = sites.find(({ config }) =>
+      [...config.chats, ...config.blockedChats, ...config.silentChats].some(
+        (t) => t.chatId === chatId,
+      ),
+    );
+    if (configured) return configured;
+    const msg = ctx.message;
+    const thread = msg ? topicOf(msg) : 0;
+    for (const threadId of thread ? [thread, 0] : [0]) {
+      const follows = this.deps.store.telegram
+        .sitesOf(chatId, threadId)
+        .filter((id) => conn.siteIds.includes(id));
+      const last = follows.at(-1);
+      if (last) return this.bots.get(last) as SiteBot;
+    }
+    if (ctx.chat?.type === "private" && ctx.from) {
+      const mine = this.deps.store.telegramUsers.site(ctx.from.id);
+      if (mine && conn.siteIds.includes(mine)) return this.bots.get(mine) as SiteBot;
+    }
+    return this.home(conn);
+  }
+
+  /** An admin command's building: its first word when it names one, else the chat's. */
+  private adminSite(conn: BotConn, ctx: Context): { siteBot: SiteBot; rest: string } {
+    const match = typeof ctx.match === "string" ? ctx.match.trim() : "";
+    const [first = "", ...words] = match.split(/\s+/);
+    const named = conn.siteIds.includes(first.replace(/:$/, ""))
+      ? this.bots.get(first.replace(/:$/, ""))
+      : undefined;
+    return named
+      ? { siteBot: named, rest: words.join(" ") }
+      : { siteBot: this.siteFor(conn, ctx), rest: match };
+  }
+
+  private setupHandlers(conn: BotConn): void {
+    conn.handled = true;
+    const { bot } = conn;
     const { state, store, clock, reports } = this.deps;
-    const reply = (ctx: Context, text: string) => ctx.reply(text, SEND_OPTIONS);
+    const reply = (ctx: Context, text: string, extra: object = {}) =>
+      ctx.reply(text, { ...SEND_OPTIONS, ...extra });
+    const configs = () => conn.siteIds.map((id) => (this.bots.get(id) as SiteBot).config);
     const isAdminChat = (ctx: Context) =>
-      config.adminChatId !== undefined && ctx.chat?.id === config.adminChatId;
+      ctx.chat !== undefined && configs().some((c) => c.adminChatId === ctx.chat?.id);
     // The developer: the user behind a private admin chat (user ids are positive, groups are not).
     const isOwner = (ctx: Context) =>
-      config.adminChatId !== undefined &&
-      config.adminChatId > 0 &&
-      ctx.from?.id === config.adminChatId;
+      ctx.from !== undefined &&
+      configs().some(
+        (c) => c.adminChatId !== undefined && c.adminChatId > 0 && c.adminChatId === ctx.from?.id,
+      );
+    const isGroupAdmin = async (ctx: Context) => {
+      const chatId = ctx.chat?.id as number;
+      const msg = ctx.message;
+      return (
+        isAdminChat(ctx) ||
+        msg?.sender_chat?.id === chatId ||
+        (msg?.from !== undefined && (await conn.isChatAdmin(ctx, chatId, msg.from.id)))
+      );
+    };
 
     bot.on("message", async (ctx, next) => {
       const msg = ctx.message;
       const chatId = msg.chat.id;
-      if (chatId === config.adminChatId || msg.chat.type === "private" || isOwner(ctx)) {
-        return next();
-      }
+      if (isAdminChat(ctx) || msg.chat.type === "private" || isOwner(ctx)) return next();
+      const { site, config } = this.siteFor(conn, ctx);
       const threadId = msg.message_thread_id ?? null;
       const isCommand = msg.entities?.some((e) => e.type === "bot_command" && e.offset === 0);
       if (isCommand && matches(config.blockedChats, chatId, threadId)) {
@@ -472,7 +613,7 @@ export class TelegramChannel {
         const fromAdmin =
           msg.sender_chat?.id === chatId ||
           msg.is_automatic_forward === true ||
-          (msg.from !== undefined && (await siteBot.isChatAdmin(ctx, chatId, msg.from.id)));
+          (msg.from !== undefined && (await conn.isChatAdmin(ctx, chatId, msg.from.id)));
         if (!fromAdmin) {
           await ctx.deleteMessage().catch(() => {});
           return;
@@ -481,9 +622,34 @@ export class TelegramChannel {
       return next();
     });
 
-    bot.command("start", (ctx) => reply(ctx, startText(site)));
+    bot.command("start", async (ctx) => {
+      const payload = ctx.match.trim();
+      if (payload.startsWith("own-")) {
+        await this.onClaim(conn, ctx, payload);
+        return;
+      }
+      const target = payload ? this.bots.get(payload) : undefined;
+      if (!target || target.conn !== conn) {
+        await reply(ctx, startText(this.siteFor(conn, ctx).site));
+        return;
+      }
+      // t.me/<bot>?start=<building> (a person) or ?startgroup=<building> (a group): follow it.
+      if (ctx.chat.type !== "private" && !(await isGroupAdmin(ctx))) {
+        await reply(ctx, SUB_ADMINS_ONLY_TEXT);
+        return;
+      }
+      const msg = ctx.message;
+      store.telegram.follow(target.site.id, ctx.chat.id, msg ? topicOf(msg) : 0, clock.now());
+      if (ctx.chat.type === "private" && ctx.from)
+        store.telegramUsers.setSite(ctx.from.id, target.site.id, clock.now());
+      await reply(ctx, `${startText(target.site)}\n\n${followText(target.site)}`);
+      this.alert(target.site.id, `🔔 /start ${target.site.id}: ${describeSender(ctx)} підписався`, {
+        silent: true,
+      });
+    });
 
     bot.command("status", async (ctx) => {
+      const { site, config } = this.siteFor(conn, ctx);
       const now = clock.now();
       const current = state.get(site.id);
       await reply(
@@ -506,6 +672,7 @@ export class TelegramChannel {
     });
 
     const dayCommand = (which: "today" | "tomorrow") => async (ctx: Context) => {
+      const { site } = this.siteFor(conn, ctx);
       const schedule = state.get(site.id).schedule;
       const text = { tz: site.tz, linkUrl: site.linkUrl };
       if (!schedule) {
@@ -531,17 +698,13 @@ export class TelegramChannel {
     bot.command("tomorrow", dayCommand("tomorrow"));
 
     bot.command("sub", async (ctx) => {
+      const { site } = this.siteFor(conn, ctx);
       const chatId = ctx.chat.id;
       const msg = ctx.message;
       // In a group /sub (un)subscribes everyone there: only the group's admins may do it.
-      if (ctx.chat.type !== "private" && !isAdminChat(ctx)) {
-        const admin =
-          msg?.sender_chat?.id === chatId ||
-          (msg?.from !== undefined && (await siteBot.isChatAdmin(ctx, chatId, msg.from.id)));
-        if (!admin) {
-          await reply(ctx, SUB_ADMINS_ONLY_TEXT);
-          return;
-        }
+      if (ctx.chat.type !== "private" && !(await isGroupAdmin(ctx))) {
+        await reply(ctx, SUB_ADMINS_ONLY_TEXT);
+        return;
       }
       const threadId = msg ? topicOf(msg) : 0;
       const subscribed = store.telegram.toggle(site.id, chatId, threadId, clock.now());
@@ -561,6 +724,7 @@ export class TelegramChannel {
         await reply(ctx, FEED_USAGE_TEXT);
         return;
       }
+      const { site } = this.siteFor(conn, ctx);
       const chatId = ctx.chat.id;
       const threadId = topicOf(msg);
       const on = !/^(off|вимк)/i.test(ctx.match.trim());
@@ -592,15 +756,21 @@ export class TelegramChannel {
       );
     });
 
-    // Admin chat only.
+    // Admin chat only. The first word may name the building (`/health hub-test`).
     bot.command("health", async (ctx) => {
-      if (isAdminChat(ctx)) await reply(ctx, reports.health(site.id));
+      if (isAdminChat(ctx))
+        await reply(ctx, reports.health(this.adminSite(conn, ctx).siteBot.site.id));
     });
     bot.command("stats", async (ctx) => {
-      if (isAdminChat(ctx)) await reply(ctx, reports.stats(site.id));
+      if (isAdminChat(ctx))
+        await reply(ctx, reports.stats(this.adminSite(conn, ctx).siteBot.site.id));
+    });
+    bot.command("hubs", async (ctx) => {
+      if (isAdminChat(ctx)) await reply(ctx, reports.hubs?.() ?? "Хабів немає.");
     });
     bot.command("testscreenshot", async (ctx) => {
       if (!isAdminChat(ctx)) return;
+      const { siteBot } = this.adminSite(conn, ctx);
       const day = /завтра|tomorrow/i.test(ctx.match) ? "tomorrow" : "today";
       const which = day === "today" ? "сьогодні" : "завтра";
       const images = this.deps.images;
@@ -608,7 +778,7 @@ export class TelegramChannel {
         await reply(ctx, "Картинки вимкнено: не задано RENDERER_CDP_URL.");
         return;
       }
-      const file = await images.render(site.id, day);
+      const file = await images.render(siteBot.site.id, day);
       if (!file) {
         await reply(
           ctx,
@@ -620,38 +790,203 @@ export class TelegramChannel {
     });
     bot.command("notify", async (ctx) => {
       if (!isAdminChat(ctx)) return;
-      const text = ctx.match.trim();
+      const { siteBot, rest } = this.adminSite(conn, ctx);
+      const text = rest.trim();
       if (!text) {
-        await reply(ctx, "Використання: /notify текст (HTML) — розсилка в усі чати локації.");
+        await reply(
+          ctx,
+          "Використання: /notify [будинок] текст (HTML) — розсилка в усі чати будинку (без нього — домашнього).",
+        );
         return;
       }
-      const queued = this.announce(site.id, "manual", text);
+      const queued = this.announce(siteBot.site.id, "manual", text);
       await reply(
         ctx,
-        config.shadow
+        siteBot.config.shadow
           ? `🧪 shadow: копія піде лише сюди (${queued}).`
           : `✅ Поставлено в чергу: ${queued}.`,
       );
     });
 
+    // The claim of a hub without a building: the group, then the name.
+    bot.on("callback_query:data", async (ctx) => {
+      const data = ctx.callbackQuery.data;
+      const userId = ctx.from.id;
+      const claim = this.pendingClaim(userId);
+      const group = /^g:(hub-[0-9a-f]{6}):(\d\.\d)$/.exec(data);
+      const noName = /^n:(hub-[0-9a-f]{6})$/.exec(data);
+      await ctx.answerCallbackQuery().catch(() => {});
+      if (!claim) return;
+      if (group && claim.hubId === group[1]) {
+        claim.group = group[2] as string;
+        await ctx
+          .editMessageText(claimNameText(claim.group), {
+            ...SEND_OPTIONS,
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: `Без назви: «${DEFAULT_HOUSE_NAME}»`, callback_data: `n:${claim.hubId}` }],
+              ],
+            },
+          })
+          .catch(() => {});
+        return;
+      }
+      if (noName && claim.hubId === noName[1] && claim.group) {
+        await this.finishClaim(conn, ctx, userId, claim, DEFAULT_HOUSE_NAME);
+      }
+    });
+
+    // The building's name: the next plain text of a person in the middle of a claim.
+    bot.on("message:text", async (ctx, next) => {
+      const claim = ctx.chat.type === "private" ? this.pendingClaim(ctx.from.id) : null;
+      if (!claim?.group || ctx.message.text.startsWith("/")) return next();
+      const name = cleanName(ctx.message.text);
+      if (!name) return next();
+      await this.finishClaim(conn, ctx, ctx.from.id, claim, name);
+    });
+
     bot.catch((err) => {
-      this.deps.log.error({ site: site.id, err: err.error }, "telegram update failed");
+      this.deps.log.error(
+        { site: this.home(conn).site.id, err: err.error },
+        "telegram update failed",
+      );
     });
   }
 
-  /** Webhook endpoint. Answers at once; the update is handled in the background. */
+  private pendingClaim(userId: number): PendingClaim | null {
+    const claim = this.pending.get(userId);
+    if (!claim) return null;
+    if (claim.until > this.deps.clock.now()) return claim;
+    this.pending.delete(userId);
+    return null;
+  }
+
+  /** /start own-<hub>-<code>: the sticker's QR. */
+  private async onClaim(conn: BotConn, ctx: Context, payload: string): Promise<void> {
+    const reply = (text: string, extra: object = {}) =>
+      ctx.reply(text, { ...SEND_OPTIONS, ...extra });
+    const ownership = this.deps.ownership?.();
+    if (!ownership) return;
+    if (ctx.chat?.type !== "private" || !ctx.from) {
+      await reply(CLAIM_PRIVATE_TEXT);
+      return;
+    }
+    const result = ownership.claim(payload, ctx.from.id);
+    switch (result.kind) {
+      case "bad-code":
+        await reply(CLAIM_BAD_CODE_TEXT);
+        return;
+      case "taken":
+        await reply(CLAIM_TAKEN_TEXT);
+        return;
+      case "mine":
+        if (result.site) await this.welcomeOwner(conn, ctx, result.site, result.hubId);
+        else await this.askGroup(ctx, result.hubId);
+        return;
+      case "claimed":
+        this.alert(
+          result.site.id,
+          `🔑 ${result.hubId}: новий власник ${describeSender(ctx)} («${escapeHtml(result.site.name)}»)`,
+          { silent: true },
+        );
+        await this.welcomeOwner(conn, ctx, result.site, result.hubId);
+        return;
+      case "needs-building":
+        await this.askGroup(ctx, result.hubId);
+        return;
+    }
+  }
+
+  private async askGroup(ctx: Context, hubId: string): Promise<void> {
+    const userId = ctx.from?.id as number;
+    this.pending.set(userId, { hubId, group: null, until: this.deps.clock.now() + CLAIM_TTL_MS });
+    const rows: { text: string; callback_data: string }[][] = [];
+    for (let i = 0; i < YASNO_GROUPS.length; i += 4) {
+      rows.push(
+        YASNO_GROUPS.slice(i, i + 4).map((g) => ({ text: g, callback_data: `g:${hubId}:${g}` })),
+      );
+    }
+    await ctx.reply(claimGroupText(hubId), {
+      ...SEND_OPTIONS,
+      reply_markup: { inline_keyboard: rows },
+    });
+  }
+
+  private async finishClaim(
+    conn: BotConn,
+    ctx: Context,
+    userId: number,
+    claim: PendingClaim,
+    name: string,
+  ): Promise<void> {
+    this.pending.delete(userId);
+    const site = this.deps.ownership?.()?.createBuilding(claim.hubId, userId, {
+      name,
+      feed: YASNO_FEEDS[0],
+      group: claim.group as string,
+    });
+    if (!site) {
+      await ctx.reply(CLAIM_FAILED_TEXT, SEND_OPTIONS);
+      return;
+    }
+    this.alert(
+      site.id,
+      `🏠 ${claim.hubId}: новий будинок «${escapeHtml(site.name)}» (${site.id}, черга ${site.yasno.group}), власник ${describeSender(ctx)}`,
+      { silent: true },
+    );
+    await this.welcomeOwner(conn, ctx, site, claim.hubId);
+  }
+
+  /** The owner follows the building in their private chat; buttons: «Мій хаб», the group. */
+  private async welcomeOwner(
+    conn: BotConn,
+    ctx: Context,
+    site: SiteConfig,
+    hubId: string,
+  ): Promise<void> {
+    const { store, clock } = this.deps;
+    const userId = ctx.from?.id as number;
+    store.telegram.follow(site.id, userId, 0, clock.now());
+    store.telegramUsers.setSite(userId, site.id, clock.now());
+    const username = conn.bot.isInited() ? conn.bot.botInfo.username : null;
+    const webApp = site.telegram?.webApp ?? this.home(conn).config.webApp;
+    const keyboard = [
+      ...(webApp
+        ? [[{ text: "Мій хаб", web_app: { url: `${webApp.url.replace(/\/+$/, "")}/my` } }]]
+        : []),
+      ...(username
+        ? [
+            [
+              {
+                text: "Додати бота в чат будинку",
+                url: `https://t.me/${username}?startgroup=${site.id}`,
+              },
+            ],
+          ]
+        : []),
+    ];
+    await ctx.reply(ownerWelcomeText(site, hubId), {
+      ...SEND_OPTIONS,
+      ...(keyboard.length > 0 ? { reply_markup: { inline_keyboard: keyboard } } : {}),
+    });
+  }
+
+  /** Webhook endpoint (`/telegram/<the bot's home building>`). The update is handled in the background. */
   registerRoutes(app: FastifyInstance): void {
     if (this.deps.updates !== "webhook") return;
     app.post<{ Params: { siteId: string } }>("/telegram/:siteId", async (request, reply) => {
       const siteBot = this.bots.get(request.params.siteId);
-      if (!siteBot?.config.commands) return reply.code(404).send();
+      const conn = siteBot?.conn;
+      if (!conn?.receiving || this.home(conn).site.id !== request.params.siteId) {
+        return reply.code(404).send();
+      }
       const header = request.headers["x-telegram-bot-api-secret-token"];
-      if (typeof header !== "string" || !safeEqual(header, siteBot.secret)) {
+      if (typeof header !== "string" || !safeEqual(header, conn.secret)) {
         return reply.code(401).send();
       }
-      if (!siteBot.ready) return reply.code(503).send();
-      void siteBot.bot.handleUpdate(request.body as Update).catch((err: unknown) => {
-        this.deps.log.error({ site: siteBot.site.id, err }, "telegram update failed");
+      if (!conn.ready) return reply.code(503).send();
+      void conn.bot.handleUpdate(request.body as Update).catch((err: unknown) => {
+        this.deps.log.error({ site: request.params.siteId, err }, "telegram update failed");
       });
       return reply.code(200).send();
     });
@@ -659,6 +994,7 @@ export class TelegramChannel {
 
   /** Connect bots in the background: getMe, commands menu, webhook or polling. Never blocks. */
   start(): void {
+    this.started = true;
     this.stopped = false;
     const { clock, outbox } = this.deps;
     this.holdUntil = clock.now() + SEND_HOLD_MAX_MS;
@@ -667,7 +1003,7 @@ export class TelegramChannel {
       this.holdTimer = null;
       outbox.resume();
     });
-    for (const siteBot of this.bots.values()) void this.connect(siteBot);
+    for (const conn of this.conns.values()) void this.connect(conn);
   }
 
   async stop(): Promise<void> {
@@ -688,20 +1024,21 @@ export class TelegramChannel {
       ]);
     }
     await Promise.all(
-      [...this.bots.values()].filter((b) => b.polling).map((b) => b.bot.stop().catch(() => {})),
+      [...this.conns.values()].filter((c) => c.polling).map((c) => c.bot.stop().catch(() => {})),
     );
   }
 
-  private async connect(siteBot: SiteBot): Promise<void> {
+  private async connect(conn: BotConn): Promise<void> {
     if (this.stopped) return;
-    const { bot, config, site } = siteBot;
+    const { bot } = conn;
+    const { site, config } = this.home(conn);
     const { log, updates, publicUrl } = this.deps;
     try {
       if (!bot.isInited()) await bot.init();
-      siteBot.ready = true;
-      if (!config.commands || updates === "off") {
+      conn.ready = true;
+      if (!conn.receiving || updates === "off") {
         log.info({ site: site.id, bot: bot.botInfo.username }, "telegram bot ready (send only)");
-        this.markConnected(siteBot);
+        this.markConnected(conn);
         return;
       }
       await bot.api.setMyCommands(COMMANDS);
@@ -716,31 +1053,34 @@ export class TelegramChannel {
       }
       if (updates === "webhook" && publicUrl) {
         await bot.api.setWebhook(`${publicUrl.replace(/\/$/, "")}/telegram/${site.id}`, {
-          secret_token: siteBot.secret,
-          allowed_updates: ["message"],
+          secret_token: conn.secret,
+          allowed_updates: ALLOWED_UPDATES,
         });
-        log.info({ site: site.id, bot: bot.botInfo.username }, "telegram webhook set");
+        log.info(
+          { site: site.id, sites: conn.siteIds.length, bot: bot.botInfo.username },
+          "telegram webhook set",
+        );
       } else if (updates === "polling") {
-        siteBot.polling = true;
+        conn.polling = true;
         void bot
-          .start({ allowed_updates: ["message"], drop_pending_updates: true })
+          .start({ allowed_updates: ALLOWED_UPDATES, drop_pending_updates: true })
           .catch((err: unknown) => {
-            siteBot.polling = false;
+            conn.polling = false;
             log.error({ site: site.id, err }, "telegram polling stopped");
-            this.retry(siteBot);
+            this.retry(conn);
           });
         log.info({ site: site.id, bot: bot.botInfo.username }, "telegram polling started");
       }
-      this.markConnected(siteBot);
+      this.markConnected(conn);
     } catch (err) {
       log.warn({ site: site.id, err: String(err) }, "telegram bot not connected, retrying in 30 s");
-      this.retry(siteBot);
+      this.retry(conn);
     }
   }
 
-  private markConnected(siteBot: SiteBot): void {
-    if (siteBot.connected) return;
-    siteBot.connected = true;
+  private markConnected(conn: BotConn): void {
+    if (conn.connected) return;
+    conn.connected = true;
     this.deps.outbox.resume();
   }
 
@@ -753,11 +1093,11 @@ export class TelegramChannel {
     this.cleanups.set(timer, run);
   }
 
-  private retry(siteBot: SiteBot): void {
+  private retry(conn: BotConn): void {
     if (this.stopped) return;
     const timer = setTimeout(() => {
       this.retryTimers.delete(timer);
-      void this.connect(siteBot);
+      void this.connect(conn);
     }, INIT_RETRY_MS);
     this.retryTimers.add(timer);
   }

@@ -83,7 +83,11 @@ The `cloudflared` image is pinned and Dependabot bumps it daily, so merging its 
 
 ### Telegram
 
-Each site with a `telegram` section in `config/sites.yaml` gets its own bot:
+One bot serves many buildings: the sites that name the same `botTokenEnv` share it, and so do the
+buildings hub owners create (below). A chat talks about the building it follows — a chat listed in
+the site's `chats`, a `/sub` or a `t.me/<bot>?start=<building>` link, `?startgroup=<building>` for
+a group (its admin adds the bot) — a person's own building in a private chat, else the first site
+in `config/sites.yaml` (ЖК 4U). A site may still have a bot of its own (another token):
 
 1. @BotFather → `/newbot` → put the token into `deploy/.env` under the name from `botTokenEnv`.
 2. For silent topics (`silentChats` or `/feed`) the bot must see all messages and delete them:
@@ -98,8 +102,10 @@ Each site with a `telegram` section in `config/sites.yaml` gets its own bot:
    too: @BotFather → `/mybots` → the bot → Bot Settings → Configure Mini App → the same URL.
 
 Commands: `/start`, `/status`, `/today`, `/tomorrow`, `/sub` (personal notifications); in the admin
-chat also `/health`, `/stats`, `/notify <HTML>` (announcement to all chats of the site) and
-`/testscreenshot [завтра]` (the schedule picture, to check how it looks).
+chat also `/health`, `/stats`, `/notify <HTML>` (announcement to all chats of the site),
+`/testscreenshot [завтра]` (the schedule picture, to check how it looks) and `/hubs` (every hub,
+its building, owner and last report). The first word of an admin command may name the building:
+`/health hub-test`, `/notify b-k3f9a7x2qm Текст`; without it the command is about ЖК 4U.
 
 `/feed` is for the developer only (the user of a private `adminChatId`) and is not in the menu.
 Sent in a group topic (or a group without topics), it subscribes that topic and makes it read-only:
@@ -123,6 +129,30 @@ Undelivered messages are retried for 30 minutes (5 s → 3 min backoff) and surv
 the admin chat hears about chats that reject messages, Yasno failures, zigbee2mqtt going offline
 (or not up 3 minutes after the start, e.g. no MQTT broker), a plug silent for 10 minutes while
 there is power, rejected heartbeats and core restarts (with the downtime).
+
+### Buildings and their addresses
+
+Every building has a page at `svitlo4u.info/<id>`; `svitlo4u.info` itself shows ЖК 4U (the first
+public site in `config/sites.yaml`) — or the building this browser opened last. In
+`config/sites.yaml`: `access: public` (default; listed in `/api/v1/sites`) or `link` (only by its
+address), `scene: 4u` for the 3D figure of ЖК 4U (and its window game; default: none). The Mini App
+opens the person's own building (the one they followed or opened last).
+
+### Hubs for other buildings
+
+A hub is made at the bench and claimed by its owner (docs/hub-protocol.md → Provisioning):
+
+1. Flash the hub (firmware/hub/README.md), plug it in by USB and run
+   `python firmware/hub/tools/factory.py --port COM6 --ssh <server>`: the server creates the hub
+   (`cli/hub.ts new` in the core's container), the hub gets its id and secret over USB, and
+   `hub-xxxxxx.html` is the sticker to print (60×40 mm) with the QR.
+2. The owner sets the hub up from its own Wi-Fi page, scans the QR: the bot asks for the Yasno
+   group and a name and creates the building (`b-…`, only by link). From then on the owner gets the
+   light notices and the hub's service ones, «Мій хаб» in the Mini App (rename, add the bot to the
+   building's group, release the hub) and the page of the building.
+
+No restart and no `config/sites.yaml` edit: such buildings and hubs live in the database (and its
+backups). `cli/hub.ts list` shows them, `cli/hub.ts link <hub>` reprints a sticker's link.
 
 ### Core: sites and history
 

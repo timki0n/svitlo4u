@@ -45,9 +45,16 @@ offers it to the hubs (docs/hub-protocol.md → Updates). A push without a new v
 
 ## Provision
 
-Each hub needs an id and a secret, the same as in the server's `config/sites.yaml` (`kind: hub`)
-and `deploy/.env`. Generate a secret (e.g. 32 random bytes as hex) and type in the USB console
-(115200, any terminal; one command per line):
+Each hub needs an id and a secret that the server knows. A hub for someone else's building comes
+from the bench script: the server creates it, the hub gets its identity over USB and a sticker
+with the owner's QR is written (deploy/README.md → Hubs for other buildings):
+
+```bash
+python tools/factory.py --port COM6 --ssh <server>
+```
+
+A hub of a site in `config/sites.yaml` (`kind: hub`, its secret in `deploy/.env`) is provisioned by
+hand in the USB console (115200, any terminal; one command per line):
 
 ```text
 provision hub-xxxxxx <secret>

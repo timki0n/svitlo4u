@@ -18,10 +18,8 @@ export function RenderSchedule({ siteId, which }: { siteId: string; which: "toda
 
   useEffect(() => {
     document.documentElement.dataset.render = "";
-    Promise.all([api.sites(), api.state(siteId), api.widget(siteId)])
-      .then(([{ sites }, state, widget]) =>
-        setData({ site: sites.find((s) => s.id === siteId) ?? null, state, widget }),
-      )
+    Promise.all([api.site(siteId), api.state(siteId), api.widget(siteId)])
+      .then(([site, state, widget]) => setData({ site, state, widget }))
       .catch((e: unknown) => {
         console.error(e);
         setFailed(true);
@@ -47,6 +45,8 @@ export function RenderSchedule({ siteId, which }: { siteId: string; which: "toda
     connection: "live",
     updatedAt: data.widget.now,
     error: false,
+    notFound: false,
+    me: null,
   };
 
   return (

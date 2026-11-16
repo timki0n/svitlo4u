@@ -23,6 +23,7 @@ import { HubVerifier, registerHubRoutes } from "./adapters/hub.ts";
 import { type MqttLike, type PlugAdapter, startPlugAdapter } from "./adapters/plug.ts";
 import { YasnoPoller } from "./adapters/yasno.ts";
 import { registerGame } from "./api/game.ts";
+import { registerMe } from "./api/me.ts";
 import { RateLimiter, registerApiGuards } from "./api/rate-limit.ts";
 import { registerApi } from "./api/routes.ts";
 import { Notifier } from "./channels/notifier.ts";
@@ -39,6 +40,7 @@ import { FirmwareService, loadFirmwareConfig, registerFirmwareRoute } from "./se
 import { GameService } from "./services/game.ts";
 import { HubPowerService } from "./services/hub-power.ts";
 import { ChromiumScheduleImages, type ScheduleImages } from "./services/images.ts";
+import { HubOwnership, type HubStatus, NO_STATUS } from "./services/ownership.ts";
 import { PowerService } from "./services/power.ts";
 import { ReminderService } from "./services/reminders.ts";
 import { ScheduleService } from "./services/schedule.ts";
@@ -85,6 +87,8 @@ export type Core = {
   power: Map<string, PowerService>;
   /** Power of hub sites (docs/hub-protocol.md). */
   hubs: Map<string, HubPowerService>;
+  /** Hub owners and the buildings they created in the bot. */
+  ownership: HubOwnership;
   schedules: ScheduleService;
   pollers: YasnoPoller[];
   udp: UdpHeartbeatServer | null;
@@ -119,8 +123,26 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
       yasnoRegion: site.yasno.region,
       yasnoDso: site.yasno.dso,
       yasnoGroup: site.yasno.group,
+      access: site.access,
+      origin: "config",
     });
   }
+
+  // Hub owners and the buildings they created in the bot: served like the configured ones, and a
+  // new one joins while the core runs (addSite, set up once the services exist).
+  const hubs = new Map<string, HubPowerService>();
+  let hubVerifier: HubVerifier | null = null;
+  let addSite: (site: SiteConfig) => void = () => {};
+  const ownership = new HubOwnership({
+    store,
+    clock,
+    sites: () => sites,
+    configHubs: sites.flatMap((s) => (s.hub ? [s.hub] : [])),
+    addSite: (site) => addSite(site),
+    hubReady: (device) => hubVerifier?.set(device),
+    status: (siteId) => hubs.get(siteId)?.status() ?? NO_STATUS,
+  });
+  sites.push(...ownership.ownerSites());
 
   // ≈ when the core last ran (the detector state is saved every few seconds, at least once a
   // minute even during an outage).
@@ -174,7 +196,10 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
     reports: {
       health: (id) => notifier?.reports.health(id) ?? "",
       stats: (id) => notifier?.reports.stats(id) ?? "",
+      hubs: () =>
+        hubsReport(store, sites, (id) => hubs.get(id)?.status() ?? NO_STATUS, clock.now()),
     },
+    ownership: () => ownership,
     publicUrl: config.publicUrl,
     updates: config.telegramUpdates,
     images,
@@ -236,6 +261,13 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
     ...(deps.eveningTimings ? { timings: deps.eveningTimings } : {}),
   });
   registerGame(app, game, clock, evenings);
+  registerMe(app, {
+    sites: () => sites,
+    store,
+    clock,
+    ownership,
+    botUsername: () => telegram.botUsername(),
+  });
   telegram.registerRoutes(app);
   sse.registerRoutes(app);
 
@@ -276,7 +308,6 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
     );
   }
 
-  const hubs = new Map<string, HubPowerService>();
   for (const site of sites) {
     if (site.hub) {
       hubs.set(site.id, new HubPowerService({ site, hub: site.hub, store, bus, clock, state }));
@@ -323,8 +354,13 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
   // Backups and hub firmware share the R2 bucket.
   const backupConfig = loadBackupConfig(env, sites[0]?.tz ?? KYIV_TZ);
   let firmware: FirmwareService | null = null;
-  if (hubDevices.length > 0) {
-    const firmwareConfig = loadFirmwareConfig(env, config.dbPath, backupConfig);
+  // Hubs report here always: one made at the bench may show up before it has a building.
+  {
+    const benchHubs = store.hubs.listWithSecret().length;
+    const firmwareConfig =
+      hubDevices.length > 0 || benchHubs > 0
+        ? loadFirmwareConfig(env, config.dbPath, backupConfig)
+        : null;
     if (firmwareConfig) {
       firmware = new FirmwareService({
         config: firmwareConfig,
@@ -334,7 +370,8 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
       });
       registerFirmwareRoute(app, firmware);
     }
-    const verifier = new HubVerifier(hubDevices);
+    const verifier = new HubVerifier(hubDevices, (id) => ownership.benchDevice(id));
+    hubVerifier = verifier;
     const firmwareService = firmware;
     registerHubRoutes(app, {
       verifier,
@@ -374,21 +411,47 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
     feed.groups.add(site.yasno.group);
     byFeed.set(key, feed);
   }
+  const makePoller = (region: number, dso: number, groups: string[]) =>
+    new YasnoPoller({
+      region,
+      dso,
+      groups,
+      now: () => clock.now(),
+      ...(deps.fetch ? { fetch: deps.fetch } : {}),
+      onUpdate: (update) => schedules.onYasnoUpdate(update),
+      onError: (error, failures) => bus.emit("yasno.error", { error, failures }),
+      onRecovered: (failures) => bus.emit("yasno.recovered", { failures }),
+    });
   pollers.push(
-    ...[...byFeed.values()].map(
-      (feed) =>
-        new YasnoPoller({
-          region: feed.region,
-          dso: feed.dso,
-          groups: [...feed.groups],
-          now: () => clock.now(),
-          ...(deps.fetch ? { fetch: deps.fetch } : {}),
-          onUpdate: (update) => schedules.onYasnoUpdate(update),
-          onError: (error, failures) => bus.emit("yasno.error", { error, failures }),
-          onRecovered: (failures) => bus.emit("yasno.recovered", { failures }),
-        }),
-    ),
+    ...[...byFeed.values()].map((feed) => makePoller(feed.region, feed.dso, [...feed.groups])),
   );
+
+  // A building created by its owner while the core runs: the same services as at the start.
+  addSite = (site) => {
+    if (state.has(site.id)) return;
+    sites.push(site);
+    state.add(site);
+    if (site.hub) {
+      const service = new HubPowerService({ site, hub: site.hub, store, bus, clock, state });
+      hubs.set(site.id, service);
+      service.start();
+      hubVerifier?.set(site.hub);
+    }
+    const reminder = new ReminderService({ site, store, bus, clock, state });
+    reminders.push(reminder);
+    reminder.start();
+    schedules.hydrateSite(site);
+    const feed = `${site.yasno.region}/${site.yasno.dso}`;
+    const poller = pollers.find((p) => p.feed === feed);
+    if (poller) poller.addGroup(site.yasno.group);
+    else {
+      const added = makePoller(site.yasno.region, site.yasno.dso, [site.yasno.group]);
+      pollers.push(added);
+      added.start();
+    }
+    telegram.addSite(site);
+    log.info({ site: site.id, name: site.name, group: site.yasno.group }, "building added");
+  };
 
   // Nightly backup to S3-compatible storage (Cloudflare R2), when configured.
   if (backupConfig && config.dbPath !== ":memory:") {
@@ -431,6 +494,7 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
     sites,
     power,
     hubs,
+    ownership,
     schedules,
     pollers,
     udp,
@@ -510,4 +574,34 @@ function logEvents(bus: Bus, log: FastifyInstance["log"], clock: Clock): void {
       "heartbeat rejected (repeats muted for 10 min)",
     );
   });
+}
+
+/** /hubs in the admin chat: every hub, its building, owner and last report. */
+function hubsReport(
+  store: Store,
+  sites: readonly SiteConfig[],
+  status: (siteId: string) => HubStatus,
+  now: number,
+): string {
+  const rows = [
+    ...sites.flatMap((s) => (s.hub ? [{ id: s.hub.id, siteId: s.id }] : [])),
+    ...store.hubs
+      .listWithSecret()
+      .filter((h) => !h.siteId)
+      .map((h) => ({ id: h.id, siteId: null })),
+  ];
+  if (rows.length === 0) return "Хабів немає.";
+  return [
+    "🛰 Хаби:",
+    ...rows.map(({ id, siteId }) => {
+      const site = siteId ? sites.find((s) => s.id === siteId) : undefined;
+      const owner = store.hubs.get(id)?.ownerUserId ?? null;
+      const last = site ? status(site.id) : null;
+      const seen =
+        last?.lastReportAt != null
+          ? `звіт ${Math.round((now - last.lastReportAt) / 60_000)} хв тому, ${last.fw ?? "?"}`
+          : "звітів не було";
+      return `• ${id}: ${site ? `«${site.name}» (${site.id})` : "без будинку"}, ${owner !== null ? `власник ${owner}` : "без власника"}, ${seen}`;
+    }),
+  ].join("\n");
 }

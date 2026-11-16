@@ -27,7 +27,7 @@ import { z } from "zod";
 import type { Clock } from "../runtime/clock.ts";
 import { lastFixedSchedule } from "../services/schedule.ts";
 import type { SiteStateStore } from "../services/state.ts";
-import type { SiteConfig } from "../sites-config.ts";
+import { defaultSite, type SiteConfig } from "../sites-config.ts";
 import {
   openApiDocument,
   type RangeQuery,
@@ -39,6 +39,7 @@ import {
 import { dayScheduleView, stateView, widgetView } from "./views.ts";
 
 export type ApiDeps = {
+  /** The live list: a building created by its owner shows up at once. */
   sites: readonly SiteConfig[];
   state: SiteStateStore;
   store: Store;
@@ -92,7 +93,7 @@ export function dateRange(
 
 export function registerApi(app: FastifyInstance, deps: ApiDeps): void {
   const { state, store, clock } = deps;
-  const sites = new Map(deps.sites.map((s) => [s.id, s]));
+  const sites = { has: (id: string) => deps.sites.some((s) => s.id === id) };
   const openapi = openApiDocument();
 
   function bind<K extends keyof Routes>(
@@ -124,18 +125,23 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps): void {
     });
   }
 
-  const site = (siteId: string) => sites.get(siteId) as SiteConfig;
+  const site = (siteId: string) => deps.sites.find((s) => s.id === siteId) as SiteConfig;
+  const siteView = (s: SiteConfig) => ({
+    id: s.id,
+    name: s.name,
+    tz: s.tz,
+    yasnoGroup: s.yasno.group,
+    hasPlug: s.plug !== null,
+    access: s.access,
+    scene: s.scene,
+  });
   const records = (siteId: string, range: Interval) => store.outages.list(siteId, range);
 
   bind("sites", () => ({
-    sites: deps.sites.map((s) => ({
-      id: s.id,
-      name: s.name,
-      tz: s.tz,
-      yasnoGroup: s.yasno.group,
-      hasPlug: s.plug !== null,
-    })),
+    sites: deps.sites.filter((s) => s.access === "public").map(siteView),
+    defaultSiteId: defaultSite(deps.sites)?.id ?? null,
   }));
+  bind("site", ({ params }) => siteView(site(params.siteId)));
 
   bind("state", ({ params }, now) => stateView(state, params.siteId, now));
 

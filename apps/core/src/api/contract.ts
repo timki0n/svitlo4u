@@ -46,6 +46,10 @@ export const Site = z.object({
   tz: z.string(),
   yasnoGroup: z.string(),
   hasPlug: z.boolean().describe("A Zigbee plug confirms power and measures voltage"),
+  access: z
+    .enum(["public", "link"])
+    .describe("public: listed; link: only by its address (a private house)"),
+  scene: z.enum(["4u", "none"]).describe("The picture of the main screen: the 3D figure of ЖК 4U"),
 });
 
 export const Hint = z
@@ -348,9 +352,20 @@ export const routes = {
   sites: {
     method: "GET",
     path: "/api/v1/sites",
-    summary: "Configured sites",
+    summary: "Public buildings and the one new visitors see",
     tag: "sites",
-    response: z.object({ sites: z.array(Site) }),
+    response: z.object({
+      sites: z.array(Site),
+      defaultSiteId: z.string().nullable().describe("The building of svitlo4u.info/ (ЖК 4U)"),
+    }),
+  },
+  site: {
+    method: "GET",
+    path: "/api/v1/sites/{siteId}",
+    summary: "One building, public or only by link",
+    tag: "sites",
+    params: SiteParams,
+    response: Site,
   },
   state: {
     method: "GET",

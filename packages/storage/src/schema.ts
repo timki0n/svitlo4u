@@ -12,7 +12,10 @@ import {
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 
-/** Locations. Source of truth is the config file; rows are upserted at startup. */
+/**
+ * Locations (buildings). `origin` "config": sites.yaml is the source of truth, the row is upserted
+ * at startup. "owner": created by a hub's owner in the bot; this row is the source of truth.
+ */
 export const sites = sqliteTable("sites", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
@@ -20,6 +23,38 @@ export const sites = sqliteTable("sites", {
   yasnoRegion: integer("yasno_region").notNull(),
   yasnoDso: integer("yasno_dso").notNull(),
   yasnoGroup: text("yasno_group").notNull(),
+  /** "public": listed on the site; "link": only by its address (a private house). */
+  access: text("access").notNull().default("public"),
+  origin: text("origin").notNull().default("config"),
+  updatedAt: integer("updated_at").notNull(),
+});
+
+/**
+ * Hubs (docs/hub-protocol.md). A hub made at the bench has its secret here and no site until its
+ * owner claims it; a hub from sites.yaml keeps its secret in the environment (null here) and gets
+ * a row only for its owner.
+ */
+export const hubs = sqliteTable(
+  "hubs",
+  {
+    id: text("id").primaryKey(),
+    /** Hex HMAC key; null when it is in the environment (sites.yaml `secretEnv`). */
+    secret: text("secret"),
+    siteId: text("site_id").references(() => sites.id),
+    /** Telegram user id of the owner: hub alerts and «Мій хаб». */
+    ownerUserId: integer("owner_user_id"),
+    /** sites.yaml-like policy: "latest", "off" or a pinned "x.y.z". */
+    firmware: text("firmware").notNull().default("latest"),
+    createdAt: integer("created_at").notNull(),
+    claimedAt: integer("claimed_at"),
+  },
+  (t) => [index("hubs_by_owner").on(t.ownerUserId)],
+);
+
+/** A Telegram user's building ("my building" on every device, the Mini App's start). */
+export const telegramUsers = sqliteTable("telegram_users", {
+  userId: integer("user_id").primaryKey(),
+  siteId: text("site_id").references(() => sites.id),
   updatedAt: integer("updated_at").notNull(),
 });
 

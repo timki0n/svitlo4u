@@ -55,6 +55,19 @@ if (initData) {
   tell("web_app_setup_swipe_behavior", { allow_vertical_swipe: false });
 }
 
+/** What a t.me/<bot>/<app>?startapp=… link passed (a building), null without it. */
+export function tgStartParam(): string | null {
+  if (!initData) return null;
+  return new URLSearchParams(initData).get("start_param");
+}
+
+/** Open a t.me link inside Telegram (a plain link would leave the Mini App). */
+export function openTelegramLink(url: string): void {
+  const path = url.replace(/^https:\/\/t\.me/, "");
+  if (initData && path !== url) tell("web_app_open_tg_link", { path_full: path });
+  else window.open(url, "_blank", "noopener");
+}
+
 /** Signed launch data of the Mini App, null in a plain browser. */
 export const tgInitData = (): string | null => initData;
 export const inMiniApp = (): boolean => initData !== null;

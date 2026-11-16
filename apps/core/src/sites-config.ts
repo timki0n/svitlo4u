@@ -82,8 +82,8 @@ const telegramSchema = z.object({
    */
   shadow: z.boolean().default(true),
   /**
-   * Receive updates (commands, moderation). false = send only, e.g. a bot shared with a legacy app
-   * or with another site (a test site borrowing a bot to reach the admin).
+   * Receive updates (commands, moderation). false = send only, e.g. a bot shared with a legacy app.
+   * Sites on one bot share it: a chat's commands answer for the building it follows.
    */
   commands: z.boolean().default(true),
   /** Only these kinds of announcements (default: all). A test site: ["power", "voltage"]. */
@@ -94,12 +94,32 @@ const telegramSchema = z.object({
     .optional(),
 });
 
+/** Paths of the site that cannot be building addresses (svitlo4u.info/<id>). */
+export const RESERVED_SITE_IDS: readonly string[] = [
+  "api",
+  "assets",
+  "health",
+  "iot",
+  "my",
+  "render",
+  "telegram",
+];
+
+export const SITE_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
+
 const siteSchema = z.object({
-  id: z.string().regex(/^[a-z0-9-]+$/, "lowercase letters, digits and dashes"),
+  id: z
+    .string()
+    .regex(SITE_ID, "lowercase letters, digits and dashes")
+    .refine((id) => !RESERVED_SITE_IDS.includes(id), "reserved word"),
   name: z.string().min(1),
   tz: z.string().default(KYIV_TZ),
   /** Domain used in links inside texts. */
   linkUrl: z.url().default("https://svitlo4u.info"),
+  /** "public": listed on the site; "link": only by its address (svitlo4u.info/<id>). */
+  access: z.enum(["public", "link"]).default("public"),
+  /** The picture on the main screen: the 3D figure of ЖК 4U, or none. */
+  scene: z.enum(["4u", "none"]).default("none"),
   yasno: z.object({ region: z.number().int(), dso: z.number().int(), group: z.string().min(1) }),
   devices: z.array(z.discriminatedUnion("kind", [espDevice, plugDevice, hubDevice])).min(1),
   detector: detectorOverrides.default({}),
@@ -122,7 +142,10 @@ export type TelegramSiteConfig = Omit<
   blockedChats: ChatTarget[];
   silentChats: ChatTarget[];
 };
+export type SiteAccess = "public" | "link";
 export type SiteConfig = Omit<z.infer<typeof siteSchema>, "devices" | "detector" | "telegram"> & {
+  /** "config": from sites.yaml; "owner": created by a hub's owner in the bot (kept in the DB). */
+  origin: "config" | "owner";
   esp: EspDeviceConfig[];
   plug: PlugDeviceConfig | null;
   /** A hub site has its hub instead of ESP devices and a zigbee2mqtt plug. */
@@ -144,8 +167,6 @@ export function parseSitesConfig(text: string, env: NodeJS.ProcessEnv = process.
 
   const ids = new Set<string>();
   const deviceIds = new Set<string>();
-  /** Tokens of bots that receive updates: one webhook per bot. Send-only sites may share. */
-  const receivingTokens = new Set<string>();
   return parsed.data.sites.map((site) => {
     if (ids.has(site.id)) throw new Error(`sites config: duplicate site id "${site.id}"`);
     ids.add(site.id);
@@ -185,12 +206,6 @@ export function parseSitesConfig(text: string, env: NodeJS.ProcessEnv = process.
         throw new Error(
           `sites config: env ${site.telegram.botTokenEnv} (bot of ${site.id}) is not set`,
         );
-      // One webhook per bot: two sites receiving on one bot would take it from each other.
-      if (site.telegram.commands) {
-        if (receivingTokens.has(botToken))
-          throw new Error(`sites config: site "${site.id}" reuses another site's Telegram bot`);
-        receivingTokens.add(botToken);
-      }
       telegram = {
         ...site.telegram,
         botToken,
@@ -202,6 +217,7 @@ export function parseSitesConfig(text: string, env: NodeJS.ProcessEnv = process.
     const { devices: _devices, detector, telegram: _telegram, ...rest } = site;
     return {
       ...rest,
+      origin: "config" as const,
       esp,
       plug,
       hub,
@@ -209,6 +225,62 @@ export function parseSitesConfig(text: string, env: NodeJS.ProcessEnv = process.
       telegram,
     };
   });
+}
+
+/** The building's row as the DB keeps it (origin "owner"). */
+export type OwnerSiteRow = {
+  id: string;
+  name: string;
+  tz: string;
+  yasnoRegion: number;
+  yasnoDso: number;
+  yasnoGroup: string;
+  access: string;
+};
+
+/**
+ * A building its owner created in the bot: served by the home site's bot (announcements to its
+ * subscribers, no shadow), its hub reports like any other.
+ */
+export function ownerSiteConfig(
+  row: OwnerSiteRow,
+  hub: HubDeviceConfig | null,
+  home: SiteConfig | undefined,
+): SiteConfig {
+  const bot = home?.telegram;
+  return {
+    id: row.id,
+    name: row.name,
+    tz: row.tz,
+    linkUrl: home?.linkUrl ?? "https://svitlo4u.info",
+    access: row.access === "public" ? "public" : "link",
+    scene: "none",
+    yasno: { region: row.yasnoRegion, dso: row.yasnoDso, group: row.yasnoGroup },
+    origin: "owner",
+    esp: [],
+    plug: null,
+    hub: hub ? { ...hub, siteId: row.id } : null,
+    detector: { ...DEFAULT_DETECTOR_CONFIG, zigbee: false },
+    telegram: bot
+      ? {
+          botTokenEnv: bot.botTokenEnv,
+          botToken: bot.botToken,
+          chats: [],
+          blockedChats: [],
+          silentChats: [],
+          ...(bot.adminChatId !== undefined ? { adminChatId: bot.adminChatId } : {}),
+          logStatusRequests: false,
+          shadow: false,
+          commands: bot.commands,
+          ...(bot.webApp ? { webApp: bot.webApp } : {}),
+        }
+      : null,
+  };
+}
+
+/** The building new visitors see: the first public one in sites.yaml (ЖК 4U). */
+export function defaultSite(sites: readonly SiteConfig[]): SiteConfig | undefined {
+  return sites.find((s) => s.access === "public" && s.origin === "config") ?? sites[0];
 }
 
 export function loadSitesConfig(path: string, env: NodeJS.ProcessEnv = process.env): SiteConfig[] {

@@ -28,9 +28,15 @@ export function NowScreen({ live }: { live: Live }) {
     <main className="screen">
       <Header>
         <span className="label">{site.name}</span>
+        {(live.me?.hubs.length ?? 0) > 0 && (
+          <a className="chip" href="/my">
+            <Icon name="plug" size={16} />
+            Мій хаб
+          </a>
+        )}
       </Header>
       <ConnectionNotice connection={live.connection} updatedAt={live.updatedAt} tz={tz} />
-      <Building mode={mode} />
+      {site.scene === "4u" && <Building mode={mode} />}
       <section className="state" aria-live="polite">
         <div className="lamp" data-power={lamp} aria-hidden="true" />
         <h1>{widget.title}</h1>

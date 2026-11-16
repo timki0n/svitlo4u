@@ -30,7 +30,7 @@
         "tags": [
           "sites"
         ],
-        "summary": "Configured sites",
+        "summary": "Public buildings and the one new visitors see",
         "responses": {
           "200": {
             "description": "OK",
@@ -59,6 +59,22 @@
                           "hasPlug": {
                             "type": "boolean",
                             "description": "A Zigbee plug confirms power and measures voltage"
+                          },
+                          "access": {
+                            "type": "string",
+                            "enum": [
+                              "public",
+                              "link"
+                            ],
+                            "description": "public: listed; link: only by its address (a private house)"
+                          },
+                          "scene": {
+                            "type": "string",
+                            "enum": [
+                              "4u",
+                              "none"
+                            ],
+                            "description": "The picture of the main screen: the 3D figure of ЖК 4U"
                           }
                         },
                         "required": [
@@ -66,14 +82,145 @@
                           "name",
                           "tz",
                           "yasnoGroup",
-                          "hasPlug"
+                          "hasPlug",
+                          "access",
+                          "scene"
                         ],
                         "additionalProperties": false
                       }
+                    },
+                    "defaultSiteId": {
+                      "description": "The building of svitlo4u.info/ (ЖК 4U)",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
                     }
                   },
                   "required": [
-                    "sites"
+                    "sites",
+                    "defaultSiteId"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (see Retry-After)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}": {
+      "get": {
+        "operationId": "site",
+        "tags": [
+          "sites"
+        ],
+        "summary": "One building, public or only by link",
+        "parameters": [
+          {
+            "name": "siteId",
+            "in": "path",
+            "required": true,
+            "description": "Site id, e.g. 4u",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "tz": {
+                      "type": "string"
+                    },
+                    "yasnoGroup": {
+                      "type": "string"
+                    },
+                    "hasPlug": {
+                      "type": "boolean",
+                      "description": "A Zigbee plug confirms power and measures voltage"
+                    },
+                    "access": {
+                      "type": "string",
+                      "enum": [
+                        "public",
+                        "link"
+                      ],
+                      "description": "public: listed; link: only by its address (a private house)"
+                    },
+                    "scene": {
+                      "type": "string",
+                      "enum": [
+                        "4u",
+                        "none"
+                      ],
+                      "description": "The picture of the main screen: the 3D figure of ЖК 4U"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "tz",
+                    "yasnoGroup",
+                    "hasPlug",
+                    "access",
+                    "scene"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown site",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
                   ],
                   "additionalProperties": false
                 }

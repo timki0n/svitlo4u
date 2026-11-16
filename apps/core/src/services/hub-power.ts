@@ -16,6 +16,7 @@ import type { HubReportEvent } from "../adapters/hub.ts";
 import type { Bus } from "../runtime/bus.ts";
 import type { Clock, Timer } from "../runtime/clock.ts";
 import type { HubDeviceConfig, SiteConfig } from "../sites-config.ts";
+import type { HubStatus } from "./ownership.ts";
 import type { SiteStateStore } from "./state.ts";
 
 /** Saved at least this often while reports come (the last report survives a core restart). */
@@ -37,6 +38,8 @@ export class HubPowerService {
   private savedAt = Number.NEGATIVE_INFINITY;
   /** The previous report's boot / firmware / rolled-back version (this core run). */
   private last: { boot: string; fw: string | null; rejected: string | null } | null = null;
+  /** The last report as «Мій хаб» shows it. */
+  private latest: HubReportEvent | null = null;
 
   constructor(deps: HubPowerServiceDeps) {
     this.deps = deps;
@@ -62,9 +65,22 @@ export class HubPowerService {
     this.persist();
   }
 
+  /** What the owner sees in «Мій хаб». */
+  status(): HubStatus {
+    const r = this.latest;
+    return {
+      lastReportAt: r?.t ?? null,
+      fw: r?.fw ?? null,
+      paired: r?.paired ?? null,
+      mains: r?.mains ?? null,
+      voltage: r?.voltage ?? null,
+    };
+  }
+
   onReport(event: HubReportEvent): void {
     const { state, store, bus } = this.deps;
     this.noticeFirmware(event);
+    this.latest = event;
     state.update(this.siteId, {
       lastEspAt: event.t,
       ...(event.mains === "on" ? { lastPlugAt: event.t } : {}),

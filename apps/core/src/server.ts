@@ -56,7 +56,23 @@ export function buildServer(config: CoreConfig): FastifyInstance {
         }
       },
     });
+    // A building's address (svitlo4u.info/<id>) and «Мій хаб» (/my) are pages of the web app.
+    app.setNotFoundHandler((request, reply) => {
+      const path = request.url.split("?")[0] ?? "";
+      if (request.method === "GET" && WEB_PAGE.test(path) && !NOT_PAGES.test(path)) {
+        return reply.sendFile("index.html");
+      }
+      return reply.code(404).send({
+        message: `Route ${request.method}:${request.url} not found`,
+        error: "Not Found",
+        statusCode: 404,
+      });
+    });
   }
 
   return app;
 }
+
+/** One path segment like a building id; the core's own prefixes are never pages. */
+const WEB_PAGE = /^\/[a-z0-9][a-z0-9-]{0,39}\/?$/;
+const NOT_PAGES = /^\/(api|iot|telegram|health|assets)(\/|$)/;

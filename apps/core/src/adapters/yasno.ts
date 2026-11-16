@@ -72,6 +72,8 @@ export type YasnoPollerOptions = {
 export class YasnoPoller {
   private readonly options: YasnoPollerOptions;
   private readonly url: string;
+  /** Groups served (a building added later brings its own). */
+  private readonly groups: string[];
   private lastHash: string | null = null;
   private cdnEtag: string | null = null;
   private failures = 0;
@@ -82,6 +84,18 @@ export class YasnoPoller {
   constructor(options: YasnoPollerOptions) {
     this.options = options;
     this.url = yasnoUrl(options.region, options.dso);
+    this.groups = [...options.groups];
+  }
+
+  get feed(): string {
+    return `${this.options.region}/${this.options.dso}`;
+  }
+
+  /** Serve one more group; the next poll reports it (even when nothing else changed). */
+  addGroup(group: string): void {
+    if (this.groups.includes(group)) return;
+    this.groups.push(group);
+    this.lastHash = null;
   }
 
   private get fetchFn(): FetchFn {
@@ -128,7 +142,7 @@ export class YasnoPoller {
     if (!parsed.success)
       return this.fail(`unexpected response shape: ${z.prettifyError(parsed.error)}`, started);
     const relevant: Record<string, unknown> = {};
-    for (const group of this.options.groups) relevant[group] = parsed.data[group] ?? null;
+    for (const group of this.groups) relevant[group] = parsed.data[group] ?? null;
     const hash = createHash("sha256").update(JSON.stringify(relevant)).digest("hex");
     this.succeeded();
     if (hash === this.lastHash)
@@ -137,7 +151,7 @@ export class YasnoPoller {
 
     const groups: Record<string, GroupSchedule> = {};
     const missingGroups: string[] = [];
-    for (const group of this.options.groups) {
+    for (const group of this.groups) {
       const block = parsed.data[group];
       if (block) groups[group] = parseGroupBlock(block);
       else missingGroups.push(group);

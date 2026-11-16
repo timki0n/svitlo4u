@@ -107,12 +107,31 @@ export class HubVerifier {
   private readonly devices = new Map<string, HubDeviceConfig>();
   private readonly replay = new Map<string, { boot: string; seq: number; recentBoots: string[] }>();
 
-  constructor(devices: readonly HubDeviceConfig[]) {
+  /**
+   * `lookup` finds hubs made at the bench after the start (their secret is in the DB); a hub with
+   * no building yet has `siteId` "" — it is answered (and updated) but drives nothing.
+   */
+  private readonly lookup: (id: string) => HubDeviceConfig | undefined;
+
+  constructor(
+    devices: readonly HubDeviceConfig[],
+    lookup: (id: string) => HubDeviceConfig | undefined = () => undefined,
+  ) {
     for (const d of devices) this.devices.set(d.id, d);
+    this.lookup = lookup;
   }
 
   device(id: string): HubDeviceConfig | undefined {
-    return this.devices.get(id);
+    const known = this.devices.get(id);
+    if (known?.siteId) return known;
+    const found = this.lookup(id);
+    if (found) this.devices.set(id, found);
+    return found ?? known;
+  }
+
+  /** A hub got (or changed) its building. */
+  set(device: HubDeviceConfig): void {
+    this.devices.set(device.id, device);
   }
 
   verify(raw: Buffer, signature: string | undefined, remote: string, t: number): HubVerifyResult {
@@ -126,7 +145,7 @@ export class HubVerifier {
     }
     const dev = body.dev;
     if (typeof dev !== "string") return { ok: false, reason: "malformed" };
-    const device = this.devices.get(dev);
+    const device = this.device(dev);
     if (!device) return { ok: false, reason: "unknown-device", deviceId: dev.slice(0, 64) };
     if (!signature || !safeEqualHex(signature, signHub(device.secret, raw))) {
       return { ok: false, reason: "bad-signature", deviceId: dev };

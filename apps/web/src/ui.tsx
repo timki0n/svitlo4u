@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { Site } from "./api.ts";
 import { duration, hhmm, percents } from "./format.ts";
 import type { Connection } from "./live.ts";
 import { inMiniApp } from "./telegram.ts";
@@ -90,12 +91,14 @@ export function Header({ children }: { children: ReactNode }) {
 
 export type Tab = "now" | "schedule" | "history" | "game";
 
-export function Nav({ tab }: { tab: Tab }) {
+export function Nav({ tab, site }: { tab: Tab; site: Site | null }) {
+  // The game plays on the windows of ЖК 4U's figure.
+  const game = inMiniApp() && site?.scene === "4u";
   const items: [Tab, string, string][] = [
     ["now", "#/", "Зараз"],
     ["schedule", "#/schedule", "Графік"],
     ["history", "#/history", "Історія"],
-    ...(inMiniApp() ? ([["game", "#/game", "Гра"]] as [Tab, string, string][]) : []),
+    ...(game ? ([["game", "#/game", "Гра"]] as [Tab, string, string][]) : []),
   ];
   return (
     <nav className="nav" aria-label="Розділи">

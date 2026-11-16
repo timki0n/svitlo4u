@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type Site, type State, type Widget } from "./api.ts";
+import { ApiError, api, type Me, type Site, type State, type Widget } from "./api.ts";
+import { inMiniApp, tgStartParam } from "./telegram.ts";
 
 export type Connection = "live" | "reconnecting" | "offline";
 
@@ -13,7 +14,59 @@ export type Live = {
   /** When the data was last confirmed by the core. */
   updatedAt: number | null;
   error: boolean;
+  /** The address names a building that does not exist. */
+  notFound: boolean;
+  /** In the Mini App: who opened it, their building and hubs; null elsewhere or before it loads. */
+  me: Me | null;
 };
+
+const REMEMBER = "svitlo4u.site";
+
+function remembered(): string | null {
+  try {
+    return localStorage.getItem(REMEMBER);
+  } catch {
+    return null;
+  }
+}
+
+function remember(siteId: string): void {
+  try {
+    localStorage.setItem(REMEMBER, siteId);
+  } catch {
+    // storage blocked: the address still works
+  }
+}
+
+/** A building by id; null when there is none. */
+async function siteById(id: string, signal: AbortSignal): Promise<Site | null> {
+  try {
+    return await api.site(id, signal);
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return null;
+    throw e;
+  }
+}
+
+/**
+ * Which building to show: the one in the address (/<id>); else, in the Mini App, the link's or
+ * the person's own; else the one this browser opened last; else the default (ЖК 4U).
+ */
+async function chooseSite(
+  requested: string | null,
+  me: Me | null,
+  signal: AbortSignal,
+): Promise<Site | null> {
+  if (requested) return siteById(requested, signal);
+  const candidates = [tgStartParam(), me?.siteId ?? null, remembered()];
+  for (const id of candidates) {
+    if (!id) continue;
+    const found = await siteById(id, signal);
+    if (found) return found;
+  }
+  const { sites, defaultSiteId } = await api.sites(signal);
+  return sites.find((s) => s.id === defaultSiteId) ?? sites[0] ?? null;
+}
 
 const TICK_MS = 20_000;
 /** A dropped stream is "reconnecting" first; after this long the data is called out as stale. */
@@ -22,11 +75,13 @@ const OFFLINE_AFTER_MS = 45_000;
 const WIDGET_MAX_AGE_MS = 5 * 60_000;
 
 /**
- * Live state of the first configured site: REST for the first paint, then the SSE stream.
+ * Live state of a building (see chooseSite): REST for the first paint, then the SSE stream.
  * Any event re-reads state and widget (they are small); the "state" event carries the state itself.
  */
-export function useLive(): Live {
+export function useLive(requested: string | null): Live {
   const [site, setSite] = useState<Site | null>(null);
+  const [me, setMe] = useState<Me | null>(null);
+  const [notFound, setNotFound] = useState(false);
   const [state, setState] = useState<State | null>(null);
   const [widget, setWidget] = useState<Widget | null>(null);
   const [connection, setConnection] = useState<Connection>("reconnecting");
@@ -38,20 +93,31 @@ export function useLive(): Live {
 
   useEffect(() => {
     const ctrl = new AbortController();
-    api
-      .sites(ctrl.signal)
-      .then(({ sites }) => {
-        setSite(sites[0] ?? null);
-        if (!sites[0]) setError(true);
-      })
-      .catch((e: unknown) => {
-        if (!ctrl.signal.aborted) {
-          console.error(e);
-          setError(true);
-        }
-      });
+    (async () => {
+      const mine = inMiniApp() ? await api.me().catch(() => null) : null;
+      if (ctrl.signal.aborted) return;
+      setMe(mine);
+      const chosen = await chooseSite(requested, mine, ctrl.signal);
+      if (ctrl.signal.aborted) return;
+      if (!chosen) {
+        if (requested) setNotFound(true);
+        else setError(true);
+        return;
+      }
+      setSite(chosen);
+      // A building opened by its address becomes this browser's (and the person's) own.
+      if (requested) {
+        remember(chosen.id);
+        if (mine && mine.siteId !== chosen.id) api.setMySite(chosen.id).then(setMe, () => {});
+      }
+    })().catch((e: unknown) => {
+      if (!ctrl.signal.aborted) {
+        console.error(e);
+        setError(true);
+      }
+    });
     return () => ctrl.abort();
-  }, []);
+  }, [requested]);
 
   const refresh = useCallback(async () => {
     if (!site) return;
@@ -154,5 +220,7 @@ export function useLive(): Live {
     connection,
     updatedAt,
     error,
+    notFound,
+    me,
   };
 }

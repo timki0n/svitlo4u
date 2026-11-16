@@ -128,8 +128,20 @@ The core tells the admin chat when a hub comes back on another version and when 
 ## Provisioning
 
 Each hub has an id and a secret given when it is flashed (USB console: `provision <id> <secret>`,
-see `firmware/hub/README.md`), stored in its NVS and in the server's `deploy/.env` under the
-`secretEnv` of the device.
+see `firmware/hub/README.md`), stored in its NVS and on the server:
+
+- a hub of a site in `config/sites.yaml`: in `deploy/.env` under the `secretEnv` of the device;
+- a hub for someone else's building: in the database. `cli/hub.ts new` (run by
+  `firmware/hub/tools/factory.py`) creates it with no building and no owner, and gives the
+  sticker's link `t.me/<bot>?start=own-<hub id>-<code>`. The code is the first 10 base32
+  characters of HMAC-SHA256(secret, "svitlo4u-claim"): only the sticker (or the secret) gives it.
+
+The first scan of the sticker makes the person the hub's owner. A hub without a building asks for
+the Yasno group and a name and creates it (`b-` + 10 random characters, its page only by link);
+its reports drive the building from then on. Until then the core answers the hub's reports (and
+may update it) but they drive nothing. The owner gets the hub's service news (silent, back,
+updated, rolled back) in their private chat, as the admin does, and «Мій хаб» in the Mini App;
+releasing the hub there lets the next scan take it, with the building and its history.
 
 Wi-Fi and the plug are set by the user on the hub's own setup page. One radio cannot serve an
 access point and a Zigbee network at once, so the hub has two modes and restarts to switch:

@@ -130,9 +130,19 @@ describe("API v1", () => {
     const r = await get(c, "/api/v1/sites");
     expect(r.status).toBe(200);
     expect(r.headers["cache-control"]).toBe("no-store");
-    expect(r.body).toEqual({
-      sites: [{ id: "4u", name: "ЖК 4U", tz: "Europe/Kyiv", yasnoGroup: "12.1", hasPlug: true }],
-    });
+    const site = {
+      id: "4u",
+      name: "ЖК 4U",
+      tz: "Europe/Kyiv",
+      yasnoGroup: "12.1",
+      hasPlug: true,
+      access: "public",
+      scene: "none",
+    };
+    expect(r.body).toEqual({ sites: [site], defaultSiteId: "4u" });
+    // One building by its address (also one listed only by link).
+    expect((await get(c, "/api/v1/sites/4u")).body).toEqual(site);
+    expect((await get(c, "/api/v1/sites/nope")).status).toBe(404);
   });
 
   it("unknown site → 404, bad query → 400 (also no-store)", async () => {

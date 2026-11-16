@@ -156,9 +156,10 @@ export class Notifier {
         });
       }),
       bus.on("zigbee.bridge", (e) => this.onZigbee(e.online)),
+      // The hub's service news: the admin chat and the hub's owners (their private chats).
       bus.on("hub.silent", (e) => {
         const site = deps.state.site(e.siteId);
-        deps.telegram.alert(
+        this.hubNews(
           e.siteId,
           `⚠️ ${escapeHtml(site.name)}: хаб мовчить ${formatDurationLong((e.detectedAt - e.since) / 1000)} (з ${formatHHMM(e.since, site.tz)}) — немає інтернету або хаб вимкнувся. Світло за ним невідоме, доки він не повернеться.`,
         );
@@ -170,7 +171,7 @@ export class Notifier {
           : e.powerLoss
             ? " Він перезапустився через втрату живлення: ДБЖ немає або розрядився."
             : " Він перезапускався сам.";
-        deps.telegram.alert(
+        this.hubNews(
           e.siteId,
           `✅ ${escapeHtml(site.name)}: хаб знову на зв'язку після ${formatDurationLong((e.at - e.silentFrom) / 1000)}.${why}`,
           { silent: true },
@@ -178,7 +179,7 @@ export class Notifier {
       }),
       bus.on("hub.updated", (e) => {
         const site = deps.state.site(e.siteId);
-        deps.telegram.alert(
+        this.hubNews(
           e.siteId,
           `🔧 ${escapeHtml(site.name)}: прошивка хаба оновилася: ${escapeHtml(e.from)} → ${escapeHtml(e.to)}.`,
           { silent: true },
@@ -186,7 +187,7 @@ export class Notifier {
       }),
       bus.on("hub.update-rejected", (e) => {
         const site = deps.state.site(e.siteId);
-        deps.telegram.alert(
+        this.hubNews(
           e.siteId,
           `⚠️ ${escapeHtml(site.name)}: нова прошивка хаба ${escapeHtml(e.version)} не запрацювала — хаб повернувся до ${escapeHtml(e.fw ?? "попередньої")} і її більше не братиме.`,
         );
@@ -204,6 +205,11 @@ export class Notifier {
         );
       }),
     );
+  }
+
+  private hubNews(siteId: string, text: string, options: { silent?: boolean } = {}): void {
+    this.deps.telegram.alert(siteId, text, options);
+    this.deps.telegram.toOwners(siteId, text, options);
   }
 
   stop(): void {

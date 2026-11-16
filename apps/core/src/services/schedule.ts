@@ -58,13 +58,16 @@ export class ScheduleService {
 
   /** Load the latest stored schedules so state and texts are available before Yasno answers. */
   hydrate(): void {
-    for (const site of this.deps.sites) {
-      const today = localDate(this.deps.clock.now(), site.tz);
-      const stored = this.stored(site.id, today);
-      const next = this.stored(site.id, addDays(today, 1));
-      if (!stored) continue;
-      this.setState(site, stored, next ?? waiting(addDays(today, 1)), null, null, today);
-    }
+    for (const site of this.deps.sites) this.hydrateSite(site);
+  }
+
+  /** The same for one building (also one added while the core runs). */
+  hydrateSite(site: SiteConfig): void {
+    const today = localDate(this.deps.clock.now(), site.tz);
+    const stored = this.stored(site.id, today);
+    const next = this.stored(site.id, addDays(today, 1));
+    if (!stored) return;
+    this.setState(site, stored, next ?? waiting(addDays(today, 1)), null, null, today);
   }
 
   onYasnoUpdate(update: YasnoUpdate): void {
