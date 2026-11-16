@@ -94,4 +94,66 @@ describe("sites config", () => {
       }),
     ).toThrow(/chatId_threadId/);
   });
+
+  it("a hub site: the hub instead of ESP and plug, its secret from env", () => {
+    const hubSite = (devices: string) => `
+  - id: hub-test
+    name: Тест хаб
+    yasno: { region: 25, dso: 902, group: "12.1" }
+    devices:
+${devices}`;
+    const hub = "      - { id: hub-2a4c11, kind: hub, secretEnv: HUB_SECRET }";
+    const [site] = parseSitesConfig(`sites:${hubSite(hub)}`, { HUB_SECRET: "h" });
+    expect(site?.hub).toEqual({
+      id: "hub-2a4c11",
+      kind: "hub",
+      secretEnv: "HUB_SECRET",
+      silentAlertMs: 120_000,
+      firmware: "latest",
+      siteId: "hub-test",
+      secret: "h",
+    });
+    expect(site?.esp).toEqual([]);
+    expect(site?.plug).toBeNull();
+    expect(() => parseSitesConfig(`sites:${hubSite(hub)}`, {})).toThrow(/env HUB_SECRET/);
+    expect(() =>
+      parseSitesConfig(`sites:${hubSite(`${hub}\n      - { id: p, kind: plug, zigbeeName: p }`)}`, {
+        HUB_SECRET: "h",
+      }),
+    ).toThrow(/mixes a hub/);
+    expect(() =>
+      parseSitesConfig(`sites:${hubSite("      - { id: p, kind: plug, zigbeeName: p }")}`, {}),
+    ).toThrow(/needs an esp or a hub/);
+  });
+
+  it("a send-only site may borrow another site's bot and announce only some kinds", () => {
+    const yaml = `
+sites:
+  - id: 4u
+    name: ЖК 4U
+    yasno: { region: 25, dso: 902, group: "12.1" }
+    devices:
+      - { id: esp-4u, kind: esp, transport: udp, secretEnv: ESP_4U_SECRET }
+    telegram: { botTokenEnv: TG_4U, adminChatId: 42 }
+  - id: hub-test
+    name: Тест хаб
+    yasno: { region: 25, dso: 902, group: "12.1" }
+    devices:
+      - { id: hub-1, kind: hub, secretEnv: HUB_SECRET }
+    telegram: { botTokenEnv: TG_4U, adminChatId: 42, commands: false, announce: [power, voltage] }
+`;
+    const [, test] = parseSitesConfig(yaml, { ...env, TG_4U: "1:x", HUB_SECRET: "h" });
+    expect(test?.telegram).toMatchObject({
+      botToken: "1:x",
+      commands: false,
+      announce: ["power", "voltage"],
+    });
+    expect(() =>
+      parseSitesConfig(yaml.replace("commands: false, ", ""), {
+        ...env,
+        TG_4U: "1:x",
+        HUB_SECRET: "h",
+      }),
+    ).toThrow(/reuses another site's Telegram bot/);
+  });
 });

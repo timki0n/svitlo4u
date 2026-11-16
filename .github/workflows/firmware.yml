@@ -1,0 +1,81 @@
+name: Firmware
+
+# Builds the hub firmware; on main, a version not released yet (firmware/hub/version.txt) becomes the
+# GitHub release hub-v<version> with svitlo4u_hub.bin. The core mirrors such releases into R2 and
+# offers them to the hubs (docs/hub-protocol.md → Updates).
+on:
+  push:
+    branches: [main]
+    paths: [firmware/hub/**, .github/workflows/firmware.yml]
+  pull_request:
+    paths: [firmware/hub/**, .github/workflows/firmware.yml]
+  workflow_dispatch:
+
+concurrency:
+  group: firmware-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  hub:
+    name: Hub (ESP32-C6)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container: espressif/idf:v5.5.6
+    outputs:
+      version: ${{ steps.build.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build
+        id: build
+        shell: bash
+        working-directory: firmware/hub
+        run: |
+          . "$IDF_PATH/export.sh" > /dev/null
+          idf.py build
+          version="$(tr -d '[:space:]' < version.txt)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "bad version.txt: $version"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          sha256sum build/svitlo4u_hub.bin
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hub-firmware
+          path: |
+            firmware/hub/build/svitlo4u_hub.bin
+            firmware/hub/build/bootloader/bootloader.bin
+            firmware/hub/build/partition_table/partition-table.bin
+            firmware/hub/build/ota_data_initial.bin
+          if-no-files-found: error
+
+  release:
+    name: Release
+    needs: hub
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: hub-firmware
+          path: out
+      - name: Publish hub-v${{ needs.hub.outputs.version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.hub.outputs.version }}
+        run: |
+          tag="hub-v$VERSION"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "::notice::$tag is already released — bump firmware/hub/version.txt to publish a new one"
+            exit 0
+          fi
+          # the artifact keeps the paths below firmware/hub/build
+          cd out
+          sha256sum svitlo4u_hub.bin > svitlo4u_hub.bin.sha256
+          gh release create "$tag" svitlo4u_hub.bin svitlo4u_hub.bin.sha256 \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Hub firmware $VERSION" \
+            --notes "Hub firmware $VERSION (ESP32-C6), built from $GITHUB_SHA. Hubs take it over the air; for a first flash see firmware/hub/README.md."

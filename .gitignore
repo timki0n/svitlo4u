@@ -22,3 +22,9 @@ config/sites.yaml
 
 # ESP firmware secrets (Wi-Fi password, device key)
 firmware/**/secrets.h
+
+# ESP-IDF build output of the hub firmware (the lock file of its components is kept)
+firmware/hub/build/
+firmware/hub/sdkconfig
+firmware/hub/sdkconfig.old
+firmware/hub/managed_components/

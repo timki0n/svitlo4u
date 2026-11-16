@@ -42,6 +42,7 @@ const site: SiteConfig = {
     },
   ],
   plug: { id: "4u-plug", kind: "plug", zigbeeName: "4u-plug", siteId: "4u" },
+  hub: null,
   detector: { ...DEFAULT_DETECTOR_CONFIG, zigbee: true },
   telegram: null,
 };

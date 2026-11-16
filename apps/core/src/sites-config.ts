@@ -24,6 +24,29 @@ const plugDevice = z.object({
   zigbeeName: z.string().min(1),
 });
 
+/** Hub: ESP32-C6 with its own Zigbee plug, reports to POST /iot/hub (docs/hub-protocol.md). */
+const hubDevice = z.object({
+  id: z.string().min(1),
+  kind: z.literal("hub"),
+  secretEnv: z.string().min(1),
+  /** No report from the hub this long → admin alert (on a UPS its silence is not an outage). */
+  silentAlertMs: z
+    .number()
+    .int()
+    .positive()
+    .default(2 * 60_000),
+  /**
+   * Updates over the air: "latest" (the newest released `hub-v*`, upgrades only), a pinned
+   * "x.y.z" (also a downgrade) or "off".
+   */
+  firmware: z
+    .union([z.literal("latest"), z.literal("off"), z.string().regex(/^\d{1,4}\.\d{1,4}\.\d{1,4}$/)])
+    .default("latest"),
+});
+
+/** What a site announces to its chats ("manual" = /notify). */
+const announceKind = z.enum(["power", "false-alarm", "schedule", "voltage", "manual"]);
+
 const detectorOverrides = z
   .object({
     suspectAfterMs: z.number().int().positive(),
@@ -58,8 +81,13 @@ const telegramSchema = z.object({
    * latency, while the legacy bots still serve users. Set false to switch over.
    */
   shadow: z.boolean().default(true),
-  /** Receive updates (commands, moderation). false = send only, e.g. a bot shared with a legacy app. */
+  /**
+   * Receive updates (commands, moderation). false = send only, e.g. a bot shared with a legacy app
+   * or with another site (a test site borrowing a bot to reach the admin).
+   */
   commands: z.boolean().default(true),
+  /** Only these kinds of announcements (default: all). A test site: ["power", "voltage"]. */
+  announce: z.array(announceKind).optional(),
   /** The web app as a Telegram Mini App: the menu button by the input field opens it. */
   webApp: z
     .object({ url: z.url(), text: z.string().min(1).max(64).default("Відкрити") })
@@ -73,7 +101,7 @@ const siteSchema = z.object({
   /** Domain used in links inside texts. */
   linkUrl: z.url().default("https://svitlo4u.info"),
   yasno: z.object({ region: z.number().int(), dso: z.number().int(), group: z.string().min(1) }),
-  devices: z.array(z.discriminatedUnion("kind", [espDevice, plugDevice])).min(1),
+  devices: z.array(z.discriminatedUnion("kind", [espDevice, plugDevice, hubDevice])).min(1),
   detector: detectorOverrides.default({}),
   telegram: telegramSchema.optional(),
 });
@@ -82,6 +110,8 @@ const fileSchema = z.object({ sites: z.array(siteSchema).min(1) });
 
 export type EspDeviceConfig = z.infer<typeof espDevice> & { siteId: string; secret: string };
 export type PlugDeviceConfig = z.infer<typeof plugDevice> & { siteId: string };
+export type HubDeviceConfig = z.infer<typeof hubDevice> & { siteId: string; secret: string };
+export type AnnounceKind = z.infer<typeof announceKind>;
 export type ChatTarget = { chatId: number; threadId: number | null };
 export type TelegramSiteConfig = Omit<
   z.infer<typeof telegramSchema>,
@@ -95,6 +125,8 @@ export type TelegramSiteConfig = Omit<
 export type SiteConfig = Omit<z.infer<typeof siteSchema>, "devices" | "detector" | "telegram"> & {
   esp: EspDeviceConfig[];
   plug: PlugDeviceConfig | null;
+  /** A hub site has its hub instead of ESP devices and a zigbee2mqtt plug. */
+  hub: HubDeviceConfig | null;
   detector: DetectorConfig;
   telegram: TelegramSiteConfig | null;
 };
@@ -112,7 +144,8 @@ export function parseSitesConfig(text: string, env: NodeJS.ProcessEnv = process.
 
   const ids = new Set<string>();
   const deviceIds = new Set<string>();
-  const botTokens = new Set<string>();
+  /** Tokens of bots that receive updates: one webhook per bot. Send-only sites may share. */
+  const receivingTokens = new Set<string>();
   return parsed.data.sites.map((site) => {
     if (ids.has(site.id)) throw new Error(`sites config: duplicate site id "${site.id}"`);
     ids.add(site.id);
@@ -130,7 +163,20 @@ export function parseSitesConfig(text: string, env: NodeJS.ProcessEnv = process.
       });
     const plugs = site.devices.filter((d) => d.kind === "plug");
     if (plugs.length > 1) throw new Error(`sites config: site "${site.id}" has more than one plug`);
-    if (esp.length === 0) throw new Error(`sites config: site "${site.id}" needs an esp device`);
+    const hubs = site.devices
+      .filter((d) => d.kind === "hub")
+      .map((d) => {
+        const secret = env[d.secretEnv];
+        if (!secret)
+          throw new Error(`sites config: env ${d.secretEnv} (secret of ${d.id}) is not set`);
+        return { ...d, siteId: site.id, secret };
+      });
+    if (hubs.length > 1) throw new Error(`sites config: site "${site.id}" has more than one hub`);
+    const hub = hubs[0] ?? null;
+    if (hub && (esp.length > 0 || plugs.length > 0))
+      throw new Error(`sites config: site "${site.id}" mixes a hub with esp/plug devices`);
+    if (esp.length === 0 && !hub)
+      throw new Error(`sites config: site "${site.id}" needs an esp or a hub device`);
     const plug = plugs[0] ? { ...plugs[0], siteId: site.id } : null;
     let telegram: TelegramSiteConfig | null = null;
     if (site.telegram) {
@@ -139,10 +185,12 @@ export function parseSitesConfig(text: string, env: NodeJS.ProcessEnv = process.
         throw new Error(
           `sites config: env ${site.telegram.botTokenEnv} (bot of ${site.id}) is not set`,
         );
-      // One webhook per bot: two sites on one bot would take it from each other.
-      if (botTokens.has(botToken))
-        throw new Error(`sites config: site "${site.id}" reuses another site's Telegram bot`);
-      botTokens.add(botToken);
+      // One webhook per bot: two sites receiving on one bot would take it from each other.
+      if (site.telegram.commands) {
+        if (receivingTokens.has(botToken))
+          throw new Error(`sites config: site "${site.id}" reuses another site's Telegram bot`);
+        receivingTokens.add(botToken);
+      }
       telegram = {
         ...site.telegram,
         botToken,
@@ -156,6 +204,7 @@ export function parseSitesConfig(text: string, env: NodeJS.ProcessEnv = process.
       ...rest,
       esp,
       plug,
+      hub,
       detector: { ...DEFAULT_DETECTOR_CONFIG, ...detector, zigbee: plug !== null },
       telegram,
     };

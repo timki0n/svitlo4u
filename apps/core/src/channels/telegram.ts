@@ -256,6 +256,8 @@ export class TelegramChannel {
     const siteBot = this.bots.get(siteId);
     if (!siteBot) return 0;
     const { config } = siteBot;
+    // A site may announce only some kinds (a test site: just the light and the voltage).
+    if (config.announce && !(config.announce as readonly string[]).includes(kind)) return 0;
     const targets = this.audience(siteId, config);
     const base = { siteId, channel: TELEGRAM, kind };
     /** One target's items: the text as the picture's caption, or the picture first when too long. */

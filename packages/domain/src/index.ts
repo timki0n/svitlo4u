@@ -48,6 +48,20 @@ export {
   isGameWindow,
 } from "./game.ts";
 export {
+  DEFAULT_HUB_DETECTOR_CONFIG,
+  type HubDetectorConfig,
+  type HubDetectorState,
+  type HubEffect,
+  type HubInput,
+  type HubMains,
+  type HubReport,
+  type HubStep,
+  initialHubDetectorState,
+  nextHubWakeAt,
+  persistHubDetector,
+  stepHubDetector,
+} from "./hub-detector.ts";
+export {
   type Bucket,
   calendarBuckets,
   clip,

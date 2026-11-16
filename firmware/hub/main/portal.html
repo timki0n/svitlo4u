@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Хаб · Світло4U</title>
+<style>
+:root{--page:#1f2024;--surface:#2a2c31;--well:#24262b;--shadow:#141518;--rim:rgba(255,255,255,.045);--text:#f2efea;--muted:#a3a5ad;--light:#ff9a3d;--glow:rgba(255,122,26,.45);--warn:#ff6b57;--raised:8px 8px 20px var(--shadow),-6px -6px 16px var(--rim),inset 1px 1px 0 rgba(255,255,255,.06);--raised-sm:5px 5px 12px var(--shadow),-4px -4px 10px rgba(255,255,255,.05),inset 1px 1px 0 rgba(255,255,255,.07);--inset:inset 4px 4px 9px var(--shadow),inset -3px -3px 8px var(--rim);color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--page)}
+body{color:var(--text);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-tap-highlight-color:transparent}
+main{max-width:440px;margin:0 auto;padding:20px 16px 40px}
+header{display:flex;align-items:center;gap:12px;margin:4px 0 22px}
+.dot{width:14px;height:14px;flex:none;border-radius:50%;background:var(--light);box-shadow:0 0 14px 3px var(--glow)}
+h1{font-size:20px;margin:0;letter-spacing:.02em}
+header p{margin:2px 0 0;color:var(--muted);font-size:13px}
+.card{background:var(--surface);border-radius:20px;box-shadow:var(--raised);padding:18px;margin-bottom:18px}
+.head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:4px}
+h2{font-size:15px;margin:0;font-weight:650}
+.state{display:block;font-size:13px;color:var(--muted);margin-bottom:12px}
+.ok{color:var(--light)}.bad{color:var(--warn)}
+button{font:inherit;color:var(--text);background:var(--surface);border:0;border-radius:14px;box-shadow:var(--raised-sm);padding:12px 14px;cursor:pointer}
+button:active{box-shadow:var(--inset)}
+.pill{padding:7px 12px;font-size:14px;border-radius:999px;color:var(--light);flex:none}
+.list{display:flex;flex-direction:column;gap:10px}
+.net{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;text-align:left}
+.net .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.net.cur{color:var(--light)}
+.sig{display:flex;align-items:flex-end;gap:2px;height:14px;flex:none}
+.sig i{width:3px;border-radius:1px;background:var(--muted);opacity:.3}
+.sig i.on{opacity:1}
+.lock{font-size:12px;color:var(--muted);margin-left:6px}
+.wide{width:100%;margin-top:12px;color:var(--muted)}
+.main{width:100%;font-weight:650;color:#1f2024;background:linear-gradient(90deg,#ffae45,#ff7a14);box-shadow:0 0 18px var(--glow)}
+.main:disabled{opacity:.45}
+.hint{color:var(--muted);font-size:14px;margin:10px 0 0}
+input{font:inherit;font-size:17px;color:var(--text);background:var(--well);border:0;border-radius:14px;box-shadow:var(--inset);padding:14px 16px;width:100%;outline:none}
+input:focus{box-shadow:var(--inset),0 0 0 2px var(--light)}
+label{display:block;font-size:13px;color:var(--muted);margin:18px 0 8px}
+.field{position:relative}
+.field input{padding-right:96px}
+.show{position:absolute;right:6px;top:6px;bottom:6px;padding:0 12px;font-size:14px;color:var(--muted);box-shadow:none;background:none}
+.sheet{position:fixed;inset:0;background:var(--page);z-index:10;overflow-y:auto;display:none}
+.sheet.open{display:block}
+.sheet main{padding-top:max(16px,env(safe-area-inset-top))}
+.back{background:none;box-shadow:none;color:var(--muted);padding:8px 0;margin-bottom:12px}
+.sheet h1{font-size:22px;word-break:break-word}
+.sheet .main{margin-top:24px;padding:16px}
+.result{margin:16px 0 0;font-size:15px;min-height:22px}
+</style>
+</head>
+<body>
+<main>
+  <header><span class="dot"></span><div><h1>Світло4U · Хаб</h1><p id="dev">налаштування</p></div></header>
+
+  <section class="card">
+    <div class="head"><h2>1. Домашній Wi-Fi</h2><button type="button" class="pill" id="rescan">↻ Оновити</button></div>
+    <span class="state" id="wifiState">…</span>
+    <div class="list" id="nets"><p class="hint">Шукаю мережі…</p></div>
+    <button type="button" class="wide" id="other">＋ Інша мережа (прихована)</button>
+    <p class="hint">Лише мережі 2,4 ГГц.</p>
+  </section>
+
+  <section class="card">
+    <div class="head"><h2>2. Розетка</h2></div>
+    <span class="state" id="plugState">…</span>
+    <button type="button" class="main" id="done" hidden>Завершити</button>
+    <button type="button" class="main" id="pair" disabled>Під'єднати розетку</button>
+    <p class="hint" id="pairHint">Спершу підключіть Wi-Fi.</p>
+  </section>
+  <p class="hint" id="serverState"></p>
+</main>
+
+<main id="final" hidden>
+  <header><span class="dot"></span><div><h1 id="finalTitle">Шукаю розетку</h1><p>Мережа Svitlo4U вимкнулась</p></div></header>
+  <div id="pairSteps">
+    <section class="card">
+      <p>1. Розумна розетка — в звичайній розетці, не на ДБЖ.</p>
+      <p class="hint">2. Затисніть кнопку на розетці на 5 секунд, поки її індикатор не почне часто блимати.</p>
+      <p class="hint">3. Коли індикатор хаба засвітиться <b style="color:#6fd36f">зеленим</b>, усе готово.</p>
+    </section>
+    <p class="hint">Хаб шукає розетку 3 хвилини. Не вийшло — затисніть кнопку BOOT на хабі на 5 секунд, і ця сторінка відкриється знову.</p>
+  </div>
+  <p class="hint">Телефон сам повернеться до домашньої мережі. Сторінку можна закрити.</p>
+</main>
+
+<div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+  <main>
+    <button type="button" class="back" id="back">‹ Назад до списку</button>
+    <h1 id="sheetTitle">Мережа</h1>
+    <form id="wifiForm" autocomplete="off">
+      <div id="ssidBox">
+        <label for="ssid">Назва мережі</label>
+        <input id="ssid" autocapitalize="off" autocorrect="off" spellcheck="false">
+      </div>
+      <div id="passBox">
+        <label for="pass">Пароль</label>
+        <div class="field">
+          <input id="pass" type="password" autocapitalize="off" autocorrect="off" spellcheck="false">
+          <button type="button" class="show" id="show">Показати</button>
+        </div>
+      </div>
+      <button type="submit" class="main" id="connect">Підключити</button>
+      <p class="result" id="result"></p>
+    </form>
+  </main>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const api = (path, body) =>
+  fetch(path, body ? {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)} : {}).then((r) => r.json());
+const reasons = {15: "схоже, невірний пароль", 201: "мережу не знайдено", 202: "схоже, невірний пароль", 204: "схоже, невірний пароль"};
+const PLUG_HINT = "Розумна розетка Zigbee з вимірюванням напруги, увімкнена в звичайну розетку — не в ту, що на ДБЖ.";
+let target = null; // the network the sheet connects to
+let waiting = false; // sent, waiting for the hub to connect
+
+function signal(rssi) {
+  const level = rssi > -60 ? 4 : rssi > -70 ? 3 : rssi > -80 ? 2 : 1;
+  const s = document.createElement("span");
+  s.className = "sig";
+  for (let i = 1; i <= 4; i++) {
+    const bar = document.createElement("i");
+    bar.style.height = `${3 + i * 3}px`;
+    if (i <= level) bar.className = "on";
+    s.append(bar);
+  }
+  return s;
+}
+
+function openSheet(net) {
+  target = net;
+  waiting = false;
+  $("sheetTitle").textContent = net ? net.ssid : "Інша мережа";
+  $("ssidBox").hidden = Boolean(net);
+  $("passBox").hidden = Boolean(net && !net.secure);
+  $("ssid").value = "";
+  $("pass").value = "";
+  $("pass").type = "password";
+  $("show").textContent = "Показати";
+  $("result").textContent = "";
+  $("result").className = "result";
+  $("connect").disabled = false;
+  $("sheet").classList.add("open");
+  setTimeout(() => (net ? $("pass") : $("ssid")).focus(), 50);
+}
+
+function closeSheet() {
+  $("sheet").classList.remove("open");
+  target = null;
+  waiting = false;
+}
+
+function scan() {
+  $("rescan").disabled = true;
+  $("nets").innerHTML = '<p class="hint">Шукаю мережі…</p>';
+  api("/api/scan")
+    .then(({networks}) => {
+      $("nets").textContent = "";
+      if (!networks.length) $("nets").innerHTML = '<p class="hint">Мереж не знайдено. Натисніть «Оновити».</p>';
+      for (const n of networks) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "net";
+        const name = document.createElement("span");
+        name.className = "name";
+        name.textContent = n.ssid;
+        const right = document.createElement("span");
+        right.append(signal(n.rssi));
+        if (n.secure) {
+          const lock = document.createElement("span");
+          lock.className = "lock";
+          lock.textContent = "🔒";
+          right.append(lock);
+        }
+        right.style.display = "flex";
+        right.style.alignItems = "center";
+        b.append(name, right);
+        b.onclick = () => openSheet(n);
+        $("nets").append(b);
+      }
+    })
+    .catch(() => ($("nets").innerHTML = '<p class="hint">Не вдалося. Натисніть «Оновити».</p>'))
+    .finally(() => ($("rescan").disabled = false));
+}
+
+function render(s) {
+  $("dev").textContent = `${s.dev} · v${s.fw}`;
+  const w = s.wifi;
+  const wifi = {
+    none: ["Оберіть свою мережу", ""],
+    connecting: [`Підключаюсь до «${w.ssid}»…`, ""],
+    connected: [`Підключено до «${w.ssid}»`, "ok"],
+    failed: [`«${w.ssid}» не підключається${reasons[w.reason] ? `: ${reasons[w.reason]}` : ""}`, "bad"],
+  }[w.state];
+  $("wifiState").textContent = wifi[0];
+  $("wifiState").className = `state ${wifi[1]}`;
+  for (const b of document.querySelectorAll(".net"))
+    b.classList.toggle("cur", w.state === "connected" && b.querySelector(".name").textContent === w.ssid);
+  if (waiting) {
+    // The hub retries a few times before giving up: say what went wrong after the first miss.
+    const early = w.state === "connecting" && reasons[w.reason];
+    $("result").textContent = early ? `Не виходить: ${reasons[w.reason]}. Пробую ще…` : wifi[0];
+    $("result").className = `result ${early ? "bad" : wifi[1]}`;
+    if (w.state === "connected") setTimeout(closeSheet, 1200);
+    if (w.state === "failed") {
+      waiting = false;
+      $("connect").disabled = false;
+    }
+  }
+  // While this page is up the hub cannot hear the plug (one radio): only whether one is paired.
+  const p = s.plug;
+  const online = w.state === "connected";
+  $("plugState").textContent = p.paired ? "Під'єднано" : "Не під'єднано";
+  $("plugState").className = `state ${p.paired ? "ok" : ""}`;
+  $("pair").textContent = p.paired ? "Під'єднати іншу розетку" : "Під'єднати розетку";
+  $("pair").disabled = !online;
+  $("pair").className = p.paired ? "wide" : "main";
+  $("done").hidden = !(online && p.paired);
+  $("pairHint").textContent = !online
+    ? "Спершу підключіть Wi-Fi."
+    : p.paired
+      ? "Усе на місці. «Завершити» вимкне мережу Svitlo4U, телефон повернеться до домашньої."
+      : `Мережа Svitlo4U вимкнеться, а хаб 3 хвилини шукатиме розетку. ${PLUG_HINT}`;
+  const server = {
+    unknown: "",
+    ok: "Зв'язок із svitlo4u є.",
+    failing: "svitlo4u поки не відповідає.",
+    rejected: "svitlo4u не впізнає цей хаб — зверніться до нас.",
+  }[s.server.state];
+  $("serverState").textContent = s.provisioned ? server : "У хаба немає ключа пристрою — зверніться до нас.";
+  $("serverState").className = `hint ${s.provisioned && s.server.state !== "rejected" ? "" : "bad"}`;
+}
+
+function finish(title, steps) {
+  document.querySelector("main").hidden = true;
+  $("final").hidden = false;
+  $("finalTitle").textContent = title;
+  $("pairSteps").hidden = !steps;
+}
+
+function poll() {
+  api("/api/status").then(render).catch(() => {}).finally(() => setTimeout(poll, 1500));
+}
+
+$("rescan").onclick = scan;
+$("other").onclick = () => openSheet(null);
+$("back").onclick = closeSheet;
+$("show").onclick = () => {
+  const hidden = $("pass").type === "password";
+  $("pass").type = hidden ? "text" : "password";
+  $("show").textContent = hidden ? "Сховати" : "Показати";
+};
+$("wifiForm").onsubmit = (e) => {
+  e.preventDefault();
+  const ssid = target ? target.ssid : $("ssid").value.trim();
+  if (!ssid) return $("ssid").focus();
+  $("connect").disabled = true;
+  waiting = true;
+  $("result").className = "result";
+  $("result").textContent = `Підключаюсь до «${ssid}»…`;
+  api("/api/wifi", {ssid, pass: $("pass").value}).catch(() => {
+    // The hub may jump to the router's channel: the phone drops off for a moment.
+    $("result").textContent = "Зв'язок із хабом на мить пропав. Якщо сторінка не оновлюється, знову підключіться до мережі Svitlo4U.";
+  });
+};
+$("pair").onclick = () =>
+  api("/api/pair", {}).then((r) => r.ok && finish("Шукаю розетку", true));
+$("done").onclick = () =>
+  api("/api/done", {}).then((r) => r.ok && finish("Готово", false));
+scan();
+poll();
+</script>
+</body>
+</html>

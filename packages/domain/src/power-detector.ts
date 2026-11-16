@@ -124,7 +124,11 @@ export type PowerReason =
   /** No usable plug: ESP silent for espOnlyOffAfterMs. */
   | "esp-timeout"
   /** The ESP rebooted while the core was down: an outage happened in between. */
-  | "downtime";
+  | "downtime"
+  /** Hub site: the hub's plug stopped / started answering (docs/hub-protocol.md). */
+  | "hub"
+  /** Hub site: the hub itself lost power (no UPS, or it ran out). */
+  | "hub-reboot";
 
 export type DetectorEffect =
   | {

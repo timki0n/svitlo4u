@@ -156,6 +156,41 @@ export class Notifier {
         });
       }),
       bus.on("zigbee.bridge", (e) => this.onZigbee(e.online)),
+      bus.on("hub.silent", (e) => {
+        const site = deps.state.site(e.siteId);
+        deps.telegram.alert(
+          e.siteId,
+          `⚠️ ${escapeHtml(site.name)}: хаб мовчить ${formatDurationLong((e.detectedAt - e.since) / 1000)} (з ${formatHHMM(e.since, site.tz)}) — немає інтернету або хаб вимкнувся. Світло за ним невідоме, доки він не повернеться.`,
+        );
+      }),
+      bus.on("hub.back", (e) => {
+        const site = deps.state.site(e.siteId);
+        const why = !e.rebooted
+          ? ""
+          : e.powerLoss
+            ? " Він перезапустився через втрату живлення: ДБЖ немає або розрядився."
+            : " Він перезапускався сам.";
+        deps.telegram.alert(
+          e.siteId,
+          `✅ ${escapeHtml(site.name)}: хаб знову на зв'язку після ${formatDurationLong((e.at - e.silentFrom) / 1000)}.${why}`,
+          { silent: true },
+        );
+      }),
+      bus.on("hub.updated", (e) => {
+        const site = deps.state.site(e.siteId);
+        deps.telegram.alert(
+          e.siteId,
+          `🔧 ${escapeHtml(site.name)}: прошивка хаба оновилася: ${escapeHtml(e.from)} → ${escapeHtml(e.to)}.`,
+          { silent: true },
+        );
+      }),
+      bus.on("hub.update-rejected", (e) => {
+        const site = deps.state.site(e.siteId);
+        deps.telegram.alert(
+          e.siteId,
+          `⚠️ ${escapeHtml(site.name)}: нова прошивка хаба ${escapeHtml(e.version)} не запрацювала — хаб повернувся до ${escapeHtml(e.fw ?? "попередньої")} і її більше не братиме.`,
+        );
+      }),
       bus.on("heartbeat.rejected", (e) => {
         const key = `${e.reason}|${e.remote}`;
         const now = deps.clock.now();

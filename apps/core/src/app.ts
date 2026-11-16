@@ -19,6 +19,7 @@ import {
   type UdpHeartbeatServer,
   UdpHeartbeatVerifier,
 } from "./adapters/heartbeat.ts";
+import { HubVerifier, registerHubRoutes } from "./adapters/hub.ts";
 import { type MqttLike, type PlugAdapter, startPlugAdapter } from "./adapters/plug.ts";
 import { YasnoPoller } from "./adapters/yasno.ts";
 import { registerGame } from "./api/game.ts";
@@ -34,7 +35,9 @@ import { type Clock, SystemClock } from "./runtime/clock.ts";
 import { buildServer } from "./server.ts";
 import { BackupService, loadBackupConfig } from "./services/backup.ts";
 import { EveningService, type EveningTimings } from "./services/evenings.ts";
+import { FirmwareService, loadFirmwareConfig, registerFirmwareRoute } from "./services/firmware.ts";
 import { GameService } from "./services/game.ts";
+import { HubPowerService } from "./services/hub-power.ts";
 import { ChromiumScheduleImages, type ScheduleImages } from "./services/images.ts";
 import { PowerService } from "./services/power.ts";
 import { ReminderService } from "./services/reminders.ts";
@@ -63,6 +66,8 @@ export type CoreDeps = {
   strictApi?: boolean;
   /** Replace the network of the backup uploads (tests). */
   backupFetch?: (request: Request) => Promise<Response>;
+  /** Replace the network of the hub firmware mirror: GitHub and R2 (tests). */
+  firmwareFetch?: (request: Request) => Promise<Response>;
   /** Replace the schedule pictures (tests); null turns them off. */
   images?: ScheduleImages | null;
   /** Replace the Bot API calls for the game's avatars (tests). */
@@ -78,6 +83,8 @@ export type Core = {
   state: SiteStateStore;
   sites: SiteConfig[];
   power: Map<string, PowerService>;
+  /** Power of hub sites (docs/hub-protocol.md). */
+  hubs: Map<string, HubPowerService>;
   schedules: ScheduleService;
   pollers: YasnoPoller[];
   udp: UdpHeartbeatServer | null;
@@ -86,6 +93,8 @@ export type Core = {
   notifier: Notifier;
   sse: SseHub;
   backup: BackupService | null;
+  /** Hub firmware updates; null without hub sites. */
+  firmware: FirmwareService | null;
   stop: () => Promise<void>;
 };
 
@@ -267,7 +276,12 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
     );
   }
 
+  const hubs = new Map<string, HubPowerService>();
   for (const site of sites) {
+    if (site.hub) {
+      hubs.set(site.id, new HubPowerService({ site, hub: site.hub, store, bus, clock, state }));
+      continue;
+    }
     const service = new PowerService({
       site,
       store,
@@ -302,6 +316,37 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
       verifier: new HttpHeartbeatVerifier(espDevices),
       onEvent: onHeartbeat,
       onReject: (reason, remote) => bus.emit("heartbeat.rejected", { reason, remote }),
+      now: () => clock.now(),
+    });
+  }
+  const hubDevices = sites.flatMap((s) => (s.hub ? [s.hub] : []));
+  // Backups and hub firmware share the R2 bucket.
+  const backupConfig = loadBackupConfig(env, sites[0]?.tz ?? KYIV_TZ);
+  let firmware: FirmwareService | null = null;
+  if (hubDevices.length > 0) {
+    const firmwareConfig = loadFirmwareConfig(env, config.dbPath, backupConfig);
+    if (firmwareConfig) {
+      firmware = new FirmwareService({
+        config: firmwareConfig,
+        clock,
+        log,
+        ...(deps.firmwareFetch ? { fetch: deps.firmwareFetch } : {}),
+      });
+      registerFirmwareRoute(app, firmware);
+    }
+    const verifier = new HubVerifier(hubDevices);
+    const firmwareService = firmware;
+    registerHubRoutes(app, {
+      verifier,
+      onReport: (event) => hubs.get(event.siteId)?.onReport(event),
+      onReject: (reason, remote, deviceId) =>
+        bus.emit("heartbeat.rejected", { reason, remote, ...(deviceId ? { deviceId } : {}) }),
+      offer: (event) => {
+        const device = verifier.device(event.deviceId);
+        return firmwareService && device ? firmwareService.offer(device.firmware, event) : null;
+      },
+      onOfferError: (error, event) =>
+        log.warn({ err: error, deviceId: event.deviceId }, "hub firmware offer failed"),
       now: () => clock.now(),
     });
   }
@@ -346,7 +391,6 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
   );
 
   // Nightly backup to S3-compatible storage (Cloudflare R2), when configured.
-  const backupConfig = loadBackupConfig(env, sites[0]?.tz ?? KYIV_TZ);
   if (backupConfig && config.dbPath !== ":memory:") {
     backup = new BackupService({
       db,
@@ -367,6 +411,7 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
   }
 
   for (const service of power.values()) service.start();
+  for (const service of hubs.values()) service.start();
   for (const service of reminders) service.start();
   for (const poller of pollers) poller.start();
 
@@ -375,6 +420,7 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
   outbox.start();
   telegram.start();
   backup?.start();
+  firmware?.start();
   notifierInstance.coreStarted(previousRunAt);
 
   return {
@@ -384,6 +430,7 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
     state,
     sites,
     power,
+    hubs,
     schedules,
     pollers,
     udp,
@@ -392,13 +439,16 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
     notifier: notifierInstance,
     sse,
     backup,
+    firmware,
     stop: async () => {
       backup?.stop();
+      firmware?.stop();
       for (const poller of pollers) poller.stop();
       await udp?.close();
       for (const service of reminders) service.stop();
       for (const monitor of voltage) monitor.stop();
       for (const service of power.values()) service.stop();
+      for (const service of hubs.values()) service.stop();
       mqtt?.end?.(true);
       notifierInstance.stop();
       evenings.stop();
@@ -446,6 +496,8 @@ function logEvents(bus: Bus, log: FastifyInstance["log"], clock: Clock): void {
     ),
   );
   bus.on("zigbee.bridge", (e) => log.info(`zigbee2mqtt ${e.online ? "online" : "offline"}`));
+  bus.on("hub.updated", (e) => log.info(e, "hub firmware changed"));
+  bus.on("hub.update-rejected", (e) => log.warn(e, "hub rolled a firmware back"));
   bus.on("yasno.error", (e) => log.warn({ failures: e.failures }, `yasno: ${e.error}`));
   const lastRejectLog = new Map<string, number>();
   bus.on("heartbeat.rejected", (e) => {

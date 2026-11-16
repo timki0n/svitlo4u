@@ -53,6 +53,21 @@ export type CoreEvents = {
     at: number;
   };
   "heartbeat.rejected": { reason: RejectReason; remote: string; deviceId?: string };
+  /** A hub site's hub has been silent since `since` (no internet or a dead hub, not an outage). */
+  "hub.silent": { siteId: string; deviceId: string; since: number; detectedAt: number };
+  /** The hub is back; `powerLoss`: it rebooted because it lost power (no UPS or it ran out). */
+  "hub.back": {
+    siteId: string;
+    deviceId: string;
+    silentFrom: number;
+    at: number;
+    rebooted: boolean;
+    powerLoss: boolean;
+  };
+  /** The hub came back from a restart on another firmware (an update, or flashed by hand). */
+  "hub.updated": { siteId: string; deviceId: string; from: string; to: string };
+  /** A new firmware did not confirm itself: the hub went back to `fw` and won't take `version`. */
+  "hub.update-rejected": { siteId: string; deviceId: string; version: string; fw: string | null };
   "zigbee.bridge": { online: boolean };
   "yasno.error": { error: string; failures: number };
   "yasno.recovered": { failures: number };

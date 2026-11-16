@@ -163,6 +163,21 @@ failures in a row the admin chat gets an alert. `/health` shows the last backup.
 Restore: download an object, `gunzip` it, stop `core`, replace `data/svitlo4u.db` (remove
 `svitlo4u.db-wal` / `-shm`), start `core`.
 
+### Hub firmware (over the air)
+
+Hub sites (`kind: hub`) update their hubs themselves: CI publishes the GitHub release
+`hub-v<version>` when `firmware/hub/version.txt` changes on `main`, the core checks the releases
+every 30 minutes, keeps the images in `data/firmware/` and — with the backup bucket configured —
+uploads them to `<prefix>firmware/hub/` in the same R2 bucket (no new token: the backup one has
+Object Read & Write). Hubs then download from a presigned R2 link valid for 15 minutes; without
+R2 they download from the core (`/iot/hub/firmware/…`). The backup lifecycle rules cover only
+`daily/` and `monthly/`, so the firmware stays.
+
+Per hub in `config/sites.yaml`: `firmware: latest` (default), a pinned `"0.2.1"` (also to go back)
+or `off`. An update waits until the light is on and the hub has nothing unsent; a firmware that does
+not come back to the core within 10 minutes is rolled back by the hub, and the admin chat hears
+about both.
+
 ## Run / update
 
 ```bash
