@@ -107,8 +107,8 @@ static void ota_task(void *arg) {
     mbedtls_sha256_context sha;
     mbedtls_sha256_init(&sha);
     uint32_t started = hub_ms();
-    // Slow on purpose: Zigbee keeps the radio priority (the plug is read every second), so a
-    // 1.5 MB image takes a few minutes.
+    // Zigbee keeps the radio priority (the plug is still read every second): a 1.5 MB image takes
+    // about a minute from R2, longer from a slow server.
     ESP_LOGI(TAG, "downloading %s (%lu bytes) into %s", target, (unsigned long)size, part ? part->label : "?");
 
     esp_http_client_config_t cfg = {
