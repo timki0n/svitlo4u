@@ -134,7 +134,8 @@ see `firmware/hub/README.md`), stored in its NVS and on the server:
 - a hub for someone else's building: in the database. `cli/hub.ts new` (run by
   `firmware/hub/tools/factory.py`) creates it with no building and no owner, and gives the
   sticker's link `t.me/<bot>?start=own-<hub id>-<code>`. The code is the first 10 base32
-  characters of HMAC-SHA256(secret, "svitlo4u-claim"): only the sticker (or the secret) gives it.
+  characters of the HMAC-SHA256 of the text `svitlo4u-claim` keyed with the hub's secret: only the
+  sticker (or the secret) gives it.
 
 The first scan of the sticker makes the person the hub's owner. A hub without a building asks for
 the Yasno group and a name and creates it (`b-` + 10 random characters, its page only by link);
