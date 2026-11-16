@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type Me, type OwnedHub } from "./api.ts";
+import { api, type Me, type OwnedChat, type OwnedHub } from "./api.ts";
 import { duration, hhmm } from "./format.ts";
 import { inMiniApp, openTelegramLink } from "./telegram.ts";
 import { Header, Icon } from "./ui.tsx";
@@ -169,15 +169,6 @@ function HubCard({ hub, onChange }: { hub: OwnedHub; onChange: (me: Me) => void 
             Сторінка будинку
           </a>
         )}
-        {hub.groupLink && (
-          <button
-            className="button"
-            type="button"
-            onClick={() => openTelegramLink(hub.groupLink as string)}
-          >
-            Додати бота в чат будинку
-          </button>
-        )}
         {site?.renamable && !editing && (
           <button className="button" type="button" onClick={() => setEditing(true)}>
             Перейменувати
@@ -220,6 +211,167 @@ function HubCard({ hub, onChange }: { hub: OwnedHub; onChange: (me: Me) => void 
           {error}
         </p>
       )}
+      {site && <Chats hub={hub} siteId={site.id} onChange={onChange} />}
     </section>
   );
+}
+
+/** Where the building's notices go besides the owner: groups (or their topics) and channels. */
+function Chats({
+  hub,
+  siteId,
+  onChange,
+}: {
+  hub: OwnedHub;
+  siteId: string;
+  onChange: (me: Me) => void;
+}) {
+  const [confirm, setConfirm] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const act = async (run: () => Promise<Me>, failure: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      onChange(await run());
+      setConfirm(null);
+    } catch (e) {
+      console.error(e);
+      setError(failure);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="hub-chats">
+      <span className="small-label">Чати й канали</span>
+      {hub.chats.length === 0 && (
+        <p className="muted hub-note">
+          Поки сповіщення приходять лише вам. Додайте бота в групу будинку або в канал — їх
+          отримуватимуть усі там.
+        </p>
+      )}
+      {hub.chats.map((chat) => {
+        const key = `${chat.chatId}:${chat.threadId}`;
+        return (
+          <div className="chat-row" key={key}>
+            <div className="card-head">
+              <span className="chat-title">{chatName(chat)}</span>
+              <span className="muted hub-id">{chatKind(chat)}</span>
+            </div>
+            <p className="muted hub-note">{chatState(chat)}</p>
+            {chat.bot === "no-delete" && (
+              <p className="warn-line">
+                Щоб стрічка працювала, зробіть бота адміністратором групи з правом «Видаляти
+                повідомлення».
+              </p>
+            )}
+            {chat.bot === "no-post" && (
+              <p className="warn-line">
+                Бот не може публікувати: дайте йому в каналі право «Публікувати повідомлення».
+              </p>
+            )}
+            {confirm === key ? (
+              <div className="hub-confirm">
+                <p className="muted">Сповіщення сюди більше не приходитимуть, бот вийде з чату.</p>
+                <div className="hub-actions">
+                  <button
+                    className="button"
+                    data-kind="danger"
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      void act(
+                        () => api.removeChat(chat.chatId, chat.threadId),
+                        "Не вдалося прибрати бота.",
+                      )
+                    }
+                  >
+                    Прибрати
+                  </button>
+                  <button className="button" type="button" onClick={() => setConfirm(null)}>
+                    Скасувати
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="hub-actions">
+                {chat.kind === "group" && (
+                  <button
+                    className="button"
+                    type="button"
+                    disabled={busy}
+                    onClick={() =>
+                      void act(
+                        () => api.setChatFeed(chat.chatId, chat.threadId, !chat.feed),
+                        "Не вдалося змінити.",
+                      )
+                    }
+                  >
+                    {chat.feed ? "Дозволити писати всім" : "Зробити стрічкою"}
+                  </button>
+                )}
+                <button
+                  className="button"
+                  data-kind="quiet"
+                  type="button"
+                  onClick={() => setConfirm(key)}
+                >
+                  Прибрати бота
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {error && (
+        <p className="warn-line" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="hub-actions">
+        {hub.groupLink && (
+          <button
+            className="button"
+            type="button"
+            onClick={() => openTelegramLink(hub.groupLink as string)}
+          >
+            Додати в групу
+          </button>
+        )}
+        {hub.channelLink && (
+          <button
+            className="button"
+            type="button"
+            onClick={() => {
+              // The channel takes the building chosen last: this one.
+              void api.setMySite(siteId).then(onChange, () => {});
+              openTelegramLink(hub.channelLink as string);
+            }}
+          >
+            Додати в канал
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function chatName(chat: OwnedChat): string {
+  const name = chat.title ?? (chat.kind === "channel" ? "Канал" : "Група");
+  return chat.threadId ? `${name} · тема ${chat.threadId}` : name;
+}
+
+function chatKind(chat: OwnedChat): string {
+  if (chat.kind === "channel") return "канал";
+  return chat.feed ? "стрічка" : "група";
+}
+
+function chatState(chat: OwnedChat): string {
+  if (chat.kind === "channel") return "Бот публікує сюди сповіщення про світло.";
+  return chat.feed
+    ? "Стрічка: пишуть лише адміни, решту бот видаляє."
+    : "Звичайний чат: сповіщення приходять сюди, писати можуть усі.";
 }

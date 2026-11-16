@@ -43,6 +43,8 @@ static void status(void) {
     if (p.has_rssi) outf(", %d dBm", p.rssi);
     mains_event_t ev[HUB_MAX_EVENTS];
     outf(", %d events unsent\r\n", events_peek(ev, HUB_MAX_EVENTS));
+    outf("link gaps (radio, not mains): %lu, longest %.1f s\r\n", (unsigned long)p.link_gaps,
+         p.longest_gap_ms / 1000.0);
     static char diag[600];
     ota_describe(diag, sizeof(diag));
     out(diag);

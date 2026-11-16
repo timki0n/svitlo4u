@@ -208,7 +208,7 @@ describe("Telegram channel", () => {
     expect(webhook?.payload).toMatchObject({
       url: "https://svitlo4u.test/telegram/4u",
       secret_token: webhookSecret(TOKEN),
-      allowed_updates: ["message", "callback_query"],
+      allowed_updates: ["message", "callback_query", "my_chat_member"],
     });
     expect(tg.calls.some((c) => c.method === "setMyCommands")).toBe(true);
     expect(tg.calls.some((c) => c.method === "setChatMenuButton")).toBe(false);

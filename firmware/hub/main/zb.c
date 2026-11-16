@@ -16,7 +16,13 @@ static const char *TAG = "zb";
 #define HUB_EP 1
 #define PLUG_EP 1
 #define READ_EVERY_MS 1000
-#define OFF_AFTER_MS 5000        // no answer this long → the mains is gone
+// Silence of the plug (it has no battery): 5 s → maybe the mains is gone; 20 s → it is, since the
+// last answer. A shorter silence is a gap of the radio link, unless the plug comes back rebooted
+// (its announce): then the mains was gone for that while. Link gaps last up to ~15 s — a router
+// renews its links every 15 s (two false «off» of 15 s at -79 dBm, 2026-11-16).
+#define SUSPECT_MS 5000
+#define CONFIRM_MS 20000
+#define ANNOUNCE_GRACE_MS 3000   // the plug's announce may come just after its first answer
 #define UNKNOWN_TO_OFF_MS 10000  // after a boot: never answered this long → off (since unknown)
 #define SCALE_EVERY_MS (10 * 60 * 1000)
 #define PAIRING_S 180
@@ -48,6 +54,12 @@ static int8_t rssi;
 static bool has_rssi;
 static uint16_t v_mult = 1, v_div = 1;
 static volatile uint32_t sent_ok, sent_failed; // radio-level results of the reads to the plug
+// A silence being judged, and the last one that ended without the plug rebooting.
+static bool suspect;
+static uint32_t gap_from_ms;
+static bool gap_pending;
+static uint32_t gap_end_ms, gap_start_ms;
+static volatile uint32_t link_gaps, longest_gap_ms;
 
 // ---------------------------------------------------------------------------------------------
 // Events waiting for the core
@@ -95,9 +107,36 @@ static void set_mains(mains_t to, double since, bool event) {
     report_kick();
 }
 
-/** Any message from the plug: it is alive, so is the mains. */
-static void plug_alive(int8_t signal) {
+/** The mains was gone from `from` to `to` (both known only now): both changes, in order. */
+static void past_cut(uint32_t from, uint32_t to) {
+    ESP_LOGW(TAG, "the plug rebooted: the mains was gone %.1f s", (to - from) / 1000.0);
+    set_mains(MAINS_OFF, from / 1000.0, true);
+    set_mains(MAINS_ON, to / 1000.0, true);
+}
+
+/** Any message from the plug: it is alive, so is the mains. `announce`: it has just (re)started. */
+static void plug_alive(int8_t signal, bool announce) {
     uint32_t now = hub_ms();
+    if (announce && gap_pending && now - gap_end_ms < ANNOUNCE_GRACE_MS) {
+        // The gap that has just ended was the plug starting again: a power cut after all.
+        gap_pending = false;
+        if (link_gaps) link_gaps--;
+        past_cut(gap_start_ms, gap_end_ms);
+    }
+    if (suspect) {
+        suspect = false;
+        uint32_t gap = now - gap_from_ms;
+        if (announce) {
+            past_cut(gap_from_ms, now);
+        } else {
+            link_gaps++;
+            if (gap > longest_gap_ms) longest_gap_ms = gap;
+            gap_pending = true;
+            gap_start_ms = gap_from_ms;
+            gap_end_ms = now;
+            ESP_LOGW(TAG, "link gap: the plug was silent %.1f s but did not restart", gap / 1000.0);
+        }
+    }
     last_answer_ms = now;
     rssi = signal;
     has_rssi = true;
@@ -134,6 +173,8 @@ void zb_status(plug_status_t *out) {
     out->has_rssi = has_rssi;
     out->rssi = rssi;
     out->network_up = network_up;
+    out->link_gaps = link_gaps;
+    out->longest_gap_ms = longest_gap_ms;
     uint32_t now = hub_ms();
     out->pairing_open = pairing_open && now < pairing_until_ms;
     out->pairing_left_s = out->pairing_open ? (pairing_until_ms - now) / 1000 : 0;
@@ -158,6 +199,8 @@ void zb_diag(char *out, size_t size) {
 void zb_forget_plug(void) {
     config_forget_plug();
     answered = false;
+    suspect = false;
+    gap_pending = false;
     has_voltage = false;
     set_mains(MAINS_UNKNOWN, -1, false);
 }
@@ -175,7 +218,7 @@ static void zcl_action(ezb_zcl_core_action_callback_id_t id, void *message) {
     case EZB_ZCL_CORE_READ_ATTR_RSP_CB_ID: {
         ezb_zcl_cmd_read_attr_rsp_message_t *m = message;
         if (!sender(m->in.header)) return;
-        plug_alive(m->in.header->rssi);
+        plug_alive(m->in.header->rssi, false);
         for (ezb_zcl_read_attr_rsp_variable_t *v = m->in.variables; v; v = v->next) {
             if (v->status != 0) continue;
             if (m->info.cluster_id == EZB_ZCL_CLUSTER_ID_ELECTRICAL_MEASUREMENT)
@@ -191,14 +234,14 @@ static void zcl_action(ezb_zcl_core_action_callback_id_t id, void *message) {
     case EZB_ZCL_CORE_REPORT_ATTR_CB_ID: {
         ezb_zcl_cmd_report_attr_message_t *m = message;
         if (!sender(m->in.header)) return;
-        plug_alive(m->in.header->rssi);
+        plug_alive(m->in.header->rssi, false);
         if (m->info.cluster_id == EZB_ZCL_CLUSTER_ID_ELECTRICAL_MEASUREMENT)
             for (ezb_zcl_report_attr_variable_t *v = m->in.variables; v; v = v->next)
                 take_voltage(v->attr_id, v->attr_type, v->attr_value);
     } break;
     case EZB_ZCL_CORE_DEFAULT_RSP_CB_ID: {
         ezb_zcl_cmd_default_rsp_message_t *m = message;
-        if (sender(m->in.header)) plug_alive(m->in.header->rssi);
+        if (sender(m->in.header)) plug_alive(m->in.header->rssi, false);
     } break;
     default:
         break;
@@ -279,8 +322,8 @@ static bool zb_signal(const ezb_app_signal_t *sig) {
         bool known = g_cfg.plug_paired && p->device_addr.u64 == g_cfg.plug_ieee;
         if (known) {
             if (p->short_addr != g_cfg.plug_short) config_save_plug(p->short_addr, g_cfg.plug_ieee);
-            ESP_LOGI(TAG, "plug rejoined: 0x%04x", p->short_addr);
-            plug_alive(0);
+            ESP_LOGI(TAG, "plug announced itself (started again): 0x%04x", p->short_addr);
+            plug_alive(0, true);
         } else if (pairing_open || !g_cfg.plug_paired) {
             // The device that joins while pairing is open becomes the plug (replacing the old one).
             config_save_plug(p->short_addr, p->device_addr.u64);
@@ -396,9 +439,18 @@ static void poll_task(void *arg) {
             last_read = now;
             read_attrs(EZB_ZCL_CLUSTER_ID_ELECTRICAL_MEASUREMENT, voltage_attr, 1);
         }
-        // The verdict: silence means no mains (the plug has no battery).
-        if (mains == MAINS_ON && now - last_answer_ms >= OFF_AFTER_MS) {
-            set_mains(MAINS_OFF, last_answer_ms / 1000.0, true);
+        // The verdict: a long silence means no mains (the plug has no battery).
+        if (mains == MAINS_ON) {
+            uint32_t silent = now - last_answer_ms;
+            if (!suspect && silent >= SUSPECT_MS) {
+                suspect = true;
+                gap_from_ms = last_answer_ms;
+                ESP_LOGI(TAG, "the plug is silent %lu ms: waiting before calling it off", (unsigned long)silent);
+            }
+            if (suspect && silent >= CONFIRM_MS) {
+                suspect = false;
+                set_mains(MAINS_OFF, last_answer_ms / 1000.0, true);
+            }
         } else if (mains == MAINS_UNKNOWN && !answered && now - verdict_at_ms >= UNKNOWN_TO_OFF_MS) {
             set_mains(MAINS_OFF, -1, false); // when it went is unknown: no event
         }

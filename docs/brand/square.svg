@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120">
+  <title>Світло4U</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2e3036"/>
+      <stop offset="1" stop-color="#1f2024"/>
+    </linearGradient>
+    <radialGradient id="win" cx="0.38" cy="0.32" r="0.85">
+      <stop offset="0" stop-color="#ffd59a"/>
+      <stop offset="0.6" stop-color="#ff9a3d"/>
+      <stop offset="1" stop-color="#ff7a14"/>
+    </radialGradient>
+    <filter id="glow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="7"/>
+    </filter>
+  </defs>
+  <rect width="120" height="120" fill="url(#bg)"/>
+  <g transform="translate(60 61) scale(0.95) translate(-60 -60)">
+    <path d="M25 57 L60 28 L95 57" fill="none" stroke="#f2efea" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="43" y="58" width="34" height="34" rx="8" fill="#ff7a14" opacity="0.6" filter="url(#glow)"/>
+    <rect x="43" y="58" width="34" height="34" rx="8" fill="url(#win)"/>
+    <path d="M60 58 V92 M43 75 H77" stroke="#c4560a" stroke-width="3" opacity="0.45"/>
+  </g>
+</svg>

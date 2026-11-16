@@ -56,16 +56,20 @@ STICKER = """<!doctype html>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
   @page {{ size: 60mm 40mm; margin: 0 }}
-  body {{ margin: 0; font: 9pt/1.25 system-ui, sans-serif; color: #000 }}
-  .s {{ width: 60mm; height: 40mm; box-sizing: border-box; padding: 3mm; display: flex; gap: 3mm }}
-  #qr {{ width: 26mm; height: 26mm; flex: none }} #qr img, #qr canvas {{ width: 100%; height: auto }}
-  b {{ font-size: 10pt }} small {{ color: #333 }}
+  body {{ margin: 0; font: 6.5pt/1.3 system-ui, sans-serif; color: #000 }}
+  .s {{ width: 60mm; height: 40mm; box-sizing: border-box; padding: 3mm; display: flex; gap: 2.5mm; align-items: center }}
+  #qr {{ width: 25mm; height: 25mm; flex: none }} #qr img, #qr canvas {{ width: 100%; height: auto }}
+  .t {{ display: flex; flex-direction: column; gap: 1.2mm; min-width: 0 }}
+  .b {{ display: flex; align-items: center; gap: 1mm; font-size: 8.5pt; font-weight: 700 }}
+  .m {{ width: 5mm; height: auto; flex: none }}
+  small {{ font-size: 6pt; color: #333 }}
 </style></head>
-<body><div class="s"><div id="qr"></div><div>
-  <b>Світло4U · хаб</b><br><small>{id}</small><br><br>
-  1. Увімкніть біля роутера, на ДБЖ.<br>
-  2. Wi-Fi «Svitlo4U-…» → налаштування.<br>
-  3. Скануйте QR — сповіщення в Telegram.
+<body><div class="s"><div id="qr"></div><div class="t">
+  <div class="b"><svg class="m" viewBox="20 22 80 74" aria-hidden="true"><path d="M25 57 L60 28 L95 57" fill="none" stroke="#000" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/><rect x="42" y="57" width="36" height="36" rx="8" fill="#000"/></svg>Світло4U</div>
+  <small>хаб {id}</small>
+  <div>1. Біля роутера, на ДБЖ.</div>
+  <div>2. Wi-Fi «Svitlo4U-…».</div>
+  <div>3. Скануйте QR.</div>
 </div></div>
 <script>new QRCode(document.getElementById("qr"), {{ text: {link}, width: 512, height: 512, correctLevel: QRCode.CorrectLevel.M }});</script>
 </body></html>

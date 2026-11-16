@@ -40,6 +40,12 @@ export type HubReportEvent = {
   mainsSince: number | null;
   voltage: number | null;
   rssi: number | null;
+  /**
+   * Silences of the plug that were the radio, not the mains (this boot), and the longest, s.
+   * Null from firmware that does not count them.
+   */
+  linkGaps: number | null;
+  longestGap: number | null;
   events: { up: number; mains: "on" | "off" }[];
   ota: HubOtaStatus | null;
   remote: string;
@@ -157,6 +163,9 @@ export class HubVerifier {
     const mainsSince = numOrNull(p.since, 0, 1e9);
     const voltage = numOrNull(p.voltage, 0, 1000);
     const rssi = numOrNull(p.rssi, -127, 20);
+    // Lenient: diagnostics must not cost a power report.
+    const linkGaps = numOrNull(p.gaps, 0, 1e9) ?? null;
+    const longestGap = numOrNull(p.longestGap, 0, 1e7) ?? null;
     if (
       v !== 1 ||
       typeof boot !== "string" ||
@@ -216,6 +225,8 @@ export class HubVerifier {
         mainsSince,
         voltage,
         rssi,
+        linkGaps,
+        longestGap,
         events: parsedEvents,
         ota: parseOta(ota),
         remote,

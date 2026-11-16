@@ -71,10 +71,40 @@ export function Icon({
   );
 }
 
+/** The mark of Світло4U: a roof and a lit window (docs/brand). */
+export function Mark({ size = 28 }: { size?: number }) {
+  return (
+    <svg viewBox="20 22 80 74" width={size} height={(size * 74) / 80} aria-hidden="true">
+      <path
+        d="M25 57 L60 28 L95 57"
+        fill="none"
+        stroke="var(--text)"
+        strokeWidth={8}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <rect
+        x={43}
+        y={58}
+        width={34}
+        height={34}
+        rx={8}
+        fill="var(--light)"
+        style={{ filter: "drop-shadow(0 0 5px var(--light-glow))" }}
+      />
+    </svg>
+  );
+}
+
 export function Header({ children }: { children: ReactNode }) {
   return (
     <header className="header">
-      {children}
+      <div className="brand-row">
+        <a className="brand" href="/" aria-label="Світло4U — на головну">
+          <Mark />
+        </a>
+        {children}
+      </div>
       <a
         className="support"
         href={SUPPORT_URL}

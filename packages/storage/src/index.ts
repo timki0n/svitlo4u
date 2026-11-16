@@ -7,4 +7,5 @@ export {
   type OutboxItem,
   type SiteRow,
   type Store,
+  type TelegramChatRow,
 } from "./store.ts";

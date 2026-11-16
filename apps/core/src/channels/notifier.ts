@@ -23,7 +23,7 @@ import {
   voltageAlertText,
   voltageStabilizedText,
 } from "./messages.ts";
-import type { AdminReports, TelegramChannel } from "./telegram.ts";
+import { type AdminReports, type TelegramChannel, tellButton } from "./telegram.ts";
 
 export const ZIGBEE_OFFLINE_ALERT_MS = 60_000;
 /**
@@ -183,6 +183,15 @@ export class Notifier {
           e.siteId,
           `🔧 ${escapeHtml(site.name)}: прошивка хаба оновилася: ${escapeHtml(e.from)} → ${escapeHtml(e.to)}.`,
           { silent: true },
+        );
+      }),
+      // Admin only: a weak link between the hub and its plug (no light event came of it).
+      bus.on("hub.link-gap", (e) => {
+        const site = deps.state.site(e.siteId);
+        deps.telegram.alert(
+          e.siteId,
+          `📶 ${escapeHtml(site.name)}: хаб на якийсь час не чув розетку, але вона не перезапускалась — це радіо, не світло. Розривів з запуску хаба: ${e.gaps}${e.longest !== null ? `, найдовший ${e.longest.toFixed(0)} с` : ""}${e.rssi !== null ? `, сигнал ${e.rssi} dBm` : ""}.`,
+          { silent: true, buttons: [[tellButton(e.siteId, "gap")]] },
         );
       }),
       bus.on("hub.update-rejected", (e) => {

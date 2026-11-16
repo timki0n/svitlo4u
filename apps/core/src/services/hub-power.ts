@@ -74,12 +74,14 @@ export class HubPowerService {
       paired: r?.paired ?? null,
       mains: r?.mains ?? null,
       voltage: r?.voltage ?? null,
+      linkGaps: r?.linkGaps ?? null,
     };
   }
 
   onReport(event: HubReportEvent): void {
     const { state, store, bus } = this.deps;
     this.noticeFirmware(event);
+    this.noticeLinkGaps(event);
     this.latest = event;
     state.update(this.siteId, {
       lastEspAt: event.t,
@@ -103,6 +105,21 @@ export class HubPowerService {
       },
     });
     if (this.deps.clock.now() - this.savedAt >= PERSIST_EVERY_MS) this.persist();
+  }
+
+  /** The plug fell silent for a while but the hub judged it the radio, not the mains. */
+  private noticeLinkGaps(event: HubReportEvent): void {
+    const before = this.latest;
+    if (event.linkGaps === null || !before || before.boot !== event.boot) return;
+    const was = before.linkGaps ?? 0;
+    if (event.linkGaps <= was) return;
+    this.deps.bus.emit("hub.link-gap", {
+      siteId: this.siteId,
+      deviceId: this.deps.hub.id,
+      gaps: event.linkGaps,
+      longest: event.longestGap,
+      rssi: event.rssi,
+    });
   }
 
   /** A new boot on another firmware: updated, or a new image rolled back. */

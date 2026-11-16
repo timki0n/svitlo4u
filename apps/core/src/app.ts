@@ -267,6 +267,7 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
     clock,
     ownership,
     botUsername: () => telegram.botUsername(),
+    leaveChat: (siteId, chatId) => telegram.leaveChat(siteId, chatId),
   });
   telegram.registerRoutes(app);
   sse.registerRoutes(app);
@@ -562,6 +563,9 @@ function logEvents(bus: Bus, log: FastifyInstance["log"], clock: Clock): void {
   bus.on("zigbee.bridge", (e) => log.info(`zigbee2mqtt ${e.online ? "online" : "offline"}`));
   bus.on("hub.updated", (e) => log.info(e, "hub firmware changed"));
   bus.on("hub.update-rejected", (e) => log.warn(e, "hub rolled a firmware back"));
+  bus.on("hub.link-gap", (e) =>
+    log.warn(e, "hub lost its plug's radio for a while (not the mains)"),
+  );
   bus.on("yasno.error", (e) => log.warn({ failures: e.failures }, `yasno: ${e.error}`));
   const lastRejectLog = new Map<string, number>();
   bus.on("heartbeat.rejected", (e) => {
@@ -599,7 +603,7 @@ function hubsReport(
       const last = site ? status(site.id) : null;
       const seen =
         last?.lastReportAt != null
-          ? `звіт ${Math.round((now - last.lastReportAt) / 60_000)} хв тому, ${last.fw ?? "?"}`
+          ? `звіт ${Math.round((now - last.lastReportAt) / 60_000)} хв тому, ${last.fw ?? "?"}${last.linkGaps ? `, розривів зв'язку з розеткою ${last.linkGaps}` : ""}`
           : "звітів не було";
       return `• ${id}: ${site ? `«${site.name}» (${site.id})` : "без будинку"}, ${owner !== null ? `власник ${owner}` : "без власника"}, ${seen}`;
     }),

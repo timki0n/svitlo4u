@@ -69,6 +69,7 @@ function hub(c: Core) {
     boot?: string;
     fw?: string;
     ota?: unknown;
+    gaps?: number;
   }) => {
     const raw = JSON.stringify({
       v: 1,
@@ -78,7 +79,14 @@ function hub(c: Core) {
       up: fields.up,
       rst: fields.boot ? "sw" : "poweron",
       fw: fields.fw ?? "0.1.0",
-      plug: { paired: true, mains: fields.mains, since: fields.since, voltage: 229, rssi: -60 },
+      plug: {
+        paired: true,
+        mains: fields.mains,
+        since: fields.since,
+        voltage: 229,
+        rssi: -60,
+        ...(fields.gaps === undefined ? {} : { gaps: fields.gaps, longestGap: 15.2 }),
+      },
       events: fields.events ?? [],
       ...(fields.ota === undefined ? {} : { ota: fields.ota }),
     });
@@ -194,6 +202,28 @@ describe("hub site (integration)", () => {
     expect(back.json()).toEqual({ ok: true, ack: 4 });
     expect(rejected.map((e) => [e.version, e.fw])).toEqual([["0.2.1", "0.2.0"]]);
     expect(updated).toHaveLength(1);
+  });
+
+  it("a gap of the plug's radio (the hub's own judgement) only tells the admin", async () => {
+    const clock = new ManualClock(T0 + 30_000);
+    const c = await start(clock);
+    const gaps: CoreEvents["hub.link-gap"][] = [];
+    const changes: CoreEvents["power.changed"][] = [];
+    c.bus.on("hub.link-gap", (e) => {
+      gaps.push(e);
+    });
+    c.bus.on("power.changed", (e) => {
+      if (e.siteId === "hub-test") changes.push(e);
+    });
+    const report = hub(c);
+    await report({ up: 30, mains: "on", since: 1, gaps: 0 });
+    await report({ up: 60, mains: "on", since: 1, gaps: 0 });
+    await report({ up: 90, mains: "on", since: 1, gaps: 1 });
+    expect(gaps).toEqual([
+      { siteId: "hub-test", deviceId: "hub-2a4c11", gaps: 1, longest: 15.2, rssi: -60 },
+    ]);
+    expect(changes.map((e) => e.state)).toEqual(["on"]);
+    expect(c.hubs.get("hub-test")?.status().linkGaps).toBe(1);
   });
 
   it("a hub site gets the hub power service, not the ESP one", async () => {

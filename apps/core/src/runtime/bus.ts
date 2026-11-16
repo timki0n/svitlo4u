@@ -68,6 +68,15 @@ export type CoreEvents = {
   "hub.updated": { siteId: string; deviceId: string; from: string; to: string };
   /** A new firmware did not confirm itself: the hub went back to `fw` and won't take `version`. */
   "hub.update-rejected": { siteId: string; deviceId: string; version: string; fw: string | null };
+  /** The plug fell silent, but the hub judged it a gap of the radio link, not the mains. */
+  "hub.link-gap": {
+    siteId: string;
+    deviceId: string;
+    /** Such gaps since the hub started, and the longest, s. */
+    gaps: number;
+    longest: number | null;
+    rssi: number | null;
+  };
   "zigbee.bridge": { online: boolean };
   "yasno.error": { error: string; failures: number };
   "yasno.recovered": { failures: number };

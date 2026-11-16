@@ -31,6 +31,7 @@ import {
   reminderLog,
   scheduleSnapshots,
   sites,
+  telegramChats,
   telegramSubscribers,
   telegramUsers,
   voltageSamples,
@@ -38,6 +39,7 @@ import {
 
 export type SiteRow = typeof sites.$inferInsert;
 export type HubRow = typeof hubs.$inferSelect;
+export type TelegramChatRow = typeof telegramChats.$inferSelect;
 export type OutboxItem = typeof notificationOutbox.$inferSelect;
 
 export type Store = ReturnType<typeof createStore>;
@@ -117,6 +119,49 @@ export function createStore(db: Db) {
       },
       setOwner(id: string, userId: number | null, now = Date.now()): void {
         db.update(hubs).set({ ownerUserId: userId, claimedAt: now }).where(eq(hubs.id, id)).run();
+      },
+    },
+
+    telegramChats: {
+      get(chatId: number): TelegramChatRow | null {
+        return (
+          db.select().from(telegramChats).where(eq(telegramChats.chatId, chatId)).get() ?? null
+        );
+      },
+      /** What Telegram said about the bot there (my_chat_member). `addedBy` only when it joined. */
+      upsert(
+        row: Omit<TelegramChatRow, "updatedAt" | "addedBy"> & { addedBy?: number },
+        now = Date.now(),
+      ): void {
+        const values = { ...row, updatedAt: now };
+        db.insert(telegramChats)
+          .values(values)
+          .onConflictDoUpdate({ target: telegramChats.chatId, set: values })
+          .run();
+      },
+      /** A chat seen from a message (/start in a group): its name and who brought the bot. */
+      touch(
+        chat: { chatId: number; type: string; title: string | null; addedBy?: number },
+        now = Date.now(),
+      ): void {
+        const known = store.telegramChats.get(chat.chatId);
+        if (!known) {
+          db.insert(telegramChats)
+            .values({ ...chat, status: "member", updatedAt: now })
+            .run();
+          return;
+        }
+        db.update(telegramChats)
+          .set({
+            type: chat.type,
+            title: chat.title,
+            ...(chat.addedBy !== undefined && known.addedBy === null
+              ? { addedBy: chat.addedBy }
+              : {}),
+            updatedAt: now,
+          })
+          .where(eq(telegramChats.chatId, chat.chatId))
+          .run();
       },
     },
 
@@ -861,6 +906,30 @@ export function createStore(db: Db) {
             set: { readOnly: true },
           })
           .run();
+      },
+      /** A followed chat (topic) becomes a feed, or writable again; false when it follows nothing. */
+      setReadOnly(siteId: string, chatId: number, threadId: number, readOnly: boolean): boolean {
+        return (
+          db
+            .update(telegramSubscribers)
+            .set({ readOnly })
+            .where(
+              and(
+                eq(telegramSubscribers.siteId, siteId),
+                eq(telegramSubscribers.chatId, chatId),
+                eq(telegramSubscribers.threadId, threadId),
+              ),
+            )
+            .run().changes > 0
+        );
+      },
+      /** Everything a chat follows, its topics included. */
+      ofChat(chatId: number) {
+        return db
+          .select()
+          .from(telegramSubscribers)
+          .where(eq(telegramSubscribers.chatId, chatId))
+          .all();
       },
       isReadOnly(siteId: string, chatId: number, threadId = 0): boolean {
         const row = db

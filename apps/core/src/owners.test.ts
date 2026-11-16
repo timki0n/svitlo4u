@@ -280,6 +280,45 @@ describe("hub owners (integration)", () => {
     expect(tg.lastTo(OWNER)?.payload.text).toContain("Готово! Хаб");
   });
 
+  it("«Дати знати» under the admin's note about a weak link sends the owner a hint", async () => {
+    const { core: c, tg } = await start();
+    const { site } = await claim(c, tg, "Дім");
+    c.bus.emit("hub.link-gap", {
+      siteId: site.id,
+      deviceId: "x",
+      gaps: 2,
+      longest: 15,
+      rssi: -79,
+    });
+    await flush(c);
+    const note = tg.lastTo(ADMIN);
+    expect(note?.payload.text).toContain("це радіо, не світло");
+    expect(note?.payload.reply_markup).toEqual({
+      inline_keyboard: [[{ text: "Дати знати", callback_data: `tell:${site.id}:gap` }]],
+    });
+    const before = tg.textsTo(OWNER).length;
+
+    // Only the admin chat may press it.
+    await post(c, press(OWNER, `tell:${site.id}:gap`));
+    expect(tg.textsTo(OWNER)).toHaveLength(before);
+
+    await post(c, press(ADMIN, `tell:${site.id}:gap`));
+    expect(tg.textsTo(OWNER).at(-1)).toContain("Дім: хаб інколи не чує свою розетку");
+    expect(
+      tg.calls.find((call) => call.method === "editMessageReplyMarkup")?.payload,
+    ).toMatchObject({
+      reply_markup: {
+        inline_keyboard: [[{ text: "✓ Власнику надіслано", callback_data: "done" }]],
+      },
+    });
+    expect(
+      tg.calls.some(
+        (call) =>
+          call.method === "answerCallbackQuery" && call.payload.text === "Надіслано власнику",
+      ),
+    ).toBe(true);
+  });
+
   it("the hub's service news reach its owner as well as the admin", async () => {
     const { core: c, tg } = await start();
     const { site } = await claim(c, tg, "Дім");
@@ -352,6 +391,90 @@ describe("hub owners (integration)", () => {
       payload: { siteId: "4u" },
     });
     expect(put.json().siteId).toBe("4u");
+  });
+
+  it("«Мій хаб» lists the building's groups and channels: feed, the rights it needs, removal", async () => {
+    const { core: c, tg, clock } = await start();
+    const { site } = await claim(c, tg, "Дім");
+    const auth = { authorization: `tma ${initData(OWNER, clock.now())}` };
+    const me = async () =>
+      (await c.app.inject({ method: "GET", url: "/api/v1/me", headers: auth })).json();
+    const bot = { id: 123, is_bot: true, first_name: "svitlo4u" };
+    const member = (
+      chat: { id: number; type: string; title: string },
+      from: number,
+      old: string,
+      next: object,
+    ) => ({
+      update_id: updateId++,
+      my_chat_member: {
+        chat,
+        from: user(from),
+        date: 0,
+        old_chat_member: { status: old, user: bot },
+        new_chat_member: { user: bot, ...next },
+      },
+    });
+
+    // A channel: the owner adds the bot as an admin that posts — it follows their building.
+    const channel = { id: -1001, type: "channel", title: "Канал дому" };
+    await post(
+      c,
+      member(channel, OWNER, "left", { status: "administrator", can_post_messages: true }),
+    );
+    expect(c.store.telegram.sitesOf(-1001)).toEqual([site.id]);
+    expect(tg.textsTo(-1001).at(-1)).toContain("Сюди приходитимуть сповіщення про світло в «Дім»");
+    expect(tg.textsTo(ADMIN).some((t) => t.includes("Канал «Канал дому»"))).toBe(true);
+
+    // A group by the startgroup link, by its admin (the owner).
+    const group = { id: -500, type: "supergroup", title: "Сусіди" };
+    tg.setAdmins([OWNER]);
+    await post(c, member(group, OWNER, "left", { status: "member" }));
+    await post(c, message(group, OWNER, `/start ${site.id}`));
+    expect((await me()).hubs[0].chats).toEqual([
+      { chatId: -1001, threadId: 0, kind: "channel", title: "Канал дому", feed: false, bot: "ok" },
+      { chatId: -500, threadId: 0, kind: "group", title: "Сусіди", feed: false, bot: "ok" },
+    ]);
+    expect((await me()).hubs[0].channelLink).toBe(
+      "https://t.me/svitlo4u_test_bot?startchannel&admin=post_messages",
+    );
+
+    // A feed without the right to delete: the owner is told what to give the bot.
+    const feed = await c.app.inject({
+      method: "POST",
+      url: "/api/v1/me/chats/-500/feed",
+      headers: auth,
+      payload: { threadId: 0, on: true },
+    });
+    expect(feed.json().hubs[0].chats[1]).toMatchObject({ feed: true, bot: "no-delete" });
+    await post(
+      c,
+      member(group, OWNER, "member", { status: "administrator", can_delete_messages: true }),
+    );
+    expect((await me()).hubs[0].chats[1]).toMatchObject({ feed: true, bot: "ok" });
+    // Someone else's chats are not theirs to change.
+    const foreign = await c.app.inject({
+      method: "POST",
+      url: "/api/v1/me/chats/-500/feed",
+      headers: { authorization: `tma ${initData(8, clock.now())}` },
+      payload: { threadId: 0, on: false },
+    });
+    expect(foreign.statusCode).toBe(403);
+
+    // Removed from «Мій хаб»: no more notices there, the bot leaves.
+    const removed = await c.app.inject({
+      method: "POST",
+      url: "/api/v1/me/chats/-500/remove",
+      headers: auth,
+      payload: { threadId: 0 },
+    });
+    expect(removed.json().hubs[0].chats.map((x: { chatId: number }) => x.chatId)).toEqual([-1001]);
+    expect(tg.calls.find((call) => call.method === "leaveChat")?.payload.chat_id).toBe(-500);
+
+    // Kicked out of the channel by its admin: it stops following.
+    await post(c, member(channel, OWNER, "administrator", { status: "kicked", until_date: 0 }));
+    expect(c.store.telegram.sitesOf(-1001)).toEqual([]);
+    expect((await me()).hubs[0].chats).toEqual([]);
   });
 
   it("a group follows a building by the startgroup link — only its admin may do it", async () => {

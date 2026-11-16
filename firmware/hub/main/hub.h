@@ -65,6 +65,8 @@ typedef struct {
     bool has_rssi;
     int8_t rssi;
     bool network_up;
+    uint32_t link_gaps;      // silences of the plug that were the radio, not the mains
+    uint32_t longest_gap_ms;
     bool pairing_open;
     uint16_t pairing_left_s;
 } plug_status_t;

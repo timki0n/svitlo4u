@@ -50,6 +50,8 @@ import {
   feedText,
   followText,
   latencyFooter,
+  OWNER_NOTES,
+  type OwnerNote,
   ownerWelcomeText,
   SUB_ADMINS_ONLY_TEXT,
   shadowHeader,
@@ -69,7 +71,16 @@ export type TelegramPayload = {
   silent?: boolean;
   /** Shadow copies: append measured latency at send time. */
   latency?: { eventAt: number; detectedAt: number | null };
+  /** Buttons under the message (callback data, at most 64 bytes each). */
+  buttons?: AlertButton[][];
 };
+
+export type AlertButton = { text: string; data: string };
+
+/** «Дати знати» under an admin alert: `tell:<building>:<what>` sends its owners a note. */
+export function tellButton(siteId: string, what: OwnerNote): AlertButton {
+  return { text: "Дати знати", data: `tell:${siteId}:${what}` };
+}
 
 export type AnnounceOptions = {
   /** Schedule picture to send with the text (see ScheduleImages). */
@@ -138,7 +149,12 @@ const DEAD_CHAT = [
 
 const SEND_OPTIONS = { parse_mode: "HTML", link_preview_options: { is_disabled: true } } as const;
 /** Messages, plus the buttons of a hub's claim. */
-const ALLOWED_UPDATES: ("message" | "callback_query")[] = ["message", "callback_query"];
+/** Messages, the buttons of a hub's claim and «Дати знати», the bot added to / removed from chats. */
+const ALLOWED_UPDATES: ("message" | "callback_query" | "my_chat_member")[] = [
+  "message",
+  "callback_query",
+  "my_chat_member",
+];
 const DEFAULT_HOUSE_NAME = "Мій дім";
 /** Telegram's caption limit, in characters of the rendered text. */
 const CAPTION_MAX = 1024;
@@ -298,6 +314,16 @@ export class TelegramChannel {
     return this.bots.get(siteId)?.conn.bot ?? null;
   }
 
+  /** The bot leaves a group or channel (its owner removed it in «Мій хаб»). */
+  async leaveChat(siteId: string, chatId: number): Promise<boolean> {
+    const conn = this.bots.get(siteId)?.conn;
+    if (!conn) return false;
+    return conn.bot.api.leaveChat(chatId).then(
+      () => true,
+      () => false,
+    );
+  }
+
   /** The @username of the bot that receives updates (t.me links), null until it has connected. */
   botUsername(): string | null {
     for (const conn of this.conns.values()) {
@@ -367,7 +393,7 @@ export class TelegramChannel {
   alert(
     siteId: string | null,
     text: string,
-    options: { silent?: boolean; dedupeKey?: string } = {},
+    options: { silent?: boolean; dedupeKey?: string; buttons?: AlertButton[][] } = {},
   ): void {
     const seen = new Set<number>();
     const items: EnqueueItem[] = [];
@@ -376,7 +402,11 @@ export class TelegramChannel {
       const admin = siteBot.config.adminChatId;
       if (admin === undefined || seen.has(admin)) continue;
       seen.add(admin);
-      const payload: TelegramPayload = { text, ...(options.silent ? { silent: true } : {}) };
+      const payload: TelegramPayload = {
+        text,
+        ...(options.silent ? { silent: true } : {}),
+        ...(options.buttons ? { buttons: options.buttons } : {}),
+      };
       items.push({
         siteId: siteBot.site.id,
         channel: TELEGRAM,
@@ -390,13 +420,18 @@ export class TelegramChannel {
   }
 
   /** Message the owners of the building's hubs in their private chats (not the admin twice). */
-  toOwners(siteId: string, text: string, options: { silent?: boolean } = {}): number {
+  toOwners(
+    siteId: string,
+    text: string,
+    options: { silent?: boolean; includeAdmin?: boolean } = {},
+  ): number {
     const siteBot = this.bots.get(siteId);
     const ownership = this.deps.ownership?.();
     if (!siteBot || !ownership) return 0;
+    // The admin already has the alert, unless they asked for the owner's note on purpose.
     const owners = ownership
       .ownersOf(siteId)
-      .filter((userId) => userId !== siteBot.config.adminChatId);
+      .filter((userId) => options.includeAdmin || userId !== siteBot.config.adminChatId);
     return this.deps.outbox.enqueue(
       owners.map((userId) => ({
         siteId,
@@ -457,6 +492,15 @@ export class TelegramChannel {
         ...SEND_OPTIONS,
         ...(target.threadId !== null ? { message_thread_id: target.threadId } : {}),
         ...(payload.silent ? { disable_notification: true } : {}),
+        ...(payload.buttons
+          ? {
+              reply_markup: {
+                inline_keyboard: payload.buttons.map((row) =>
+                  row.map((b) => ({ text: b.text, callback_data: b.data })),
+                ),
+              },
+            }
+          : {}),
       });
       return { status: "sent" };
     } catch (error) {
@@ -642,6 +686,16 @@ export class TelegramChannel {
       store.telegram.follow(target.site.id, ctx.chat.id, msg ? topicOf(msg) : 0, clock.now());
       if (ctx.chat.type === "private" && ctx.from)
         store.telegramUsers.setSite(ctx.from.id, target.site.id, clock.now());
+      else
+        store.telegramChats.touch(
+          {
+            chatId: ctx.chat.id,
+            type: ctx.chat.type,
+            title: "title" in ctx.chat ? (ctx.chat.title ?? null) : null,
+            ...(ctx.from ? { addedBy: ctx.from.id } : {}),
+          },
+          clock.now(),
+        );
       await reply(ctx, `${startText(target.site)}\n\n${followText(target.site)}`);
       this.alert(target.site.id, `🔔 /start ${target.site.id}: ${describeSender(ctx)} підписався`, {
         silent: true,
@@ -756,6 +810,54 @@ export class TelegramChannel {
       );
     });
 
+    // The bot added to a group or channel, promoted, restricted or removed: what it may do there.
+    bot.on("my_chat_member", async (ctx) => {
+      const update = ctx.myChatMember;
+      const chat = update.chat;
+      if (chat.type === "private") return;
+      const member = update.new_chat_member;
+      const gone = member.status === "left" || member.status === "kicked";
+      const joined =
+        !gone &&
+        (update.old_chat_member.status === "left" || update.old_chat_member.status === "kicked");
+      const admin = member.status === "administrator" ? member : null;
+      store.telegramChats.upsert(
+        {
+          chatId: chat.id,
+          type: chat.type,
+          title: chat.title ?? null,
+          status: member.status,
+          canDelete: admin?.can_delete_messages === true,
+          canPost: chat.type === "channel" ? admin?.can_post_messages === true : !gone,
+          ...(joined ? { addedBy: update.from.id } : {}),
+        },
+        clock.now(),
+      );
+      const follows = store.telegram.ofChat(chat.id).filter((s) => conn.siteIds.includes(s.siteId));
+      if (gone) {
+        for (const s of follows) store.telegram.unsubscribe(s.siteId, chat.id, s.threadId);
+        const site = follows[0] ? (this.bots.get(follows[0].siteId) as SiteBot).site : null;
+        if (site)
+          this.alert(site.id, `🔕 Бота прибрали з «${escapeHtml(chat.title)}»`, {
+            silent: true,
+          });
+        return;
+      }
+      // A channel takes the building of whoever added the bot (they chose it in «Мій хаб»).
+      if (chat.type === "channel" && admin?.can_post_messages && follows.length === 0) {
+        const siteId = this.deps.ownership?.()?.buildingOf(update.from.id) ?? null;
+        const target = siteId ? this.bots.get(siteId) : undefined;
+        if (!target || target.conn !== conn) return;
+        store.telegram.follow(target.site.id, chat.id, 0, clock.now());
+        await bot.api.sendMessage(chat.id, followText(target.site), SEND_OPTIONS).catch(() => {});
+        this.alert(
+          target.site.id,
+          `📣 Канал «${escapeHtml(chat.title)}» отримуватиме сповіщення «${escapeHtml(target.site.name)}»`,
+          { silent: true },
+        );
+      }
+    });
+
     // Admin chat only. The first word may name the building (`/health hub-test`).
     bot.command("health", async (ctx) => {
       if (isAdminChat(ctx))
@@ -809,6 +911,34 @@ export class TelegramChannel {
     });
 
     // The claim of a hub without a building: the group, then the name.
+    bot.on("callback_query:data", async (ctx, next) => {
+      const data = ctx.callbackQuery.data;
+      const tell = /^tell:([a-z0-9][a-z0-9-]{0,39}):([a-z-]{1,16})$/.exec(data);
+      if (!tell) return next();
+      // «Дати знати» under an admin alert: the building's owners get the note.
+      const target = this.bots.get(tell[1] as string);
+      const note = tell[2] as OwnerNote;
+      if (!isAdminChat(ctx) || !target || target.conn !== conn || !(note in OWNER_NOTES)) {
+        await ctx.answerCallbackQuery().catch(() => {});
+        return;
+      }
+      const sent = this.toOwners(target.site.id, OWNER_NOTES[note](target.site), {
+        includeAdmin: true,
+      });
+      await ctx
+        .answerCallbackQuery({ text: sent > 0 ? "Надіслано власнику" : "У хаба немає власника" })
+        .catch(() => {});
+      if (sent > 0) {
+        await ctx
+          .editMessageReplyMarkup({
+            reply_markup: {
+              inline_keyboard: [[{ text: "✓ Власнику надіслано", callback_data: "done" }]],
+            },
+          })
+          .catch(() => {});
+      }
+    });
+
     bot.on("callback_query:data", async (ctx) => {
       const data = ctx.callbackQuery.data;
       const userId = ctx.from.id;

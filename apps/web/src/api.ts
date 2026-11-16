@@ -9,6 +9,7 @@ import { tgInitData } from "./telegram.ts";
 export type Site = ResponseOf<"site">;
 export type Me = MeView;
 export type OwnedHub = Me["hubs"][number];
+export type OwnedChat = OwnedHub["chats"][number];
 export type State = ResponseOf<"state">;
 export type Widget = ResponseOf<"widget">;
 export type TimelineDay = Widget["timeline"]["days"][number];
@@ -81,4 +82,8 @@ export const api = {
   renameHub: (hubId: string, name: string) =>
     signed<Me>("POST", `/api/v1/me/hubs/${hubId}/name`, { name }),
   releaseHub: (hubId: string) => signed<Me>("POST", `/api/v1/me/hubs/${hubId}/release`),
+  setChatFeed: (chatId: number, threadId: number, on: boolean) =>
+    signed<Me>("POST", `/api/v1/me/chats/${chatId}/feed`, { threadId, on }),
+  removeChat: (chatId: number, threadId: number) =>
+    signed<Me>("POST", `/api/v1/me/chats/${chatId}/remove`, { threadId }),
 };

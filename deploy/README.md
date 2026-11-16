@@ -154,6 +154,14 @@ A hub is made at the bench and claimed by its owner (docs/hub-protocol.md → Pr
 No restart and no `config/sites.yaml` edit: such buildings and hubs live in the database (and its
 backups). `cli/hub.ts list` shows them, `cli/hub.ts link <hub>` reprints a sticker's link.
 
+«Мій хаб» also lists the groups and channels that get the building's notices. A group joins by
+«Додати в групу» (the `startgroup` link; its admin adds the bot), a channel by «Додати в канал»
+(the bot added as an admin that may post: it follows the owner's building by itself). For each
+the owner sees what the bot may do there, turns a group into a feed (only its admins write, the
+bot deletes the rest — it needs the «Delete messages» admin right) or removes the bot (it stops
+the notices and leaves). Under the admin's note about a weak radio link «Дати знати» sends the
+owner a hint.
+
 ### Core: sites and history
 
 ```bash

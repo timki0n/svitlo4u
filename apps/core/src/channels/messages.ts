@@ -195,6 +195,17 @@ export function ownerWelcomeText(site: SiteConfig, hubId: string): string {
   ].join("\n");
 }
 
+/** Notes the admin sends a hub's owners with «Дати знати» under an alert. */
+export const OWNER_NOTES = {
+  gap: (site: SiteConfig) =>
+    [
+      `📶 ${escapeHtml(site.name)}: хаб інколи не чує свою розетку.`,
+      "Світло через це не губилося, але зв'язок слабкий. Поставте хаб і розетку ближче одне до одного або так, щоб між ними було менше стін і металу.",
+    ].join("\n"),
+} satisfies Record<string, (site: SiteConfig) => string>;
+
+export type OwnerNote = keyof typeof OWNER_NOTES;
+
 export const SUB_ADMINS_ONLY_TEXT =
   "🔒 Підписати групу чи топік на сповіщення може лише адміністратор групи.";
 

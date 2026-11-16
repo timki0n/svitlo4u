@@ -11,7 +11,7 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { KYIV_TZ } from "@svitlo/domain";
 import type { HubRow, Store } from "@svitlo/storage";
-import type { HubStatus, OwnedHub } from "../api/me-view.ts";
+import type { HubStatus, OwnedChat, OwnedHub } from "../api/me-view.ts";
 import type { Clock } from "../runtime/clock.ts";
 import {
   defaultSite,
@@ -79,6 +79,7 @@ export const NO_STATUS: HubStatus = {
   paired: null,
   mains: null,
   voltage: null,
+  linkGaps: null,
 };
 
 export type ClaimResult =
@@ -217,8 +218,65 @@ export class HubOwnership {
             }
           : null,
         status: site ? this.deps.status(site.id) : NO_STATUS,
+        chats: site ? this.chatsOf(site.id) : [],
       };
     });
+  }
+
+  /** The groups (topics) and channels that follow a building — not people's private chats. */
+  chatsOf(siteId: string): OwnedChat[] {
+    const { store } = this.deps;
+    return store.telegram
+      .list(siteId)
+      .filter((row) => row.chatId < 0)
+      .map((row) => {
+        const chat = store.telegramChats.get(row.chatId);
+        const kind = chat?.type === "channel" ? "channel" : "group";
+        const bot =
+          kind === "channel"
+            ? chat && !chat.canPost
+              ? "no-post"
+              : "ok"
+            : row.readOnly && chat && !chat.canDelete
+              ? "no-delete"
+              : "ok";
+        return {
+          chatId: row.chatId,
+          threadId: row.threadId,
+          kind,
+          title: chat?.title ?? null,
+          feed: row.readOnly,
+          bot,
+        } satisfies OwnedChat;
+      });
+  }
+
+  /** The building of a person's chat (topic), if they own it; null for anyone else. */
+  ownedFollow(userId: number, chatId: number, threadId: number): string | null {
+    const owned = this.sitesOwnedBy(userId);
+    return (
+      this.deps.store.telegram
+        .ofChat(chatId)
+        .find((row) => row.threadId === threadId && owned.includes(row.siteId))?.siteId ?? null
+    );
+  }
+
+  /** The buildings of the hubs a person owns. */
+  sitesOwnedBy(userId: number): string[] {
+    return [
+      ...new Set(
+        this.deps.store.hubs
+          .listByOwner(userId)
+          .flatMap((row) => (row.siteId && this.site(row.siteId) ? [row.siteId] : [])),
+      ),
+    ];
+  }
+
+  /** The building a person's channel should follow: the one they chose, if theirs, else their first. */
+  buildingOf(userId: number): string | null {
+    const owned = this.sitesOwnedBy(userId);
+    const chosen = this.deps.store.telegramUsers.site(userId);
+    return chosen && owned.includes(chosen) ? chosen : (owned[0] ?? null);
   }
 
   /** Telegram users who own a hub of this building (its service alerts go to them). */

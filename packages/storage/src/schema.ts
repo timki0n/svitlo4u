@@ -58,6 +58,24 @@ export const telegramUsers = sqliteTable("telegram_users", {
   updatedAt: integer("updated_at").notNull(),
 });
 
+/**
+ * Groups and channels the bot is in, as Telegram last told it (my_chat_member): who added it and
+ * what it may do there. The building a chat follows lives in telegram_subscribers.
+ */
+export const telegramChats = sqliteTable("telegram_chats", {
+  chatId: integer("chat_id").primaryKey(),
+  /** group | supergroup | channel */
+  type: text("type").notNull(),
+  title: text("title"),
+  /** The Telegram user who added the bot. */
+  addedBy: integer("added_by"),
+  /** The bot there: member | administrator | restricted | left | kicked */
+  status: text("status").notNull(),
+  canDelete: integer("can_delete", { mode: "boolean" }).notNull().default(false),
+  canPost: integer("can_post", { mode: "boolean" }).notNull().default(false),
+  updatedAt: integer("updated_at").notNull(),
+});
+
 /** Persisted power detector state (one row per site, rewritten every few seconds). */
 export const detectorState = sqliteTable("detector_state", {
   siteId: text("site_id")

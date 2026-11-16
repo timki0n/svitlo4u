@@ -43,6 +43,13 @@
       "when": 1794856657080,
       "tag": "0005_hubs_and_owners",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1794860073375,
+      "tag": "0006_telegram_chats",
+      "breakpoints": true
     }
   ]
 }
