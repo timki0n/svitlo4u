@@ -16,12 +16,15 @@ static const char *TAG = "zb";
 #define HUB_EP 1
 #define PLUG_EP 1
 #define READ_EVERY_MS 1000
-// Silence of the plug (it has no battery): 5 s → maybe the mains is gone; 20 s → it is, since the
-// last answer. A shorter silence is a gap of the radio link, unless the plug comes back rebooted
-// (its announce): then the mains was gone for that while. Link gaps last up to ~15 s — a router
-// renews its links every 15 s (two false «off» of 15 s at -79 dBm, 2026-11-16).
+// Silence of the plug (it has no battery): 5 s → maybe the mains is gone; the alert delay → it is,
+// since the last answer. A shorter silence is taken as a gap of the radio link, not the mains
+// (they last up to ~15 s, a router renews its links every 15 s: two false «off» of 15 s at
+// -79 dBm, 2026-11-16). A blink of the power shorter than the delay looks the same — the TS011F
+// does not announce itself when it starts again — and is not counted as an outage on purpose.
+// A plug that does announce makes it a cut. The delay follows the plug's signal (its average):
+// gaps come with a weak link.
 #define SUSPECT_MS 5000
-#define CONFIRM_MS 20000
+#define CONFIRM_MAX_MS 22000
 #define ANNOUNCE_GRACE_MS 3000   // the plug's announce may come just after its first answer
 #define UNKNOWN_TO_OFF_MS 10000  // after a boot: never answered this long → off (since unknown)
 #define SCALE_EVERY_MS (10 * 60 * 1000)
@@ -38,6 +41,10 @@ static volatile bool pairing_open;
 static volatile uint32_t pairing_wanted_until;
 static volatile uint32_t pairing_until_ms;
 static volatile bool need_basic_read;
+// After the start, a new plug and an outage: the plug is told to come on with the power, and on.
+static volatile bool need_power_on = true;
+// Messages of the plug just after a silence, logged to learn what it sends when it restarts.
+static volatile uint32_t watch_after_gap_until;
 static volatile bool need_scale_read;
 static volatile uint32_t retry_mode, retry_at_ms;
 
@@ -60,6 +67,17 @@ static uint32_t gap_from_ms;
 static bool gap_pending;
 static uint32_t gap_end_ms, gap_start_ms;
 static volatile uint32_t link_gaps, longest_gap_ms;
+static float rssi_avg; // the plug's signal, averaged over about a minute of answers
+static bool has_rssi_avg;
+
+/** How long the plug must be silent to call it an outage: shorter when it is heard well. */
+static uint32_t confirm_ms(void) {
+    if (!has_rssi_avg) return CONFIRM_MAX_MS;
+    if (rssi_avg >= -60) return 10000;
+    if (rssi_avg >= -70) return 14000;
+    if (rssi_avg >= -78) return 18000;
+    return CONFIRM_MAX_MS;
+}
 
 // ---------------------------------------------------------------------------------------------
 // Events waiting for the core
@@ -126,6 +144,8 @@ static void plug_alive(int8_t signal, bool announce) {
     if (suspect) {
         suspect = false;
         uint32_t gap = now - gap_from_ms;
+        watch_after_gap_until = now + 10000;
+        need_power_on = true; // if it was the power, the plug may come back off
         if (announce) {
             past_cut(gap_from_ms, now);
         } else {
@@ -134,17 +154,43 @@ static void plug_alive(int8_t signal, bool announce) {
             gap_pending = true;
             gap_start_ms = gap_from_ms;
             gap_end_ms = now;
-            ESP_LOGW(TAG, "link gap: the plug was silent %.1f s but did not restart", gap / 1000.0);
+            ESP_LOGW(TAG, "radio gap: the plug was silent %.1f s (the link, not the mains)", gap / 1000.0);
         }
     }
     last_answer_ms = now;
-    rssi = signal;
-    has_rssi = true;
+    if (!announce) {
+        rssi = signal;
+        has_rssi = true;
+        rssi_avg = has_rssi_avg ? rssi_avg + (signal - rssi_avg) * 0.02f : signal;
+        has_rssi_avg = true;
+    }
     if (!answered) {
         answered = true;
         need_scale_read = true;
     }
+    if (mains == MAINS_OFF) need_power_on = true; // back after an outage
     if (mains != MAINS_ON) set_mains(MAINS_ON, now / 1000.0, true);
+}
+
+/** The plug's relay: on whenever the power returns (Tuya 0x8002 and ZCL StartUpOnOff), and on now. */
+static void plug_power_on(void) {
+    static uint8_t on = 1; // Tuya: 0 off, 1 on, 2 previous; ZCL: 0 off, 1 on, 0xff previous
+    ezb_zcl_attribute_t attrs[] = {
+        {.id = 0x8002, .data = {.type = EZB_ZCL_ATTR_TYPE_ENUM8, .size = 1, .value = &on}},
+        {.id = EZB_ZCL_ATTR_ON_OFF_START_UP_ON_OFF_ID,
+         .data = {.type = EZB_ZCL_ATTR_TYPE_ENUM8, .size = 1, .value = &on}},
+    };
+    ezb_address_t dst = {.addr_mode = EZB_ADDR_MODE_SHORT, .u.short_addr = g_cfg.plug_short};
+    ezb_zcl_write_attr_cmd_t write = {
+        .cmd_ctrl = {.dst_addr = dst, .dst_ep = PLUG_EP, .src_ep = HUB_EP, .cluster_id = EZB_ZCL_CLUSTER_ID_ON_OFF},
+        .payload = {.attr_number = 2, .attr_field = attrs},
+    };
+    ezb_zcl_on_off_cmd_t turn_on = {.cmd_ctrl = {.dst_addr = dst, .dst_ep = PLUG_EP, .src_ep = HUB_EP}};
+    esp_zigbee_lock_acquire(portMAX_DELAY);
+    ezb_zcl_write_attr_cmd_req(&write);
+    ezb_zcl_on_off_on_cmd_req(&turn_on);
+    esp_zigbee_lock_release();
+    ESP_LOGI(TAG, "plug: on whenever the power returns, and on now");
 }
 
 static void take_voltage(uint16_t attr, uint8_t type, const void *value) {
@@ -175,6 +221,9 @@ void zb_status(plug_status_t *out) {
     out->network_up = network_up;
     out->link_gaps = link_gaps;
     out->longest_gap_ms = longest_gap_ms;
+    out->confirm_ms = confirm_ms();
+    out->has_rssi_avg = has_rssi_avg;
+    out->rssi_avg = rssi_avg;
     uint32_t now = hub_ms();
     out->pairing_open = pairing_open && now < pairing_until_ms;
     out->pairing_left_s = out->pairing_open ? (pairing_until_ms - now) / 1000 : 0;
@@ -231,9 +280,20 @@ static void zcl_action(ezb_zcl_core_action_callback_id_t id, void *message) {
             }
         }
     } break;
+    case EZB_ZCL_CORE_WRITE_ATTR_RSP_CB_ID: {
+        ezb_zcl_cmd_write_attr_rsp_message_t *m = message;
+        if (!sender(m->in.header)) return;
+        for (ezb_zcl_write_attr_rsp_variable_t *v = m->in.variables; v; v = v->next)
+            ESP_LOGI(TAG, "plug wrote cluster 0x%04x attr 0x%04x: status 0x%02x", m->info.cluster_id, v->attr_id,
+                     v->status);
+    } break;
     case EZB_ZCL_CORE_REPORT_ATTR_CB_ID: {
         ezb_zcl_cmd_report_attr_message_t *m = message;
         if (!sender(m->in.header)) return;
+        if (hub_ms() < watch_after_gap_until)
+            for (ezb_zcl_report_attr_variable_t *v = m->in.variables; v; v = v->next)
+                ESP_LOGI(TAG, "after the silence the plug reported cluster 0x%04x attr 0x%04x", m->info.cluster_id,
+                         v->attr_id);
         plug_alive(m->in.header->rssi, false);
         if (m->info.cluster_id == EZB_ZCL_CLUSTER_ID_ELECTRICAL_MEASUREMENT)
             for (ezb_zcl_report_attr_variable_t *v = m->in.variables; v; v = v->next)
@@ -323,6 +383,7 @@ static bool zb_signal(const ezb_app_signal_t *sig) {
         if (known) {
             if (p->short_addr != g_cfg.plug_short) config_save_plug(p->short_addr, g_cfg.plug_ieee);
             ESP_LOGI(TAG, "plug announced itself (started again): 0x%04x", p->short_addr);
+            need_power_on = true;
             plug_alive(0, true);
         } else if (pairing_open || !g_cfg.plug_paired) {
             // The device that joins while pairing is open becomes the plug (replacing the old one).
@@ -332,6 +393,7 @@ static bool zb_signal(const ezb_app_signal_t *sig) {
             v_mult = v_div = 1;
             set_mains(MAINS_UNKNOWN, -1, false);
             need_basic_read = true;
+            need_power_on = true;
             pairing_wanted_until = 0;
             ezb_bdb_close_network();
             ESP_LOGI(TAG, "plug paired: 0x%04x %016" PRIx64, p->short_addr, p->device_addr.u64);
@@ -429,6 +491,11 @@ static void poll_task(void *arg) {
             read_attrs(EZB_ZCL_CLUSTER_ID_BASIC, basic_attrs, 6);
             continue;
         }
+        if (need_power_on && answered && mains == MAINS_ON) {
+            need_power_on = false;
+            plug_power_on();
+            continue;
+        }
         if (need_scale_read || (answered && now - last_scale >= SCALE_EVERY_MS)) {
             need_scale_read = false;
             last_scale = now;
@@ -447,7 +514,7 @@ static void poll_task(void *arg) {
                 gap_from_ms = last_answer_ms;
                 ESP_LOGI(TAG, "the plug is silent %lu ms: waiting before calling it off", (unsigned long)silent);
             }
-            if (suspect && silent >= CONFIRM_MS) {
+            if (suspect && silent >= confirm_ms()) {
                 suspect = false;
                 set_mains(MAINS_OFF, last_answer_ms / 1000.0, true);
             }

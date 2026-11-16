@@ -190,7 +190,7 @@ export class Notifier {
         const site = deps.state.site(e.siteId);
         deps.telegram.alert(
           e.siteId,
-          `📶 ${escapeHtml(site.name)}: хаб на якийсь час не чув розетку, але вона не перезапускалась — це радіо, не світло. Розривів з запуску хаба: ${e.gaps}${e.longest !== null ? `, найдовший ${e.longest.toFixed(0)} с` : ""}${e.rssi !== null ? `, сигнал ${e.rssi} dBm` : ""}.`,
+          `📶 ${escapeHtml(site.name)}: хаб ненадовго не чув розетку — це проблема зі зв'язком, не світло. З запуску хаба таких ${e.gaps}${e.longest !== null ? `, найдовша ${e.longest.toFixed(0)} с` : ""}${e.rssi !== null ? `, сигнал ${e.rssi} dBm` : ""}.`,
           { silent: true, buttons: [[tellButton(e.siteId, "gap")]] },
         );
       }),

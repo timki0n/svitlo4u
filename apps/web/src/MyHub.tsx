@@ -134,11 +134,20 @@ function HubCard({ hub, onChange }: { hub: OwnedHub; onChange: (me: Me) => void 
             ? `${Math.round(status.voltage)} В`
             : null,
           status.paired === false ? "розетку не під'єднано" : null,
+          status.rssi !== null ? `сигнал ${signalWord(status.rssi)} (${status.rssi} dBm)` : null,
           status.fw ? `прошивка ${status.fw}` : null,
         ]
           .filter(Boolean)
           .join(" · ")}
       </p>
+
+      {status.alertDelay !== null && (
+        <p className="muted hub-note">
+          Про відключення ви дізнаєтесь приблизно за {status.alertDelay} с: стільки хаб чекає, поки
+          розетка мовчить{status.alertDelay > 10 ? ". Що краще сигнал, то швидше" : ""}. Час у
+          сповіщенні точний.
+        </p>
+      )}
 
       {site && editing ? (
         <form
@@ -357,6 +366,13 @@ function Chats({
       </div>
     </div>
   );
+}
+
+/** The plug's signal at the hub in words (the delay before an outage alert follows it). */
+function signalWord(rssi: number): string {
+  if (rssi >= -60) return "добрий";
+  if (rssi >= -75) return "середній";
+  return "слабкий";
 }
 
 function chatName(chat: OwnedChat): string {

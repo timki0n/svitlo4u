@@ -80,6 +80,8 @@ export const NO_STATUS: HubStatus = {
   mains: null,
   voltage: null,
   linkGaps: null,
+  alertDelay: null,
+  rssi: null,
 };
 
 export type ClaimResult =

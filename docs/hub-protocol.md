@@ -4,15 +4,28 @@ The hub is an ESP32-C6 that runs its own Zigbee network with one mains-powered s
 plug and reports to the core over Wi-Fi. Unlike the ESP heartbeat, the hub itself is meant to sit
 on the router's UPS: its reports say nothing about the mains by themselves — **the plug** does.
 The hub reads the plug's voltage every second; any answer means the plug — so the mains — is
-alive (it has no battery), 5 s of silence means the mains is gone, the first answer after that
-means it is back. The hub decides this itself and tells the core when it happened by its own
-clock (the last answer before the silence, the first one after it), so the core gets exact times
-even when the internet was down in between.
+alive (it has no battery). A silence of the **alert delay** means the mains is gone since the
+plug's last answer; the first answer after that means it is back. The hub decides this itself and
+tells the core when it happened by its own clock (the last answer before the silence, the first
+one after it), so the core gets exact times even when the internet was down in between.
+
+The alert delay follows the plug's signal at the hub (averaged over about a minute): 10 s from
+−60 dBm, 14 s to −70, 18 s to −78, 22 s below. A shorter silence is a problem of the link, not
+the light: the radio link drops for up to ~15 s now and then (a router renews its links every
+15 s; at −79 dBm two such gaps came as false «off», 2026-11-16). They are counted (`plug.gaps`)
+and tell the admin. A blink of the power shorter than the delay looks the same (the TS011F does
+not announce itself when it starts again, and needs 3–4 s to: a 5 s unplug is ~8.4 s of silence)
+and is not an outage on purpose. The time in the notice stays exact; the delay is only how soon
+it comes.
+
+The hub also tells the plug to come on whenever the power returns (Tuya `0x8002` and ZCL
+`StartUpOnOff` of its On/Off cluster) and turns it on after its own start and after an outage.
 
 Firmware: `firmware/hub/`. Measurements behind this design (2026-11-15): a hub on a plain charger
 outlives the plug by only 0–200 ms after a power cut — not enough to send anything with Wi-Fi on —
 so the supported setup is the hub on the router's UPS. On a UPS the core learned of a cut 5.0 s
-after the plug's last answer and of the light coming back within milliseconds.
+after the plug's last answer (then the threshold; now the alert delay) and of the light coming
+back within milliseconds.
 
 ## Request
 
@@ -27,31 +40,45 @@ after the plug's last answer and of the light coming back within milliseconds.
   "up": 1234.567,
   "rst": "poweron",
   "fw": "0.1.0",
-  "plug": { "paired": true, "mains": "on", "since": 15.2, "voltage": 228.4, "rssi": -61 },
+  "plug": {
+    "paired": true,
+    "mains": "on",
+    "since": 15.2,
+    "voltage": 228.4,
+    "rssi": -61,
+    "gaps": 0,
+    "longestGap": 0,
+    "delay": 14,
+    "rssiAvg": -62
+  },
   "events": [{ "up": 1200.153, "mains": "off" }, { "up": 1210.882, "mains": "on" }],
   "ota": { "state": "idle", "version": null, "error": null, "rejected": null }
 }
 ```
 
-| Field          | Meaning                                                                            |
-| -------------- | ---------------------------------------------------------------------------------- |
-| `v`            | protocol version, `1`                                                              |
-| `dev`          | device id from `config/sites.yaml` (`kind: hub`)                                   |
-| `boot`         | random hex generated once per boot, never reused                                   |
-| `seq`          | request counter, starts at 0 after boot, +1 per request                            |
-| `up`           | seconds since boot, with milliseconds, when the request was built                  |
-| `rst`          | reset reason of this boot, as in the ESP protocol (`poweron`, `brownout`, `sw`, …) |
-| `fw`           | firmware version                                                                   |
-| `plug.paired`  | a plug is paired                                                                   |
-| `plug.mains`   | `on` (plug answers), `off` (plug silent) or `unknown` (not decided yet after boot) |
-| `plug.since`   | hub uptime (s) when the current `mains` verdict began, `null` if unknown           |
-| `plug.voltage` | last voltage the plug measured, V, `null` if none yet                              |
-| `plug.rssi`    | signal of the plug's last answer, dBm, `null` if none                              |
-| `events`       | mains changes the core has not acknowledged yet, oldest first, by hub uptime (s)   |
-| `ota.state`    | `idle`, `downloading`, `ready` (waits to restart into it) or `failed`              |
-| `ota.version`  | the version being downloaded / ready / failed, else `null`                         |
-| `ota.error`    | why the last attempt failed (`http 403`, `sha256`, `version`, …), else `null`      |
-| `ota.rejected` | a version that did not confirm itself and was rolled back, else `null`             |
+| Field             | Meaning                                                                            |
+| ----------------- | ---------------------------------------------------------------------------------- |
+| `v`               | protocol version, `1`                                                              |
+| `dev`             | device id from `config/sites.yaml` (`kind: hub`)                                   |
+| `boot`            | random hex generated once per boot, never reused                                   |
+| `seq`             | request counter, starts at 0 after boot, +1 per request                            |
+| `up`              | seconds since boot, with milliseconds, when the request was built                  |
+| `rst`             | reset reason of this boot, as in the ESP protocol (`poweron`, `brownout`, `sw`, …) |
+| `fw`              | firmware version                                                                   |
+| `plug.paired`     | a plug is paired                                                                   |
+| `plug.mains`      | `on` (plug answers), `off` (plug silent) or `unknown` (not decided yet after boot) |
+| `plug.since`      | hub uptime (s) when the current `mains` verdict began, `null` if unknown           |
+| `plug.voltage`    | last voltage the plug measured, V, `null` if none yet                              |
+| `plug.rssi`       | signal of the plug's last answer, dBm, `null` if none                              |
+| `plug.gaps`       | silences shorter than the alert delay since the boot: gaps of the radio link       |
+| `plug.longestGap` | the longest of them, s                                                             |
+| `plug.delay`      | the alert delay now, s (follows the signal)                                        |
+| `plug.rssiAvg`    | the plug's signal averaged over about a minute, dBm, `null` if none                |
+| `events`          | mains changes the core has not acknowledged yet, oldest first, by hub uptime (s)   |
+| `ota.state`       | `idle`, `downloading`, `ready` (waits to restart into it) or `failed`              |
+| `ota.version`     | the version being downloaded / ready / failed, else `null`                         |
+| `ota.error`       | why the last attempt failed (`http 403`, `sha256`, `version`, …), else `null`      |
+| `ota.rejected`    | a version that did not confirm itself and was rolled back, else `null`             |
 
 Times are hub uptimes, not clock times: the core converts them as
 `receivedAt − (up − event.up) × 1000`. No clock sync is needed and an internet gap does not shift

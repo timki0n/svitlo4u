@@ -199,8 +199,8 @@ export function ownerWelcomeText(site: SiteConfig, hubId: string): string {
 export const OWNER_NOTES = {
   gap: (site: SiteConfig) =>
     [
-      `📶 ${escapeHtml(site.name)}: хаб інколи не чує свою розетку.`,
-      "Світло через це не губилося, але зв'язок слабкий. Поставте хаб і розетку ближче одне до одного або так, щоб між ними було менше стін і металу.",
+      `📶 ${escapeHtml(site.name)}: хаб інколи не чує свою розетку — це проблема зі зв'язком, не світло.`,
+      "Що слабший зв'язок, то пізніше приходять сповіщення про відключення. Поставте хаб і розетку ближче одне до одного або так, щоб між ними було менше стін і металу.",
     ].join("\n"),
 } satisfies Record<string, (site: SiteConfig) => string>;
 

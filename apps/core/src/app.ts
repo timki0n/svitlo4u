@@ -603,7 +603,7 @@ function hubsReport(
       const last = site ? status(site.id) : null;
       const seen =
         last?.lastReportAt != null
-          ? `звіт ${Math.round((now - last.lastReportAt) / 60_000)} хв тому, ${last.fw ?? "?"}${last.linkGaps ? `, розривів зв'язку з розеткою ${last.linkGaps}` : ""}`
+          ? `звіт ${Math.round((now - last.lastReportAt) / 60_000)} хв тому, ${last.fw ?? "?"}${last.rssi !== null ? `, сигнал ${last.rssi} dBm` : ""}${last.alertDelay !== null ? `, сповіщає за ${last.alertDelay} с` : ""}${last.linkGaps ? `, коротких мовчань ${last.linkGaps}` : ""}`
           : "звітів не було";
       return `• ${id}: ${site ? `«${site.name}» (${site.id})` : "без будинку"}, ${owner !== null ? `власник ${owner}` : "без власника"}, ${seen}`;
     }),

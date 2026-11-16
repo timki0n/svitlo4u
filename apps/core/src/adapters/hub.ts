@@ -46,6 +46,10 @@ export type HubReportEvent = {
    */
   linkGaps: number | null;
   longestGap: number | null;
+  /** The hub's alert delay, s: a silence of the plug this long is an outage (follows the signal). */
+  alertDelay: number | null;
+  /** The plug's signal averaged over about a minute, dBm. */
+  rssiAvg: number | null;
   events: { up: number; mains: "on" | "off" }[];
   ota: HubOtaStatus | null;
   remote: string;
@@ -166,6 +170,8 @@ export class HubVerifier {
     // Lenient: diagnostics must not cost a power report.
     const linkGaps = numOrNull(p.gaps, 0, 1e9) ?? null;
     const longestGap = numOrNull(p.longestGap, 0, 1e7) ?? null;
+    const alertDelay = numOrNull(p.delay, 1, 600) ?? null;
+    const rssiAvg = numOrNull(p.rssiAvg, -127, 20) ?? null;
     if (
       v !== 1 ||
       typeof boot !== "string" ||
@@ -227,6 +233,8 @@ export class HubVerifier {
         rssi,
         linkGaps,
         longestGap,
+        alertDelay,
+        rssiAvg,
         events: parsedEvents,
         ota: parseOta(ota),
         remote,

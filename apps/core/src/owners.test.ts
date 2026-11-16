@@ -292,7 +292,7 @@ describe("hub owners (integration)", () => {
     });
     await flush(c);
     const note = tg.lastTo(ADMIN);
-    expect(note?.payload.text).toContain("це радіо, не світло");
+    expect(note?.payload.text).toContain("це проблема зі зв'язком, не світло");
     expect(note?.payload.reply_markup).toEqual({
       inline_keyboard: [[{ text: "Дати знати", callback_data: `tell:${site.id}:gap` }]],
     });

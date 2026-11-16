@@ -75,6 +75,8 @@ export class HubPowerService {
       mains: r?.mains ?? null,
       voltage: r?.voltage ?? null,
       linkGaps: r?.linkGaps ?? null,
+      alertDelay: r?.alertDelay ?? null,
+      rssi: r?.rssiAvg ?? r?.rssi ?? null,
     };
   }
 

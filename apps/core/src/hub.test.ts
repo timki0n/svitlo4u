@@ -85,7 +85,9 @@ function hub(c: Core) {
         since: fields.since,
         voltage: 229,
         rssi: -60,
-        ...(fields.gaps === undefined ? {} : { gaps: fields.gaps, longestGap: 15.2 }),
+        ...(fields.gaps === undefined
+          ? {}
+          : { gaps: fields.gaps, longestGap: 15.2, delay: 12, rssiAvg: -66 }),
       },
       events: fields.events ?? [],
       ...(fields.ota === undefined ? {} : { ota: fields.ota }),
@@ -223,7 +225,11 @@ describe("hub site (integration)", () => {
       { siteId: "hub-test", deviceId: "hub-2a4c11", gaps: 1, longest: 15.2, rssi: -60 },
     ]);
     expect(changes.map((e) => e.state)).toEqual(["on"]);
-    expect(c.hubs.get("hub-test")?.status().linkGaps).toBe(1);
+    expect(c.hubs.get("hub-test")?.status()).toMatchObject({
+      linkGaps: 1,
+      alertDelay: 12,
+      rssi: -66,
+    });
   });
 
   it("a hub site gets the hub power service, not the ESP one", async () => {

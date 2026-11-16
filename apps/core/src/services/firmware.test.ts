@@ -34,6 +34,8 @@ function report(over: Partial<HubReportEvent> = {}): HubReportEvent {
     rssi: -60,
     linkGaps: 0,
     longestGap: 0,
+    alertDelay: 8,
+    rssiAvg: -55,
     events: [],
     ota: { state: "idle", version: null, error: null, rejected: null },
     remote: "127.0.0.1",

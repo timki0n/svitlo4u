@@ -76,8 +76,10 @@ static int build(char *buf, size_t size, size_t *out_len) {
     add_num(buf, size, &len, "%.1f", p.voltage, p.has_voltage);
     len += snprintf(buf + len, size - len, ",\"rssi\":");
     add_num(buf, size, &len, "%.0f", p.rssi, p.has_rssi);
-    len += snprintf(buf + len, size - len, ",\"gaps\":%lu,\"longestGap\":%.1f},\"events\":[",
-                    (unsigned long)p.link_gaps, p.longest_gap_ms / 1000.0);
+    len += snprintf(buf + len, size - len, ",\"gaps\":%lu,\"longestGap\":%.1f,\"delay\":%.0f,\"rssiAvg\":",
+                    (unsigned long)p.link_gaps, p.longest_gap_ms / 1000.0, p.confirm_ms / 1000.0);
+    add_num(buf, size, &len, "%.0f", p.rssi_avg, p.has_rssi_avg);
+    len += snprintf(buf + len, size - len, "},\"events\":[");
     for (int i = 0; i < n; i++)
         len += snprintf(buf + len, size - len, "%s{\"up\":%.3f,\"mains\":\"%s\"}", i ? "," : "", ev[i].up,
                         ev[i].on ? "on" : "off");

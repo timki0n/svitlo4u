@@ -10,8 +10,12 @@ export type HubStatus = {
   paired: boolean | null;
   mains: "on" | "off" | "unknown" | null;
   voltage: number | null;
-  /** Silences of the plug that were the radio, not the mains, since the hub started. */
+  /** Short silences of the plug since the hub started (the radio, or a blink of the power). */
   linkGaps: number | null;
+  /** How soon an outage is told, s: the hub waits this long a silence (longer for a weak signal). */
+  alertDelay: number | null;
+  /** The plug's signal at the hub, dBm (averaged). */
+  rssi: number | null;
 };
 
 /** A group (or one of its topics) or a channel that gets the building's notices. */
