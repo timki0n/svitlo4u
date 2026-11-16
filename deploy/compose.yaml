@@ -44,7 +44,7 @@ services:
   # Cloudflare Tunnel (remote-managed). Version is pinned and bumped daily by Dependabot,
   # so it always tracks the latest cloudflared release.
   cloudflared:
-    image: cloudflare/cloudflared:2026.10.7
+    image: cloudflare/cloudflared:2026.11.0
     restart: unless-stopped
     command: tunnel --no-autoupdate run
     environment:
