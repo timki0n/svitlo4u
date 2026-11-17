@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "svitlo4u API",
-    "version": "1.4.0",
+    "version": "1.5.0",
     "description": "Power state, outage schedules and analytics. Instants are Unix ms, dates are local YYYY-MM-DD in the site's time zone, durations are ms. Responses are not cached."
   },
   "servers": [
@@ -1315,6 +1315,301 @@
                     "updatedOn",
                     "outages",
                     "lastFixed"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown site",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (see Retry-After)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sites/{siteId}/day": {
+      "get": {
+        "operationId": "day",
+        "tags": [
+          "sites"
+        ],
+        "summary": "One day as the timeline draws it: its plan and its real outages (e.g. yesterday)",
+        "parameters": [
+          {
+            "name": "siteId",
+            "in": "path",
+            "required": true,
+            "description": "Site id, e.g. 4u",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            }
+          },
+          {
+            "name": "date",
+            "in": "query",
+            "required": true,
+            "description": "Local calendar date, YYYY-MM-DD",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "siteId": {
+                      "type": "string"
+                    },
+                    "day": {
+                      "type": "object",
+                      "properties": {
+                        "date": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                          "description": "Local calendar date, YYYY-MM-DD"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "ScheduleApplies",
+                            "NoOutages",
+                            "WaitingForSchedule",
+                            "EmergencyShutdowns",
+                            "Unknown"
+                          ]
+                        },
+                        "label": {
+                          "type": "string",
+                          "description": "«Сьогодні, 06.11» / «Завтра, 07.11»"
+                        },
+                        "overlay": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "emergency"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "emergency: Yasno declared emergency shutdowns over a schedule published for this day — the segments are that schedule, shown under the emergency state; it does not apply. An emergency day that never had a schedule is one unknown segment."
+                        },
+                        "note": {
+                          "description": "«Діють екстрені відключення · графік не діє»",
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "segments": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "start": {
+                                "type": "number",
+                                "description": "Unix time, ms"
+                              },
+                              "end": {
+                                "type": "number",
+                                "description": "Unix time, ms"
+                              },
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "on",
+                                  "off",
+                                  "unknown"
+                                ],
+                                "description": "Planned state"
+                              },
+                              "label": {
+                                "type": "string",
+                                "description": "«08:00–12:00»; for unknown days the reason"
+                              }
+                            },
+                            "required": [
+                              "start",
+                              "end",
+                              "kind",
+                              "label"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "totals": {
+                          "type": "object",
+                          "properties": {
+                            "past": {
+                              "type": "object",
+                              "properties": {
+                                "onMs": {
+                                  "type": "number",
+                                  "description": "Duration, ms"
+                                },
+                                "offMs": {
+                                  "type": "number",
+                                  "description": "Duration, ms"
+                                }
+                              },
+                              "required": [
+                                "onMs",
+                                "offMs"
+                              ],
+                              "additionalProperties": false,
+                              "description": "From midnight to now (the whole day once it is over), by real outages"
+                            },
+                            "expected": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "onMs": {
+                                      "type": "number",
+                                      "description": "Duration, ms"
+                                    },
+                                    "offMs": {
+                                      "type": "number",
+                                      "description": "Duration, ms"
+                                    }
+                                  },
+                                  "required": [
+                                    "onMs",
+                                    "offMs"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The whole day: the past as it was plus the plan for the rest. Null when no plan applies (emergency shutdowns, no schedule yet)."
+                            }
+                          },
+                          "required": [
+                            "past",
+                            "expected"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "date",
+                        "status",
+                        "label",
+                        "overlay",
+                        "note",
+                        "segments",
+                        "totals"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "actual": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "start": {
+                            "type": "number",
+                            "description": "Unix time, ms"
+                          },
+                          "end": {
+                            "anyOf": [
+                              {
+                                "type": "number",
+                                "description": "Unix time, ms"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "start",
+                          "end"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "description": "Real outages of the day, cut to it (end null = still going on)"
+                    }
+                  },
+                  "required": [
+                    "siteId",
+                    "day",
+                    "actual"
                   ],
                   "additionalProperties": false
                 }

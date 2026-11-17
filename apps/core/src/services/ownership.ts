@@ -5,13 +5,13 @@
  * sticker carries a QR with `t.me/<bot>?start=own-<hub id>-<code>`, the code derived from the
  * secret, so only who holds the hub can claim it. The first scan makes the person the owner and,
  * with their Yasno group and a name, creates the building (address svitlo4u.info/b-…, only by
- * link). The owner gets the hub's service alerts and «Мій хаб» in the Mini App; releasing the hub
+ * link). The owner gets the hub's service alerts and «Мої будинки» in the Mini App; releasing the hub
  * lets the next person with the sticker take it (with the building and its history).
  */
 import { createHmac, randomBytes } from "node:crypto";
 import { KYIV_TZ } from "@svitlo/domain";
 import type { HubRow, Store } from "@svitlo/storage";
-import type { HubStatus, OwnedChat, OwnedHub } from "../api/me-view.ts";
+import type { HubStatus, OwnedBuilding, OwnedChat } from "../api/me-view.ts";
 import type { Clock } from "../runtime/clock.ts";
 import {
   defaultSite,
@@ -22,21 +22,6 @@ import {
 
 /** Yasno feeds a new building may follow (Kyiv for now). */
 export const YASNO_FEEDS = [{ key: "kyiv", name: "Київ", region: 25, dso: 902 }] as const;
-export const YASNO_GROUPS = [
-  "1.1",
-  "1.2",
-  "2.1",
-  "2.2",
-  "3.1",
-  "3.2",
-  "4.1",
-  "4.2",
-  "5.1",
-  "5.2",
-  "6.1",
-  "6.2",
-] as const;
-
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
 const CLAIM = /^own-(hub-[0-9a-f]{6})-([a-z2-7]{10})$/;
 export const NAME_MAX = 60;
@@ -71,7 +56,7 @@ export function cleanName(text: string): string | null {
   return name ? [...name].slice(0, NAME_MAX).join("") : null;
 }
 
-export type { HubStatus, OwnedHub };
+export type { HubStatus, OwnedBuilding };
 
 export const NO_STATUS: HubStatus = {
   lastReportAt: null,
@@ -103,6 +88,8 @@ export type OwnershipDeps = {
   /** A hub got its building: reports drive it from now on. */
   hubReady: (device: HubDeviceConfig) => void;
   status: (siteId: string) => HubStatus;
+  /** The light at a building now. */
+  light: (siteId: string) => { power: "on" | "off" | "unknown"; since: number | null };
 };
 
 export class HubOwnership {
@@ -173,7 +160,7 @@ export class HubOwnership {
     const row = store.hubs.get(hubId);
     if (!row?.secret || row.siteId || (row.ownerUserId !== null && row.ownerUserId !== userId))
       return null;
-    if (!(YASNO_GROUPS as readonly string[]).includes(building.group)) return null;
+    if (!/^\d{1,3}\.\d$/.test(building.group)) return null;
     let id: string;
     do id = `b-${base32(randomBytes(10), 10)}`;
     while (store.sites.get(id));
@@ -206,32 +193,57 @@ export class HubOwnership {
       .map((row) => ownerSiteConfig(row, bench.get(row.id) ?? null, home));
   }
 
-  hubsOf(userId: number): OwnedHub[] {
-    return this.deps.store.hubs.listByOwner(userId).map((row) => {
-      const site = row.siteId ? this.site(row.siteId) : null;
-      return {
-        id: row.id,
-        site: site
-          ? {
-              id: site.id,
-              name: site.name,
-              access: site.access,
-              renamable: site.origin === "owner",
-            }
-          : null,
-        status: site ? this.deps.status(site.id) : NO_STATUS,
-        chats: site ? this.chatsOf(site.id) : [],
-      };
+  /** «Мої будинки»: the buildings a person owns, with their hub there and their chats. */
+  buildingsOf(userId: number): OwnedBuilding[] {
+    const hubs = this.deps.store.hubs.listByOwner(userId);
+    return this.sitesOwnedBy(userId).flatMap((siteId) => {
+      const site = this.site(siteId);
+      if (!site) return [];
+      const hub = hubs.find((row) => row.siteId === siteId);
+      return [
+        {
+          site: {
+            id: site.id,
+            name: site.name,
+            access: site.access,
+            renamable: site.origin === "owner" && hub !== undefined,
+          },
+          ...this.deps.light(site.id),
+          hub: hub ? { id: hub.id, status: this.deps.status(site.id) } : null,
+          chats: this.chatsOf(site.id),
+        },
+      ];
     });
   }
 
   /** The groups (topics) and channels that follow a building — not people's private chats. */
   chatsOf(siteId: string): OwnedChat[] {
     const { store } = this.deps;
-    return store.telegram
-      .list(siteId)
-      .filter((row) => row.chatId < 0)
-      .map((row) => {
+    const config = this.site(siteId)?.telegram;
+    const followed = store.telegram.list(siteId).filter((row) => row.chatId < 0);
+    // Chats named in sites.yaml (ЖК 4U's group topics): shown as they are, not changed here.
+    const fixed = (config?.chats ?? [])
+      .filter((t) => t.chatId < 0)
+      .filter(
+        (t) => !followed.some((r) => r.chatId === t.chatId && r.threadId === (t.threadId ?? 0)),
+      )
+      .map((t) => {
+        const chat = store.telegramChats.get(t.chatId);
+        return {
+          chatId: t.chatId,
+          threadId: t.threadId ?? 0,
+          kind: chat?.type === "channel" ? "channel" : "group",
+          title: chat?.title ?? null,
+          feed: (config?.silentChats ?? []).some(
+            (s) => s.chatId === t.chatId && s.threadId === t.threadId,
+          ),
+          bot: "ok",
+          fixed: true,
+        } satisfies OwnedChat;
+      });
+    return [
+      ...fixed,
+      ...followed.map((row) => {
         const chat = store.telegramChats.get(row.chatId);
         const kind = chat?.type === "channel" ? "channel" : "group";
         const bot =
@@ -249,8 +261,10 @@ export class HubOwnership {
           title: chat?.title ?? null,
           feed: row.readOnly,
           bot,
+          fixed: false,
         } satisfies OwnedChat;
-      });
+      }),
+    ];
   }
 
   /** The building of a person's chat (topic), if they own it; null for anyone else. */
@@ -263,14 +277,18 @@ export class HubOwnership {
     );
   }
 
-  /** The buildings of the hubs a person owns. */
+  /** The buildings a person owns: named in sites.yaml (`owners`) first, then those of their hubs. */
   sitesOwnedBy(userId: number): string[] {
     return [
-      ...new Set(
-        this.deps.store.hubs
+      ...new Set([
+        ...this.deps
+          .sites()
+          .filter((s) => s.owners.includes(userId))
+          .map((s) => s.id),
+        ...this.deps.store.hubs
           .listByOwner(userId)
           .flatMap((row) => (row.siteId && this.site(row.siteId) ? [row.siteId] : [])),
-      ),
+      ]),
     ];
   }
 
@@ -281,9 +299,9 @@ export class HubOwnership {
     return chosen && owned.includes(chosen) ? chosen : (owned[0] ?? null);
   }
 
-  /** Telegram users who own a hub of this building (its service alerts go to them). */
+  /** The building's owners: of its hubs and in sites.yaml (its hub's service news go to them). */
   ownersOf(siteId: string): number[] {
-    const owners = new Set<number>();
+    const owners = new Set<number>(this.site(siteId)?.owners ?? []);
     for (const hub of [...this.deps.configHubs, ...this.benchSites().map((b) => b.device)]) {
       if (hub.siteId !== siteId) continue;
       const owner = this.deps.store.hubs.get(hub.id)?.ownerUserId;

@@ -1,6 +1,6 @@
-import { useState } from "react";
-import type { TimelineDay } from "./api.ts";
-import { dayLabel, hhmm } from "./format.ts";
+import { useEffect, useState } from "react";
+import { api, type Outage, type PastDay, type TimelineDay } from "./api.ts";
+import { addDays, dayLabel, hhmm, zoned } from "./format.ts";
 import type { Live } from "./live.ts";
 import {
   changes,
@@ -11,26 +11,53 @@ import {
   pct,
   spacedMarks,
 } from "./timeline.ts";
-import { ConnectionNotice, Header, Icon, LegendItem, Segmented, Split } from "./ui.tsx";
+import { ConnectionNotice, Header, Icon, LegendItem, Segmented, SiteName, Split } from "./ui.tsx";
 
-type Which = "today" | "tomorrow";
+type Which = "yesterday" | "today" | "tomorrow";
 
 const HOUR = 3_600_000;
 
 export function ScheduleScreen({ live }: { live: Live }) {
   const [which, setWhich] = useState<Which>("today");
   const { site, state, widget } = live;
-  const day = widget?.timeline.days[which === "today" ? 0 : 1];
+  // «Вчора»: the day as it went, read when asked (it does not change any more).
+  const yesterday = site ? addDays(zoned(live.now, site.tz).date, -1) : null;
+  const key = site && yesterday ? `${site.id}/${yesterday}` : null;
+  const [past, setPast] = useState<{ key: string; data: PastDay } | null>(null);
+  const [pastFailed, setPastFailed] = useState(false);
+  const pastReady = past !== null && past.key === key;
+
+  useEffect(() => {
+    if (which !== "yesterday" || !site || !yesterday || !key || pastReady) return;
+    const ctrl = new AbortController();
+    setPastFailed(false);
+    api.day(site.id, yesterday, ctrl.signal).then(
+      (data) => setPast({ key, data }),
+      (e: unknown) => {
+        if (ctrl.signal.aborted) return;
+        console.error(e);
+        setPastFailed(true);
+      },
+    );
+    return () => ctrl.abort();
+  }, [which, site, yesterday, key, pastReady]);
+
+  const day =
+    which === "yesterday"
+      ? pastReady
+        ? past.data.day
+        : undefined
+      : widget?.timeline.days[which === "today" ? 0 : 1];
   return (
     <main className="screen">
-      <Header>
-        <h1 className="title">Графік</h1>
-      </Header>
+      <Header>{site && <SiteName name={site.name} />}</Header>
+      <h1 className="sr-only">Графік</h1>
       <Segmented
         label="День"
         value={which}
         onChange={setWhich}
         options={[
+          ["yesterday", "Вчора"],
           ["today", "Сьогодні"],
           ["tomorrow", "Завтра"],
         ]}
@@ -38,14 +65,19 @@ export function ScheduleScreen({ live }: { live: Live }) {
       {site && (
         <ConnectionNotice connection={live.connection} updatedAt={live.updatedAt} tz={site.tz} />
       )}
-      {!site || !widget || !day ? (
+      {which === "yesterday" && pastFailed ? (
+        <p className="notice" role="alert">
+          Не вдалося отримати вчорашній день. Спробуйте трохи пізніше.
+        </p>
+      ) : !site || !widget || !day ? (
         <div className="skeleton" style={{ flex: 1, minHeight: 400 }} />
       ) : (
         <DayView
           live={live}
           day={day}
           today={which === "today"}
-          updatedOn={state?.schedule?.updatedOn ?? null}
+          past={which === "yesterday" && pastReady ? past.data.actual : null}
+          updatedOn={which === "yesterday" ? null : (state?.schedule?.updatedOn ?? null)}
         />
       )}
     </main>
@@ -65,14 +97,17 @@ export function DayView({
   live,
   day,
   today,
+  past = null,
   updatedOn,
   showDate = true,
 }: {
   live: Live;
   day: TimelineDay;
   today: boolean;
+  /** A day that is over («Вчора»): its real outages. The fact line then covers the whole day. */
+  past?: readonly Outage[] | null;
   updatedOn: string | null;
-  /** The status line of a day ahead names its date (the picture has it in its title instead). */
+  /** The status line of another day names its date (the picture has it in its title instead). */
   showDate?: boolean;
 }) {
   const tz = live.site?.tz ?? "Europe/Kyiv";
@@ -80,21 +115,27 @@ export function DayView({
   const first = day.segments[0];
   const last = day.segments[day.segments.length - 1];
   const emergency = day.overlay === "emergency";
+  const over = past !== null;
 
-  if (!first || !last || !drawable(day)) {
+  // A day that is over is drawn by its facts even without a schedule.
+  if (!first || !last || (!over && !drawable(day))) {
     return <NoSchedule waiting={day.status === "WaitingForSchedule"} today={today} />;
   }
 
   const range = { start: first.start, end: last.end };
   const plannedOff = day.segments.filter((s) => s.kind === "off");
-  const actual = today ? (live.widget?.timeline.actual ?? []) : [];
+  const actual = today ? (live.widget?.timeline.actual ?? []) : (past ?? []);
   // The cells carry the plan for the whole day; a thin line above them, what really happened.
   const plan: Piece[] = plannedOff.map((s) => ({
     start: s.start,
     end: s.end,
     kind: emergency ? "last" : "plan",
   }));
-  const fact = today ? dayPieces(range, now, actual, []) : [];
+  const fact = today
+    ? dayPieces(range, now, actual, [])
+    : over
+      ? dayPieces(range, range.end, actual, [])
+      : [];
   // The row above the cells belongs to the fact only: times of real changes and «now».
   const marks: { at: number; text: string; now?: boolean }[] = changes(fact).map((at) => ({
     at,
@@ -105,7 +146,23 @@ export function DayView({
   const updated = updatedOn ? hhmm(Date.parse(updatedOn), tz) : null;
 
   let status: React.ReactNode;
-  if (emergency || day.status === "EmergencyShutdowns") {
+  if (over) {
+    const what =
+      emergency || day.status === "EmergencyShutdowns"
+        ? emergency
+          ? "екстрені — графік не діяв"
+          : "екстрені відключення · графіка не було"
+        : day.status === "NoOutages"
+          ? "відключень не планували"
+          : day.status === "ScheduleApplies"
+            ? "графік діяв"
+            : "графіка не було";
+    status = (
+      <p className="muted" style={{ marginTop: -4, fontSize: 13 }}>
+        {dayLabel(day.date)} · {what}
+      </p>
+    );
+  } else if (emergency || day.status === "EmergencyShutdowns") {
     status = (
       <p className="warn-line" style={{ marginTop: -4 }}>
         <Icon name="warn" size={16} color="var(--warn)" />
@@ -122,8 +179,8 @@ export function DayView({
     );
   }
 
-  const expected = day.totals?.expected ?? null;
-  const past = day.totals?.past ?? null;
+  const expected = over ? null : (day.totals?.expected ?? null);
+  const done = day.totals?.past ?? null;
   return (
     <>
       {status}
@@ -141,7 +198,7 @@ export function DayView({
               firstHour={q * 6}
               plan={plan}
               fact={fact}
-              now={today ? now : null}
+              now={today ? now : over ? range.end : null}
               marks={marks}
             />
           ))}
@@ -164,13 +221,25 @@ export function DayView({
             </>
           ) : (
             <>
-              {emergency && (
+              {over ? (
                 <div className="card-head">
-                  <LegendItem kind="last">Останній графік</LegendItem>
+                  <span className="small-label">Було за добу</span>
+                  {plannedOff.length > 0 &&
+                    (emergency ? (
+                      <LegendItem kind="last">Останній графік</LegendItem>
+                    ) : (
+                      <LegendItem kind="plan">План</LegendItem>
+                    ))}
                 </div>
+              ) : (
+                emergency && (
+                  <div className="card-head">
+                    <LegendItem kind="last">Останній графік</LegendItem>
+                  </div>
+                )
               )}
-              {past && (
-                <Split onMs={past.onMs} offMs={past.offMs} onKind="bar-on" offKind="bar-off" />
+              {done && (
+                <Split onMs={done.onMs} offMs={done.offMs} onKind="bar-on" offKind="bar-off" />
               )}
             </>
           )}

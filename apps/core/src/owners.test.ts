@@ -48,6 +48,20 @@ sites:
 
 type Call = { method: string; payload: Record<string, unknown> };
 
+/** YASNO's address search: one street, two houses, the first in queue 19.1. */
+async function fakeYasnoAddresses(url: string): Promise<Response> {
+  if (url.includes("/addresses/v2/streets"))
+    return Response.json(url.includes("query=") ? [{ id: 997, value: "вул. Хрещатик" }] : []);
+  if (url.includes("/addresses/v2/houses"))
+    return Response.json([
+      { id: 40856, value: "1/2" },
+      { id: 40858, value: "10,12" },
+    ]);
+  if (url.includes("/addresses/v2/group"))
+    return Response.json(url.includes("houseId=40856") ? { group: 19, subgroup: 1 } : {});
+  return new Response("{}", { status: 500 });
+}
+
 function fakeTelegram() {
   const calls: Call[] = [];
   let admins = new Set<number>();
@@ -88,8 +102,11 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-async function start(clock = new ManualClock(T0), tg = fakeTelegram()) {
-  writeFileSync(join(dir, "sites.yaml"), SITES);
+async function start(clock = new ManualClock(T0), tg = fakeTelegram(), extra4u = "") {
+  writeFileSync(
+    join(dir, "sites.yaml"),
+    SITES.replace("    scene: 4u\n", `    scene: 4u\n${extra4u}`),
+  );
   core = await startCore(
     {
       ...loadConfig({ LOG_LEVEL: "silent", PUBLIC_URL: "https://svitlo4u.test" }),
@@ -100,7 +117,7 @@ async function start(clock = new ManualClock(T0), tg = fakeTelegram()) {
     {
       clock,
       env: { ESP_4U_SECRET: "s", TG_4U_TOKEN: TOKEN, FIRMWARE_REPO: "off" },
-      fetch: async () => new Response("{}", { status: 500 }),
+      fetch: fakeYasnoAddresses,
       listen: false,
       images: null,
       telegram: { transformer: tg.transformer, botInfo: BOT_INFO, paceMs: 0, noticeMs: 0 },
@@ -196,7 +213,10 @@ async function report(c: Core, hub: { id: string; secret: string }, seq: number)
 async function claim(c: Core, tg: ReturnType<typeof fakeTelegram>, name: string) {
   const hub = c.ownership.newHub();
   await post(c, message(dm(OWNER), OWNER, `/start ${hub.payload}`));
-  await post(c, press(OWNER, `g:${hub.id}:2.1`));
+  await post(c, message(dm(OWNER), OWNER, "Хрещатик"));
+  await post(c, press(OWNER, `st:${hub.id}:997`));
+  await post(c, message(dm(OWNER), OWNER, "1"));
+  await post(c, press(OWNER, `hs:${hub.id}:40856`));
   await post(c, message(dm(OWNER), OWNER, name));
   const site = c.sites.find((s) => s.origin === "owner");
   if (!site) throw new Error(`no building: ${tg.textsTo(OWNER).join(" | ")}`);
@@ -209,17 +229,32 @@ describe("hub owners (integration)", () => {
     const hub = c.ownership.newHub();
 
     await post(c, message(dm(OWNER), OWNER, `/start ${hub.payload}`));
-    const ask = tg.lastTo(OWNER);
-    expect(ask?.payload.text).toContain(`Хаб ${hub.id} тепер ваш`);
-    const markup = ask?.payload.reply_markup as { inline_keyboard: { callback_data: string }[][] };
-    const keys = markup.inline_keyboard.flat().map((k) => k.callback_data);
-    expect(keys).toContain(`g:${hub.id}:2.1`);
-    expect(keys).toHaveLength(12);
+    expect(tg.lastTo(OWNER)?.payload.text).toContain(`Хаб ${hub.id} тепер ваш`);
+    type Markup = { inline_keyboard: { callback_data: string }[][] } | undefined;
+    const keys = () =>
+      ((tg.lastTo(OWNER)?.payload.reply_markup as Markup)?.inline_keyboard ?? [])
+        .flat()
+        .map((k) => k.callback_data);
 
-    await post(c, press(OWNER, `g:${hub.id}:2.1`));
-    expect(tg.calls.find((call) => call.method === "editMessageText")?.payload.text).toContain(
-      "Черга 2.1",
-    );
+    // The address gives the queue: the street, the house — buttons from YASNO's search.
+    await post(c, message(dm(OWNER), OWNER, "Хрещатик"));
+    expect(keys()).toEqual([`st:${hub.id}:997`]);
+    await post(c, press(OWNER, `st:${hub.id}:997`));
+    expect(
+      tg.calls.filter((call) => call.method === "editMessageText").at(-1)?.payload.text,
+    ).toContain("Вулиця: вул. Хрещатик");
+    await post(c, message(dm(OWNER), OWNER, "1"));
+    expect(keys()).toEqual([`hs:${hub.id}:40856`, `hs:${hub.id}:40858`]);
+    // A house YASNO has no queue for: try another one.
+    await post(c, press(OWNER, `hs:${hub.id}:40858`));
+    expect(
+      tg.calls.filter((call) => call.method === "editMessageText").at(-1)?.payload.text,
+    ).toContain("YASNO не знає черги");
+    await post(c, message(dm(OWNER), OWNER, "1"));
+    await post(c, press(OWNER, `hs:${hub.id}:40856`));
+    expect(
+      tg.calls.filter((call) => call.method === "editMessageText").at(-1)?.payload.text,
+    ).toContain("вул. Хрещатик, 1/2: черга 19.1");
 
     await post(c, message(dm(OWNER), OWNER, "Дім на <Оболоні>"));
     const site = c.sites.find((s) => s.origin === "owner");
@@ -227,16 +262,18 @@ describe("hub owners (integration)", () => {
       name: "Дім на Оболоні",
       access: "link",
       scene: "none",
-      yasno: { region: 25, dso: 902, group: "2.1" },
+      yasno: { region: 25, dso: 902, group: "19.1" },
       hub: { id: hub.id, siteId: site?.id },
     });
     expect(site?.id).toMatch(/^b-[a-z2-7]{10}$/);
+    // The address gave the queue only: whose address it is in the search, the admin decides.
+    expect(c.store.siteAddresses.siteAt(997, 40856)).toBeNull();
     const welcome = tg.lastTo(OWNER);
     expect(welcome?.payload.text).toContain("Готово! Хаб");
     expect(welcome?.payload.text).toContain(`https://svitlo4u.info/${site?.id}`);
     expect(welcome?.payload.reply_markup).toEqual({
       inline_keyboard: [
-        [{ text: "Мій хаб", web_app: { url: "https://svitlo4u.test/my" } }],
+        [{ text: "Мої будинки", web_app: { url: "https://svitlo4u.test/my" } }],
         [
           {
             text: "Додати бота в чат будинку",
@@ -246,7 +283,15 @@ describe("hub owners (integration)", () => {
       ],
     });
     // The admin hears about the new building.
-    expect(tg.textsTo(ADMIN).some((t) => t.includes("новий будинок «Дім на Оболоні»"))).toBe(true);
+    expect(
+      tg
+        .textsTo(ADMIN)
+        .some((t) =>
+          t.includes(
+            `новий будинок «Дім на Оболоні» (${site?.id}, вул. Хрещатик, 1/2, черга 19.1)`,
+          ),
+        ),
+    ).toBe(true);
 
     // Only by its address: not in the list.
     const id = site?.id as string;
@@ -333,7 +378,7 @@ describe("hub owners (integration)", () => {
     expect(tg.textsTo(ADMIN).at(-1)).toContain("Дім: хаб мовчить");
   });
 
-  it("«Мій хаб»: my hubs, rename, release — then the sticker's next scan takes it with the building", async () => {
+  it("«Мої будинки»: my hubs, rename, release — then the sticker's next scan takes it with the building", async () => {
     const { core: c, tg, clock } = await start();
     const { hub, site } = await claim(c, tg, "Дім");
     await report(c, hub, 0);
@@ -346,11 +391,14 @@ describe("hub owners (integration)", () => {
     expect(me).toMatchObject({
       user: { id: OWNER },
       siteId: site.id,
-      hubs: [
+      buildings: [
         {
-          id: hub.id,
           site: { id: site.id, name: "Дім", access: "link", renamable: true },
-          status: { lastReportAt: T0, fw: "0.2.0", paired: true, mains: "on", voltage: 225 },
+          power: "on",
+          hub: {
+            id: hub.id,
+            status: { lastReportAt: T0, fw: "0.2.0", paired: true, mains: "on", voltage: 225 },
+          },
           groupLink: `https://t.me/svitlo4u_test_bot?startgroup=${site.id}`,
         },
       ],
@@ -362,7 +410,7 @@ describe("hub owners (integration)", () => {
       headers: auth(OWNER),
       payload: { name: "  Дача  " },
     });
-    expect(renamed.json().hubs[0].site.name).toBe("Дача");
+    expect(renamed.json().buildings[0].site.name).toBe("Дача");
     expect(c.state.site(site.id).name).toBe("Дача");
     expect(c.store.sites.get(site.id)?.name).toBe("Дача");
     // Not someone else's.
@@ -378,7 +426,7 @@ describe("hub owners (integration)", () => {
       url: `/api/v1/me/hubs/${hub.id}/release`,
       headers: auth(OWNER),
     });
-    expect(released.json().hubs).toEqual([]);
+    expect(released.json().buildings).toEqual([]);
     await post(c, message(dm(8), 8, `/start ${hub.payload}`));
     expect(tg.lastTo(8)?.payload.text).toContain("«Дача»");
     expect(c.store.hubs.get(hub.id)?.ownerUserId).toBe(8);
@@ -393,7 +441,7 @@ describe("hub owners (integration)", () => {
     expect(put.json().siteId).toBe("4u");
   });
 
-  it("«Мій хаб» lists the building's groups and channels: feed, the rights it needs, removal", async () => {
+  it("«Мої будинки» lists the building's groups and channels: feed, the rights it needs, removal", async () => {
     const { core: c, tg, clock } = await start();
     const { site } = await claim(c, tg, "Дім");
     const auth = { authorization: `tma ${initData(OWNER, clock.now())}` };
@@ -431,11 +479,27 @@ describe("hub owners (integration)", () => {
     tg.setAdmins([OWNER]);
     await post(c, member(group, OWNER, "left", { status: "member" }));
     await post(c, message(group, OWNER, `/start ${site.id}`));
-    expect((await me()).hubs[0].chats).toEqual([
-      { chatId: -1001, threadId: 0, kind: "channel", title: "Канал дому", feed: false, bot: "ok" },
-      { chatId: -500, threadId: 0, kind: "group", title: "Сусіди", feed: false, bot: "ok" },
+    expect((await me()).buildings[0].chats).toEqual([
+      {
+        chatId: -1001,
+        threadId: 0,
+        kind: "channel",
+        title: "Канал дому",
+        feed: false,
+        bot: "ok",
+        fixed: false,
+      },
+      {
+        chatId: -500,
+        threadId: 0,
+        kind: "group",
+        title: "Сусіди",
+        feed: false,
+        bot: "ok",
+        fixed: false,
+      },
     ]);
-    expect((await me()).hubs[0].channelLink).toBe(
+    expect((await me()).buildings[0].channelLink).toBe(
       "https://t.me/svitlo4u_test_bot?startchannel&admin=post_messages",
     );
 
@@ -446,12 +510,12 @@ describe("hub owners (integration)", () => {
       headers: auth,
       payload: { threadId: 0, on: true },
     });
-    expect(feed.json().hubs[0].chats[1]).toMatchObject({ feed: true, bot: "no-delete" });
+    expect(feed.json().buildings[0].chats[1]).toMatchObject({ feed: true, bot: "no-delete" });
     await post(
       c,
       member(group, OWNER, "member", { status: "administrator", can_delete_messages: true }),
     );
-    expect((await me()).hubs[0].chats[1]).toMatchObject({ feed: true, bot: "ok" });
+    expect((await me()).buildings[0].chats[1]).toMatchObject({ feed: true, bot: "ok" });
     // Someone else's chats are not theirs to change.
     const foreign = await c.app.inject({
       method: "POST",
@@ -461,20 +525,228 @@ describe("hub owners (integration)", () => {
     });
     expect(foreign.statusCode).toBe(403);
 
-    // Removed from «Мій хаб»: no more notices there, the bot leaves.
+    // Removed from «Мої будинки»: no more notices there, the bot leaves.
     const removed = await c.app.inject({
       method: "POST",
       url: "/api/v1/me/chats/-500/remove",
       headers: auth,
       payload: { threadId: 0 },
     });
-    expect(removed.json().hubs[0].chats.map((x: { chatId: number }) => x.chatId)).toEqual([-1001]);
+    expect(removed.json().buildings[0].chats.map((x: { chatId: number }) => x.chatId)).toEqual([
+      -1001,
+    ]);
     expect(tg.calls.find((call) => call.method === "leaveChat")?.payload.chat_id).toBe(-500);
 
     // Kicked out of the channel by its admin: it stops following.
     await post(c, member(channel, OWNER, "administrator", { status: "kicked", until_date: 0 }));
     expect(c.store.telegram.sitesOf(-1001)).toEqual([]);
-    expect((await me()).hubs[0].chats).toEqual([]);
+    expect((await me()).buildings[0].chats).toEqual([]);
+  });
+
+  it("an owner named in sites.yaml sees the building without a hub in «Мої будинки»", async () => {
+    const { core: c, clock } = await start(
+      new ManualClock(T0),
+      fakeTelegram(),
+      "    owners: [7]\n",
+    );
+    const me = (
+      await c.app.inject({
+        method: "GET",
+        url: "/api/v1/me",
+        headers: { authorization: `tma ${initData(OWNER, clock.now())}` },
+      })
+    ).json();
+    expect(me.buildings).toMatchObject([
+      {
+        site: { id: "4u", name: "ЖК 4U", access: "public", renamable: false },
+        hub: null,
+        chats: [],
+      },
+    ]);
+  });
+
+  it("«Знайти мій будинок»: any address, the public building there; only the admin gives 4U its address", async () => {
+    const { core: c, clock } = await start(
+      new ManualClock(T0),
+      fakeTelegram(),
+      "    owners: [7]\n",
+    );
+    const get = async (url: string) => (await c.app.inject({ method: "GET", url })).json();
+    const auth = (userId: number) => ({ authorization: `tma ${initData(userId, clock.now())}` });
+
+    expect(await get("/api/v1/addresses/streets?q=%D0%A5%D1%80%D0%B5")).toEqual({
+      streets: [{ id: 997, name: "вул. Хрещатик" }],
+    });
+    expect(await get("/api/v1/addresses/houses?street=997&q=1")).toEqual({
+      houses: [
+        { id: 40856, name: "1/2" },
+        { id: 40858, name: "10,12" },
+      ],
+    });
+    expect(await get("/api/v1/addresses/lookup?street=997&house=40856")).toEqual({
+      group: "19.1",
+      site: null,
+    });
+    expect(
+      (await c.app.inject({ method: "GET", url: "/api/v1/addresses/houses" })).statusCode,
+    ).toBe(400);
+
+    const address = {
+      siteId: "4u",
+      street: 997,
+      house: 40856,
+      streetName: "вул. Хрещатик",
+      houseName: "1/2",
+    };
+    const attach = (userId: number) =>
+      c.app.inject({
+        method: "POST",
+        url: "/api/v1/admin/addresses",
+        headers: auth(userId),
+        payload: address,
+      });
+    // Not even 4U's owner: a building's address is not theirs to claim.
+    expect((await attach(OWNER)).json()).toEqual({ error: "admins_only" });
+    expect(
+      (await c.app.inject({ method: "POST", url: "/api/v1/admin/addresses", payload: address }))
+        .statusCode,
+    ).toBe(401);
+    expect(
+      (await c.app.inject({ method: "GET", url: "/api/v1/me", headers: auth(ADMIN) })).json().admin,
+    ).toBe(true);
+    expect(
+      (await c.app.inject({ method: "GET", url: "/api/v1/me", headers: auth(OWNER) })).json().admin,
+    ).toBe(false);
+    expect((await attach(ADMIN)).json()).toEqual({ ok: true });
+    expect(await get("/api/v1/addresses/lookup?street=997&house=40856")).toEqual({
+      group: "19.1",
+      site: { id: "4u", name: "ЖК 4U" },
+    });
+  });
+
+  it("a private building is never found by its address, nor given one by the admin", async () => {
+    const { core: c, tg, clock } = await start();
+    const { site } = await claim(c, tg, "Дім");
+    const lookup = async () =>
+      (
+        await c.app.inject({
+          method: "GET",
+          url: "/api/v1/addresses/lookup?street=997&house=40856",
+        })
+      ).json();
+    const attach = await c.app.inject({
+      method: "POST",
+      url: "/api/v1/admin/addresses",
+      headers: { authorization: `tma ${initData(ADMIN, clock.now())}` },
+      payload: { siteId: site.id, street: 997, house: 40856, streetName: "x", houseName: "1" },
+    });
+    expect(attach.statusCode).toBe(404);
+    // Even with the address in the table (by hand), the search keeps it to itself.
+    c.store.siteAddresses.attach(site.id, { streetId: 997, houseId: 40856, text: "x" }, T0);
+    expect(await lookup()).toEqual({ group: "19.1", site: null });
+  });
+
+  it("«Залишити заявку»: from the Mini App the user is known, on the site a contact is needed", async () => {
+    const { core: c, tg, clock } = await start();
+    const body = {
+      street: 997,
+      house: 40856,
+      streetName: "вул. Хрещатик",
+      houseName: "1/2",
+      canAdmin: true,
+      sparePhone: true,
+      routerOk: true,
+      wantsVoltage: true,
+    };
+    const send = (payload: object, headers: Record<string, string> = {}) =>
+      c.app.inject({ method: "POST", url: "/api/v1/requests", headers, payload });
+
+    expect((await send(body)).json()).toEqual({ error: "contact_needed" });
+    expect((await send({ ...body, contact: "+380501234567" })).json()).toEqual({ ok: true });
+    expect(
+      (
+        await send(
+          // the setup questions say nothing without «можу адмініструвати»
+          { ...body, canAdmin: undefined, wantsVoltage: undefined },
+          { authorization: `tma ${initData(OWNER, clock.now())}` },
+        )
+      ).json(),
+    ).toEqual({ ok: true });
+    await flush(c);
+
+    expect(c.store.requests.list()).toMatchObject([
+      {
+        address: "вул. Хрещатик, 1/2",
+        yasnoGroup: "19.1",
+        canAdmin: false,
+        sparePhone: false,
+        routerOk: false,
+        wantsVoltage: false,
+        userId: OWNER,
+        contact: null,
+      },
+      {
+        address: "вул. Хрещатик, 1/2",
+        yasnoGroup: "19.1",
+        canAdmin: true,
+        sparePhone: true,
+        routerOk: true,
+        wantsVoltage: true,
+        userId: null,
+        contact: "+380501234567",
+      },
+    ]);
+    const alerts = tg.textsTo(ADMIN).filter((t) => t.includes("🙋 Заявка"));
+    expect(alerts).toHaveLength(2);
+    expect(alerts[0]).toContain("вул. Хрещатик, 1/2 (черга 19.1)");
+    expect(alerts[0]).toContain("Може адмініструвати Світло4U в будинку: так");
+    expect(alerts[0]).toContain("Старий Android-смартфон на зарядці: так");
+    expect(alerts[0]).toContain("Роутер працює без світла: так");
+    expect(alerts[0]).toContain("Хоче бачити напругу: так");
+    expect(alerts[1]).toContain("Може адмініструвати Світло4U в будинку: ні");
+    expect(alerts[1]).not.toContain("смартфон");
+    expect(alerts[0]).toContain("Контакт: +380501234567");
+    expect(alerts[1]).toContain(`Контакт: tg ${OWNER}`);
+
+    // A form, not a feed: five in ten minutes from one place.
+    for (let i = 0; i < 3; i++) await send({ ...body, contact: "@me" });
+    expect((await send({ ...body, contact: "@me" })).statusCode).toBe(429);
+    clock.advanceTo(clock.now() + 10 * 60_000);
+    expect((await send({ ...body, contact: "@me" })).statusCode).toBe(200);
+  });
+
+  it("★ favorites: kept per Telegram user, only buildings that exist", async () => {
+    const { core: c, clock } = await start();
+    const auth = { authorization: `tma ${initData(OWNER, clock.now())}` };
+    const add = await c.app.inject({
+      method: "POST",
+      url: "/api/v1/me/favorites",
+      headers: auth,
+      payload: { siteId: "4u" },
+    });
+    expect(add.json().favorites).toEqual([{ id: "4u", name: "ЖК 4U" }]);
+    const unknown = await c.app.inject({
+      method: "POST",
+      url: "/api/v1/me/favorites",
+      headers: auth,
+      payload: { siteId: "nope" },
+    });
+    expect(unknown.statusCode).toBe(404);
+    expect(
+      (
+        await c.app.inject({
+          method: "POST",
+          url: "/api/v1/me/favorites",
+          payload: { siteId: "4u" },
+        })
+      ).statusCode,
+    ).toBe(401);
+    const removed = await c.app.inject({
+      method: "DELETE",
+      url: "/api/v1/me/favorites/4u",
+      headers: auth,
+    });
+    expect(removed.json().favorites).toEqual([]);
   });
 
   it("a group follows a building by the startgroup link — only its admin may do it", async () => {

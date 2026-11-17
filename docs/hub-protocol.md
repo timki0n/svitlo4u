@@ -165,10 +165,10 @@ see `firmware/hub/README.md`), stored in its NVS and on the server:
   sticker (or the secret) gives it.
 
 The first scan of the sticker makes the person the hub's owner. A hub without a building asks for
-the Yasno group and a name and creates it (`b-` + 10 random characters, its page only by link);
+its address (YASNO's search gives the queue) and a name and creates it (`b-` + 10 random characters, its page only by link);
 its reports drive the building from then on. Until then the core answers the hub's reports (and
 may update it) but they drive nothing. The owner gets the hub's service news (silent, back,
-updated, rolled back) in their private chat, as the admin does, and «Мій хаб» in the Mini App;
+updated, rolled back) in their private chat, as the admin does, and «Мої будинки» in the Mini App;
 releasing the hub there lets the next scan take it, with the building and its history.
 
 Wi-Fi and the plug are set by the user on the hub's own setup page. One radio cannot serve an

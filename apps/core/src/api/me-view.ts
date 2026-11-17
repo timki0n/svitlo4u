@@ -10,7 +10,7 @@ export type HubStatus = {
   paired: boolean | null;
   mains: "on" | "off" | "unknown" | null;
   voltage: number | null;
-  /** Short silences of the plug since the hub started (the radio, or a blink of the power). */
+  /** Short silences of the plug since the hub started: gaps of the radio link, not the light. */
   linkGaps: number | null;
   /** How soon an outage is told, s: the hub waits this long a silence (longer for a weak signal). */
   alertDelay: number | null;
@@ -29,12 +29,21 @@ export type OwnedChat = {
   feed: boolean;
   /** What is missing for it to work: ok, or the right the bot needs. */
   bot: "ok" | "no-delete" | "no-post";
+  /** Set in sites.yaml (the server): shown, not changed here. */
+  fixed: boolean;
 };
 
-export type OwnedHub = {
-  id: string;
-  site: { id: string; name: string; access: "public" | "link"; renamable: boolean } | null;
-  status: HubStatus;
+/**
+ * A building the person owns: by its hub (claimed with the sticker), or named an owner in
+ * sites.yaml (ЖК 4U, which has no hub).
+ */
+export type OwnedBuilding = {
+  site: { id: string; name: string; access: "public" | "link"; renamable: boolean };
+  /** The light there now. */
+  power: "on" | "off" | "unknown";
+  since: number | null;
+  /** The person's hub there (its status, release), null for a building without one. */
+  hub: { id: string; status: HubStatus } | null;
   chats: OwnedChat[];
 };
 
@@ -42,9 +51,13 @@ export type MeView = {
   user: { id: number; firstName: string };
   /** My building (the Mini App opens on it); null: none chosen yet. */
   siteId: string | null;
+  /** Buildings kept at hand (★), any of them may be opened. */
+  favorites: { id: string; name: string }[];
+  /** The developer (the admin chat's user): only they give a public building its address. */
+  admin: boolean;
   /**
-   * «Мій хаб»: the hubs I own; `groupLink` adds the bot to the building's group chat,
-   * `channelLink` to a channel (as an admin that posts).
+   * «Мої будинки»: `groupLink` adds the bot to the building's group chat, `channelLink` to a
+   * channel (as an admin that posts).
    */
-  hubs: (OwnedHub & { groupLink: string | null; channelLink: string | null })[];
+  buildings: (OwnedBuilding & { groupLink: string | null; channelLink: string | null })[];
 };

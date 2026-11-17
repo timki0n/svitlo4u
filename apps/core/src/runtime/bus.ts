@@ -68,6 +68,19 @@ export type CoreEvents = {
   "hub.updated": { siteId: string; deviceId: string; from: string; to: string };
   /** A new firmware did not confirm itself: the hub went back to `fw` and won't take `version`. */
   "hub.update-rejected": { siteId: string; deviceId: string; version: string; fw: string | null };
+  /** «Залишити заявку»: someone wants Світло4U at an address with no building. */
+  "request.new": {
+    id: number;
+    address: string;
+    group: string | null;
+    /** Can run Світло4U in the building; the next three only then. */
+    canAdmin: boolean;
+    /** An old phone that can stay on charge. */
+    sparePhone: boolean;
+    routerOk: boolean;
+    wantsVoltage: boolean;
+    contact: string;
+  };
   /** The plug fell silent shorter than the hub's alert delay: a problem of the link, not the light. */
   "hub.link-gap": {
     siteId: string;

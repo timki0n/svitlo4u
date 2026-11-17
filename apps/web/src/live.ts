@@ -21,6 +21,41 @@ export type Live = {
 };
 
 const REMEMBER = "svitlo4u.site";
+/** The buildings this browser showed lately, newest first («Нещодавні» in «Мої будинки»). */
+const RECENT = "svitlo4u.recent";
+const RECENT_MAX = 8;
+
+export type SiteRef = { id: string; name: string };
+
+export function recentSites(): SiteRef[] {
+  try {
+    const list: unknown = JSON.parse(localStorage.getItem(RECENT) ?? "[]");
+    return Array.isArray(list)
+      ? list.flatMap((x) => {
+          const r = x as Partial<SiteRef> | null;
+          return typeof r?.id === "string" && typeof r.name === "string"
+            ? [{ id: r.id, name: r.name }]
+            : [];
+        })
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRecent(list: SiteRef[]): SiteRef[] {
+  try {
+    localStorage.setItem(RECENT, JSON.stringify(list.slice(0, RECENT_MAX)));
+  } catch {
+    // storage blocked: nothing to keep
+  }
+  return list;
+}
+
+/** Drop a building from «Нещодавні»; the list left. */
+export function forgetRecent(id: string): SiteRef[] {
+  return saveRecent(recentSites().filter((r) => r.id !== id));
+}
 
 function remembered(): string | null {
   try {
@@ -105,6 +140,10 @@ export function useLive(requested: string | null): Live {
         return;
       }
       setSite(chosen);
+      saveRecent([
+        { id: chosen.id, name: chosen.name },
+        ...recentSites().filter((r) => r.id !== chosen.id),
+      ]);
       // A building opened by its address becomes this browser's (and the person's) own.
       if (requested) {
         remember(chosen.id);

@@ -38,6 +38,7 @@ try {
     addSite: () => {},
     hubReady: () => {},
     status: () => NO_STATUS,
+    light: () => ({ power: "unknown", since: null }),
   });
   if (command === "new") {
     const hub = ownership.newHub();

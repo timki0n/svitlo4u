@@ -8,6 +8,7 @@ export const SUPPORT_URL = "https://send.monobank.ua/jar/A1DjHMA1sm";
 
 const ICONS = {
   now: <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z" />,
+  down: <path d="M6 9l6 6 6-6" />,
   schedule: (
     <>
       <rect x="3" y="5" width="18" height="16" rx="3" />
@@ -22,6 +23,27 @@ const ICONS = {
     </>
   ),
   back: <path d="M15 18l-6-6 6-6" />,
+  plus: <path d="M12 5v14M5 12h14" />,
+  info: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v5M12 8h.01" />
+    </>
+  ),
+  bell: <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0" />,
+  search: (
+    <>
+      <circle cx="11" cy="11" r="7" />
+      <path d="M20 20l-4-4" />
+    </>
+  ),
+  clock: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
+    </>
+  ),
+  star: <path d="M12 3l2.8 5.7 6.2.9-4.5 4.4 1 6.2-5.5-2.9-5.5 2.9 1-6.2L3 9.6l6.2-.9L12 3z" />,
   trophy: (
     <path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0V4zM7 6H4a3 3 0 0 0 3 4M17 6h3a3 3 0 0 1-3 4" />
   ),
@@ -96,6 +118,38 @@ export function Mark({ size = 28 }: { size?: number }) {
   );
 }
 
+/** Longer names than this do not fit beside «Про проєкт» on a 375 px phone. */
+const LONG_NAME = 9;
+
+/**
+ * The building's name: a button with an arrow that opens «Мої будинки» — my building, the
+ * favorites, «Знайти мій будинок»; for owners also their hubs and chats.
+ */
+export function SiteName({ name }: { name: string }) {
+  return (
+    <a
+      className="site-switch"
+      href="#/my"
+      aria-label={`${name}: інші будинки`}
+      // a long name takes the room of «Про проєкт» on phones (styles.css)
+      data-long={name.length > LONG_NAME ? "" : undefined}
+    >
+      <span className="label">{name}</span>
+      <Icon name="down" size={16} color="var(--muted)" />
+    </a>
+  );
+}
+
+/** «Назад» in the header of a sub-screen: «Мої будинки», «Знайти мій будинок», «Про проєкт». */
+export function BackLink({ href }: { href: string }) {
+  return (
+    <a className="site-switch" href={href}>
+      <Icon name="back" size={16} color="var(--muted)" />
+      <span className="label">Назад</span>
+    </a>
+  );
+}
+
 export function Header({ children }: { children: ReactNode }) {
   return (
     <header className="header">
@@ -105,30 +159,33 @@ export function Header({ children }: { children: ReactNode }) {
         </a>
         {children}
       </div>
+      {/* «Підтримати» lives on «Про проєкт» now */}
       <a
-        className="support"
-        href={SUPPORT_URL}
-        target="_blank"
-        rel="noopener"
-        aria-label="Підтримати розробника (банка monobank, відкриється в новій вкладці)"
+        className="header-link"
+        href="#/about"
+        // the label hides on narrow phones: the link keeps its name
+        aria-label="Про проєкт і підтримка"
+        aria-current={location.hash === "#/about" ? "page" : undefined}
       >
-        <Icon name="heart" color="var(--light)" />
-        Підтримати
+        <Icon name="info" color="var(--light)" />
+        <span className="header-link-label">Про проєкт</span>
       </a>
     </header>
   );
 }
 
-export type Tab = "now" | "schedule" | "history" | "game";
+export type Tab = "now" | "schedule" | "history" | "game" | "my" | "add" | "about";
+type NavTab = Exclude<Tab, "my" | "add" | "about">;
 
 export function Nav({ tab, site }: { tab: Tab; site: Site | null }) {
   // The game plays on the windows of ЖК 4U's figure.
   const game = inMiniApp() && site?.scene === "4u";
-  const items: [Tab, string, string][] = [
+  // «Мої будинки» and «Знайти мій будинок» open from the building's name, not from here.
+  const items: [NavTab, string, string][] = [
     ["now", "#/", "Зараз"],
     ["schedule", "#/schedule", "Графік"],
     ["history", "#/history", "Історія"],
-    ...(game ? ([["game", "#/game", "Гра"]] as [Tab, string, string][]) : []),
+    ...(game ? ([["game", "#/game", "Гра"]] as [NavTab, string, string][]) : []),
   ];
   return (
     <nav className="nav" aria-label="Розділи">

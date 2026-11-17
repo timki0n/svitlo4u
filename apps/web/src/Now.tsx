@@ -3,7 +3,7 @@ import { duration, hhmm } from "./format.ts";
 import type { Live } from "./live.ts";
 import type { BuildingMode } from "./scene3d.ts";
 import { dayPieces, pct } from "./timeline.ts";
-import { ConnectionNotice, Header, Icon, LegendItem, Split } from "./ui.tsx";
+import { ConnectionNotice, Header, Icon, LegendItem, SiteName, Split } from "./ui.tsx";
 
 /** A reading older than this is not shown (the plug sends one every ~30 s while there is power). */
 const VOLTAGE_FRESH_MS = 5 * 60_000;
@@ -27,13 +27,7 @@ export function NowScreen({ live }: { live: Live }) {
   return (
     <main className="screen">
       <Header>
-        <span className="label">{site.name}</span>
-        {(live.me?.hubs.length ?? 0) > 0 && (
-          <a className="chip" href="/my">
-            <Icon name="plug" size={16} />
-            Мій хаб
-          </a>
-        )}
+        <SiteName name={site.name} />
       </Header>
       <ConnectionNotice connection={live.connection} updatedAt={live.updatedAt} tz={tz} />
       {site.scene === "4u" && <Building mode={mode} />}

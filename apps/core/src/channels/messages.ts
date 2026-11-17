@@ -164,21 +164,32 @@ export const CLAIM_PRIVATE_TEXT = "Відкрийте це посилання в
 export const CLAIM_BAD_CODE_TEXT =
   "❌ Код не підходить. Відскануйте QR-код з наклейки хаба ще раз.";
 export const CLAIM_TAKEN_TEXT =
-  "🔒 У цього хаба вже є власник. Якщо хаб тепер ваш, попросіть попереднього власника звільнити його: «Мій хаб» → «Звільнити хаб».";
+  "🔒 У цього хаба вже є власник. Якщо хаб тепер ваш, попросіть попереднього власника звільнити його: назва будинку вгорі застосунку → «Звільнити хаб».";
 export const CLAIM_FAILED_TEXT =
   "❌ Не вдалося створити будинок. Відскануйте QR-код з наклейки хаба ще раз.";
 
-export function claimGroupText(hubId: string): string {
+export function claimStreetText(hubId: string): string {
   return [
     `🔑 Хаб ${escapeHtml(hubId)} тепер ваш.`,
     "",
-    "Оберіть свою чергу відключень (Київ). Її видно на сайті YASNO або в рахунку за світло.",
+    "Де він стоїть? Напишіть вулицю (наприклад «Хрещатик»): за адресою я дізнаюсь вашу чергу відключень (Київ).",
   ].join("\n");
 }
 
-export function claimNameText(group: string): string {
+export function claimHouseText(street: string): string {
+  return `Вулиця: ${escapeHtml(street)}.\n\nНапишіть номер будинку.`;
+}
+
+export const CLAIM_NO_STREET_TEXT =
+  "Не знайшов такої вулиці в YASNO. Спробуйте інакше: лише назву, без «вул.», наприклад «Хрещатик».";
+export const CLAIM_NO_HOUSE_TEXT =
+  "Не знайшов такого будинку. Напишіть номер інакше, наприклад «12» або «12А».";
+export const CLAIM_NO_GROUP_TEXT =
+  "YASNO не знає черги цього будинку. Напишіть номер ще раз і оберіть інший варіант.";
+
+export function claimNameText(group: string, address: string): string {
   return [
-    `Черга ${escapeHtml(group)}.`,
+    `${escapeHtml(address)}: черга ${escapeHtml(group)}.`,
     "",
     "Як назвати будинок? Напишіть назву у відповідь, наприклад «Дім на Оболоні».",
   ].join("\n");

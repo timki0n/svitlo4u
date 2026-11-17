@@ -22,6 +22,8 @@ import {
 import { HubVerifier, registerHubRoutes } from "./adapters/hub.ts";
 import { type MqttLike, type PlugAdapter, startPlugAdapter } from "./adapters/plug.ts";
 import { YasnoPoller } from "./adapters/yasno.ts";
+import { YasnoAddresses } from "./adapters/yasno-addresses.ts";
+import { registerAddresses } from "./api/addresses.ts";
 import { registerGame } from "./api/game.ts";
 import { registerMe } from "./api/me.ts";
 import { RateLimiter, registerApiGuards } from "./api/rate-limit.ts";
@@ -141,6 +143,10 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
     addSite: (site) => addSite(site),
     hubReady: (device) => hubVerifier?.set(device),
     status: (siteId) => hubs.get(siteId)?.status() ?? NO_STATUS,
+    light: (siteId) => {
+      const now = state.has(siteId) ? state.get(siteId) : null;
+      return { power: now?.power ?? "unknown", since: now?.since ?? null };
+    },
   });
   sites.push(...ownership.ownerSites());
 
@@ -187,6 +193,14 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
         "notification sent",
       ),
   });
+  // YASNO's address search («Знайти мій будинок», a claimed hub's queue), the home building's region.
+  const home = sites[0];
+  const addresses = new YasnoAddresses({
+    region: home?.yasno.region ?? 25,
+    dso: home?.yasno.dso ?? 902,
+    ...(deps.fetch ? { fetch: deps.fetch } : {}),
+    now: () => clock.now(),
+  });
   const telegram = new TelegramChannel({
     sites,
     store,
@@ -200,6 +214,7 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
         hubsReport(store, sites, (id) => hubs.get(id)?.status() ?? NO_STATUS, clock.now()),
     },
     ownership: () => ownership,
+    addresses,
     publicUrl: config.publicUrl,
     updates: config.telegramUpdates,
     images,
@@ -269,6 +284,7 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
     botUsername: () => telegram.botUsername(),
     leaveChat: (siteId, chatId) => telegram.leaveChat(siteId, chatId),
   });
+  registerAddresses(app, { addresses, sites: () => sites, store, clock, bus });
   telegram.registerRoutes(app);
   sse.registerRoutes(app);
 

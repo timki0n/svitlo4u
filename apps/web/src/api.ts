@@ -8,13 +8,14 @@ import { tgInitData } from "./telegram.ts";
 
 export type Site = ResponseOf<"site">;
 export type Me = MeView;
-export type OwnedHub = Me["hubs"][number];
-export type OwnedChat = OwnedHub["chats"][number];
+export type MyBuilding = Me["buildings"][number];
+export type OwnedChat = MyBuilding["chats"][number];
 export type State = ResponseOf<"state">;
 export type Widget = ResponseOf<"widget">;
 export type TimelineDay = Widget["timeline"]["days"][number];
 export type Outage = Widget["timeline"]["actual"][number];
 export type DaySchedule = ResponseOf<"schedule">;
+export type PastDay = ResponseOf<"day">;
 export type Summary = ResponseOf<"summary">;
 export type Daily = ResponseOf<"daily">;
 export type Heatmap = ResponseOf<"heatmap">;
@@ -53,7 +54,30 @@ async function signed<T>(method: string, path: string, body?: unknown): Promise<
   return (await response.json()) as T;
 }
 
+/** A form sent from the site or the Mini App (there signed: the person is known). */
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const initData = tgInitData();
+  const response = await fetch(path, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+      ...(initData ? { authorization: `tma ${initData}` } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new ApiError(response.status, path);
+  return (await response.json()) as T;
+}
+
+/** A street or a house in YASNO's address search. */
+export type AddressItem = { id: number; name: string };
+/** What is at an address: its queue, and Світло4U's building there (public ones only). */
+export type AddressLookup = { group: string | null; site: { id: string; name: string } | null };
+export type AddressPick = { street: number; house: number; streetName: string; houseName: string };
+
 const site = (id: string) => `/api/v1/sites/${encodeURIComponent(id)}`;
+const q = (text: string) => encodeURIComponent(text.trim());
 const range = (from: string, to: string) => `from=${from}&to=${to}`;
 
 export const api = {
@@ -61,6 +85,8 @@ export const api = {
   site: (id: string, signal?: AbortSignal) => get<Site>(site(id), signal),
   state: (id: string, signal?: AbortSignal) => get<State>(`${site(id)}/state`, signal),
   widget: (id: string, signal?: AbortSignal) => get<Widget>(`${site(id)}/widget`, signal),
+  day: (id: string, date: string, signal?: AbortSignal) =>
+    get<PastDay>(`${site(id)}/day?date=${date}`, signal),
   schedule: (id: string, date: string, signal?: AbortSignal) =>
     get<DaySchedule>(`${site(id)}/schedule?date=${date}`, signal),
   summary: (id: string, from: string, to: string, signal?: AbortSignal) =>
@@ -76,7 +102,7 @@ export const api = {
   scheduleChanges: (id: string, from: string, to: string, signal?: AbortSignal) =>
     get<ScheduleChanges>(`${site(id)}/analytics/schedule-changes?${range(from, to)}`, signal),
   eventsUrl: (id: string) => `${site(id)}/events`,
-  // the Mini App: my building, «Мій хаб»
+  // the Mini App: my building, «Мої будинки»
   me: () => signed<Me>("GET", "/api/v1/me"),
   setMySite: (siteId: string) => signed<Me>("PUT", "/api/v1/me/site", { siteId }),
   renameHub: (hubId: string, name: string) =>
@@ -86,4 +112,29 @@ export const api = {
     signed<Me>("POST", `/api/v1/me/chats/${chatId}/feed`, { threadId, on }),
   removeChat: (chatId: number, threadId: number) =>
     signed<Me>("POST", `/api/v1/me/chats/${chatId}/remove`, { threadId }),
+  addFavorite: (siteId: string) => signed<Me>("POST", "/api/v1/me/favorites", { siteId }),
+  removeFavorite: (siteId: string) =>
+    signed<Me>("DELETE", `/api/v1/me/favorites/${encodeURIComponent(siteId)}`),
+  // «Знайти мій будинок»: any address in YASNO's search
+  streets: (text: string, signal?: AbortSignal) =>
+    get<{ streets: AddressItem[] }>(`/api/v1/addresses/streets?q=${q(text)}`, signal),
+  houses: (street: number, text: string, signal?: AbortSignal) =>
+    get<{ houses: AddressItem[] }>(
+      `/api/v1/addresses/houses?street=${street}&q=${q(text)}`,
+      signal,
+    ),
+  lookup: (street: number, house: number, signal?: AbortSignal) =>
+    get<AddressLookup>(`/api/v1/addresses/lookup?street=${street}&house=${house}`, signal),
+  sendRequest: (
+    address: AddressPick,
+    has: { canAdmin: boolean; sparePhone: boolean; routerOk: boolean; wantsVoltage: boolean },
+    contact: string,
+  ) =>
+    post<{ ok: true }>("/api/v1/requests", {
+      ...address,
+      ...has,
+      ...(contact.trim() ? { contact: contact.trim() } : {}),
+    }),
+  attachAddress: (siteId: string, address: AddressPick) =>
+    signed<{ ok: true }>("POST", "/api/v1/admin/addresses", { siteId, ...address }),
 };

@@ -135,8 +135,26 @@ there is power, rejected heartbeats and core restarts (with the downtime).
 Every building has a page at `svitlo4u.info/<id>`; `svitlo4u.info` itself shows ЖК 4U (the first
 public site in `config/sites.yaml`) — or the building this browser opened last. In
 `config/sites.yaml`: `access: public` (default; listed in `/api/v1/sites`) or `link` (only by its
-address), `scene: 4u` for the 3D figure of ЖК 4U (and its window game; default: none). The Mini App
-opens the person's own building (the one they followed or opened last).
+address), `scene: 4u` for the 3D figure of ЖК 4U (and its window game; default: none),
+`owners: [<Telegram user id>]` for people who own the building without a hub of theirs (it shows
+in their «Мої будинки»). The Mini App opens the person's own building (the one they followed or
+opened last).
+
+The button by the building's name opens «Мої будинки» for everyone: the building shown now, the
+orange «Знайти мій будинок» right under it, in the Mini App the favorites (★), and the buildings
+this device opened lately. «Знайти мій будинок» takes any Kyiv address from YASNO's own address
+search (street, house; the core proxies and caches it for an hour). Where a public building has
+that address, it opens (and becomes the person's building) or goes to the favorites; elsewhere the
+person sees the address's queue and may leave a request («Залишити заявку»: whether they can run
+Світло4U in the building, and only then whether they have an old phone that can stay on charge —
+it could watch the power there, the quick start — a router that works without light, and want the
+voltage; on the site also a phone or e-mail, in the Mini App the Telegram user is known; a line under the button says what is kept and why: the address and the
+contact, to write to them about Світло4U). Requests land in the `requests` table and the admin chat
+(`🙋 Заявка №…`), at most five per client in ten minutes. Only the admin (the user of the private
+admin chat) gives a public building its address: in the Mini App, «Знайти мій будинок» → the
+address → «Це «ЖК 4U»». Owners do not: the address a hub's owner names at the claim gives the queue
+and goes to the admin's note about the new building. Private (`link`) buildings are never found by
+their address.
 
 ### Hubs for other buildings
 
@@ -146,15 +164,16 @@ A hub is made at the bench and claimed by its owner (docs/hub-protocol.md → Pr
    `python firmware/hub/tools/factory.py --port COM6 --ssh <server>`: the server creates the hub
    (`cli/hub.ts new` in the core's container), the hub gets its id and secret over USB, and
    `hub-xxxxxx.html` is the sticker to print (60×40 mm) with the QR.
-2. The owner sets the hub up from its own Wi-Fi page, scans the QR: the bot asks for the Yasno
-   group and a name and creates the building (`b-…`, only by link). From then on the owner gets the
-   light notices and the hub's service ones, «Мій хаб» in the Mini App (rename, add the bot to the
+2. The owner sets the hub up from its own Wi-Fi page, scans the QR: the bot asks for the address
+   (street and house from YASNO's search: they give the queue) and a name and creates the building
+   (`b-…`, only by link). From then on the owner gets the
+   light notices and the hub's service ones, «Мої будинки» in the Mini App (rename, add the bot to the
    building's group, release the hub) and the page of the building.
 
 No restart and no `config/sites.yaml` edit: such buildings and hubs live in the database (and its
 backups). `cli/hub.ts list` shows them, `cli/hub.ts link <hub>` reprints a sticker's link.
 
-«Мій хаб» also lists the groups and channels that get the building's notices. A group joins by
+«Мої будинки» also lists the groups and channels that get the building's notices. A group joins by
 «Додати в групу» (the `startgroup` link; its admin adds the bot), a channel by «Додати в канал»
 (the bot added as an admin that may post: it follows the owner's building by itself). For each
 the owner sees what the bot may do there, turns a group into a feed (only its admins write, the

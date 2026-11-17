@@ -264,6 +264,35 @@ describe("API v1", () => {
     });
   });
 
+  it("a past day as the timeline draws it: its plan, its real outages, totals by fact («Вчора»)", async () => {
+    const c = await start();
+    seed(c);
+    const { status, body } = await get(c, "/api/v1/sites/4u/day?date=2026-11-09");
+    expect(status).toBe(200);
+    expect(body.day).toMatchObject({
+      date: "2026-11-09",
+      status: "ScheduleApplies",
+      label: "Вчора, 09.11",
+      overlay: null,
+    });
+    expect(
+      body.day.segments.map((s: { kind: string; label: string }) => `${s.kind} ${s.label}`),
+    ).toEqual(["on 00:00–08:00", "off 08:00–12:00", "on 12:00–20:00", "off 20:00–24:00"]);
+    // The false alarm at 05:00 is not an outage.
+    expect(body.actual).toEqual([
+      { start: at("2026-11-09", "20:00"), end: at("2026-11-09", "23:30") },
+    ]);
+    const MIN = 60_000;
+    expect(body.day.totals.past).toEqual({ onMs: 1230 * MIN, offMs: 210 * MIN });
+
+    // A day with no schedule kept: still its facts, over one unknown segment.
+    const old = (await get(c, "/api/v1/sites/4u/day?date=2025-01-01")).body;
+    expect(old.day).toMatchObject({ status: "Unknown", label: "01.01" });
+    expect(old.day.segments).toHaveLength(1);
+    expect(old.actual).toEqual([]);
+    expect((await get(c, "/api/v1/sites/4u/day")).status).toBe(400);
+  });
+
   it("outages and summary exclude false alarms", async () => {
     const c = await start();
     seed(c);

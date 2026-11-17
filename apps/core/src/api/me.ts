@@ -1,10 +1,11 @@
 /**
  * The Mini App's personal part, signed in by Telegram (`Authorization: tma <initData>`):
  *
- *   GET  /api/v1/me                            my building and my hubs («Мій хаб»), their chats
+ *   GET  /api/v1/me                            my building, my buildings and hubs, their chats
  *   PUT  /api/v1/me/site            {siteId}   my building: the Mini App opens on it everywhere
  *   POST /api/v1/me/hubs/:hubId/name  {name}   rename the building of my hub
  *   POST /api/v1/me/hubs/:hubId/release        let the hub go: the next scan of its sticker takes it
+ *   POST /api/v1/me/favorites  {siteId}       keep a building at hand (★); DELETE …/:siteId: drop it
  *   POST /api/v1/me/chats/:chatId/feed   {threadId, on}  a chat of my building: a feed or not
  *   POST /api/v1/me/chats/:chatId/remove {threadId}      stop the notices there; the bot leaves
  *                                                        when nothing else is followed there
@@ -14,7 +15,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { Clock } from "../runtime/clock.ts";
 import { cleanName, type HubOwnership, NAME_MAX } from "../services/ownership.ts";
-import { SITE_ID, type SiteConfig } from "../sites-config.ts";
+import { isAdminUser, SITE_ID, type SiteConfig } from "../sites-config.ts";
 import type { MeView } from "./me-view.ts";
 import { type MiniAppUser, verifyInitData } from "./telegram-auth.ts";
 
@@ -66,12 +67,15 @@ export function registerMe(app: FastifyInstance, deps: MeDeps): void {
     return {
       user: { id: user.id, firstName: user.firstName },
       siteId: mine && sites.some((s) => s.id === mine) ? mine : null,
-      hubs: deps.ownership.hubsOf(user.id).map((hub) => ({
-        ...hub,
-        groupLink:
-          hub.site && username ? `https://t.me/${username}?startgroup=${hub.site.id}` : null,
-        channelLink:
-          hub.site && username ? `https://t.me/${username}?startchannel&admin=post_messages` : null,
+      favorites: deps.store.favorites.list(user.id).flatMap((id) => {
+        const site = sites.find((s) => s.id === id);
+        return site ? [{ id: site.id, name: site.name }] : [];
+      }),
+      admin: isAdminUser(sites, user.id),
+      buildings: deps.ownership.buildingsOf(user.id).map((building) => ({
+        ...building,
+        groupLink: username ? `https://t.me/${username}?startgroup=${building.site.id}` : null,
+        channelLink: username ? `https://t.me/${username}?startchannel&admin=post_messages` : null,
       })),
     };
   };
@@ -110,6 +114,25 @@ export function registerMe(app: FastifyInstance, deps: MeDeps): void {
     if (!body.success || !deps.sites().some((s) => s.id === body.data.siteId))
       return fail(reply, 404, "unknown_site");
     deps.store.telegramUsers.setSite(user.id, body.data.siteId, deps.clock.now());
+    return me(user);
+  });
+
+  app.post("/api/v1/me/favorites", async (request, reply) => {
+    const user = signedIn(request, reply);
+    if (!user) return reply;
+    const body = SiteBody.safeParse(request.body);
+    if (!body.success || !deps.sites().some((s) => s.id === body.data.siteId))
+      return fail(reply, 404, "unknown_site");
+    deps.store.favorites.add(user.id, body.data.siteId, deps.clock.now());
+    return me(user);
+  });
+
+  app.delete("/api/v1/me/favorites/:siteId", async (request, reply) => {
+    const user = signedIn(request, reply);
+    if (!user) return reply;
+    const params = SiteBody.safeParse(request.params);
+    if (!params.success) return fail(reply, 404, "unknown_site");
+    deps.store.favorites.remove(user.id, params.data.siteId);
     return me(user);
   });
 

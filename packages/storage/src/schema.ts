@@ -41,7 +41,7 @@ export const hubs = sqliteTable(
     /** Hex HMAC key; null when it is in the environment (sites.yaml `secretEnv`). */
     secret: text("secret"),
     siteId: text("site_id").references(() => sites.id),
-    /** Telegram user id of the owner: hub alerts and «Мій хаб». */
+    /** Telegram user id of the owner: hub alerts and «Мої будинки». */
     ownerUserId: integer("owner_user_id"),
     /** sites.yaml-like policy: "latest", "off" or a pinned "x.y.z". */
     firmware: text("firmware").notNull().default("latest"),
@@ -75,6 +75,71 @@ export const telegramChats = sqliteTable("telegram_chats", {
   canPost: integer("can_post", { mode: "boolean" }).notNull().default(false),
   updatedAt: integer("updated_at").notNull(),
 });
+
+/**
+ * Addresses of buildings, as YASNO knows them (its street and house ids): the address search finds
+ * a public building by one; an owner's building keeps the address it was created with.
+ */
+export const siteAddresses = sqliteTable(
+  "site_addresses",
+  {
+    streetId: integer("street_id").notNull(),
+    houseId: integer("house_id").notNull(),
+    siteId: text("site_id")
+      .notNull()
+      .references(() => sites.id),
+    /** "вул. Хрещатик, 22" */
+    text: text("text").notNull(),
+    createdAt: integer("created_at").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.streetId, t.houseId] }),
+    index("site_addresses_by_site").on(t.siteId),
+  ],
+);
+
+/** Buildings a Telegram user keeps at hand (★ in «Мої будинки»). */
+export const telegramFavorites = sqliteTable(
+  "telegram_favorites",
+  {
+    userId: integer("user_id").notNull(),
+    siteId: text("site_id")
+      .notNull()
+      .references(() => sites.id),
+    createdAt: integer("created_at").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.siteId] })],
+);
+
+/** «Залишити заявку»: someone wants Світло4U at an address that has no building yet. */
+export const requests = sqliteTable(
+  "requests",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    streetId: integer("street_id").notNull(),
+    houseId: integer("house_id").notNull(),
+    address: text("address").notNull(),
+    /** The YASNO queue there, "12.1". */
+    yasnoGroup: text("yasno_group"),
+    /**
+     * The person can run Світло4U in the building (set it up, the building's chats). The three
+     * below are asked only then (false otherwise).
+     */
+    canAdmin: integer("can_admin", { mode: "boolean" }).notNull(),
+    /** An old Android phone that can stay on charge: it could watch the power there. */
+    sparePhone: integer("spare_phone", { mode: "boolean" }).notNull(),
+    /** The router (and internet) keep working when the light goes. */
+    routerOk: integer("router_ok", { mode: "boolean" }).notNull(),
+    /** They want the voltage in volts (a plug that measures it). */
+    wantsVoltage: integer("wants_voltage", { mode: "boolean" }).notNull(),
+    /** Phone or @telegram typed on the site; null from the Mini App (the user is known). */
+    contact: text("contact"),
+    userId: integer("user_id"),
+    username: text("username"),
+    createdAt: integer("created_at").notNull(),
+  },
+  (t) => [index("requests_by_time").on(t.createdAt)],
+);
 
 /** Persisted power detector state (one row per site, rewritten every few seconds). */
 export const detectorState = sqliteTable("detector_state", {

@@ -36,7 +36,7 @@ import {
   type Routes,
   routes,
 } from "./contract.ts";
-import { dayScheduleView, stateView, widgetView } from "./views.ts";
+import { dayScheduleView, dayView, stateView, widgetView } from "./views.ts";
 
 export type ApiDeps = {
   /** The live list: a building created by its owner shows up at once. */
@@ -151,6 +151,8 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps): void {
     const date = query.date ?? localDate(now, site(params.siteId).tz);
     return dayScheduleView(state, store, params.siteId, date, now);
   });
+
+  bind("day", ({ params, query }, now) => dayView(state, store, params.siteId, query.date, now));
 
   bind("outages", ({ params, query }, now) => {
     const { range } = dateRange(query, site(params.siteId).tz, now);

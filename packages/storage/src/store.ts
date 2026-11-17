@@ -29,9 +29,12 @@ import {
   powerEvents,
   pushSubscriptions,
   reminderLog,
+  requests,
   scheduleSnapshots,
+  siteAddresses,
   sites,
   telegramChats,
+  telegramFavorites,
   telegramSubscribers,
   telegramUsers,
   voltageSamples,
@@ -40,6 +43,7 @@ import {
 export type SiteRow = typeof sites.$inferInsert;
 export type HubRow = typeof hubs.$inferSelect;
 export type TelegramChatRow = typeof telegramChats.$inferSelect;
+export type RequestRow = typeof requests.$inferSelect;
 export type OutboxItem = typeof notificationOutbox.$inferSelect;
 
 export type Store = ReturnType<typeof createStore>;
@@ -162,6 +166,69 @@ export function createStore(db: Db) {
           })
           .where(eq(telegramChats.chatId, chat.chatId))
           .run();
+      },
+    },
+
+    siteAddresses: {
+      /** The building at a YASNO address, if one is there. */
+      siteAt(streetId: number, houseId: number): string | null {
+        return (
+          db
+            .select({ siteId: siteAddresses.siteId })
+            .from(siteAddresses)
+            .where(and(eq(siteAddresses.streetId, streetId), eq(siteAddresses.houseId, houseId)))
+            .get()?.siteId ?? null
+        );
+      },
+      /** The address belongs to this building (from now on). */
+      attach(
+        siteId: string,
+        address: { streetId: number; houseId: number; text: string },
+        now = Date.now(),
+      ): void {
+        const row = { ...address, siteId, createdAt: now };
+        db.insert(siteAddresses)
+          .values(row)
+          .onConflictDoUpdate({
+            target: [siteAddresses.streetId, siteAddresses.houseId],
+            set: { siteId, text: address.text },
+          })
+          .run();
+      },
+      of(siteId: string) {
+        return db.select().from(siteAddresses).where(eq(siteAddresses.siteId, siteId)).all();
+      },
+    },
+
+    favorites: {
+      list(userId: number): string[] {
+        return db
+          .select({ siteId: telegramFavorites.siteId })
+          .from(telegramFavorites)
+          .where(eq(telegramFavorites.userId, userId))
+          .orderBy(asc(telegramFavorites.createdAt))
+          .all()
+          .map((r) => r.siteId);
+      },
+      add(userId: number, siteId: string, now = Date.now()): void {
+        db.insert(telegramFavorites)
+          .values({ userId, siteId, createdAt: now })
+          .onConflictDoNothing()
+          .run();
+      },
+      remove(userId: number, siteId: string): void {
+        db.delete(telegramFavorites)
+          .where(and(eq(telegramFavorites.userId, userId), eq(telegramFavorites.siteId, siteId)))
+          .run();
+      },
+    },
+
+    requests: {
+      add(row: Omit<RequestRow, "id">): number {
+        return Number(db.insert(requests).values(row).run().lastInsertRowid);
+      },
+      list(limit = 100): RequestRow[] {
+        return db.select().from(requests).orderBy(desc(requests.createdAt)).limit(limit).all();
       },
     },
 

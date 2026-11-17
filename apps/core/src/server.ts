@@ -56,7 +56,7 @@ export function buildServer(config: CoreConfig): FastifyInstance {
         }
       },
     });
-    // A building's address (svitlo4u.info/<id>) and «Мій хаб» (/my) are pages of the web app.
+    // A building's address (svitlo4u.info/<id>) and «Мої будинки» (/my) are pages of the web app.
     app.setNotFoundHandler((request, reply) => {
       const path = request.url.split("?")[0] ?? "";
       if (request.method === "GET" && WEB_PAGE.test(path) && !NOT_PAGES.test(path)) {

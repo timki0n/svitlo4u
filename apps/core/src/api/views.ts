@@ -248,6 +248,89 @@ export function widgetView(
   };
 }
 
+/**
+ * One day as the timeline draws it, with its real outages: «Вчора» on the schedule screen. The plan
+ * is the one the day had (live or from history); the totals are by fact up to now.
+ */
+export function dayView(
+  state: SiteStateStore,
+  store: Store,
+  siteId: string,
+  date: string,
+  now: number,
+): ResponseOf<"day"> {
+  const site = state.site(siteId);
+  const { tz } = site;
+  const ctx = state.planContext(siteId);
+  const today = localDate(now, tz);
+  const dayStart = localMidnight(date, tz);
+  const dayEnd = localMidnight(addDays(date, 1), tz);
+  const live = ctx ? liveDay(ctx, date, today) : null;
+  const schedule = live ?? store.schedules.finalDays(siteId, date, date)[0]?.day ?? null;
+  const status: ScheduleStatus = schedule?.status ?? "Unknown";
+  const records = store.outages
+    .list(siteId, { start: dayStart, end: Math.max(dayStart, Math.min(now, dayEnd)) })
+    .filter((o) => !o.falseAlarm);
+  const totals = (segments: readonly Segment[] | null) =>
+    dayTotals(
+      { start: dayStart, end: dayEnd },
+      now,
+      records,
+      segments ? segments.filter((s) => s.kind === "off") : null,
+    );
+  const [, m, d] = date.split("-");
+  const word =
+    date === addDays(today, -1)
+      ? "Вчора"
+      : date === today
+        ? "Сьогодні"
+        : date === addDays(today, 1)
+          ? "Завтра"
+          : null;
+  const base = { date, status, label: word ? `${word}, ${d}.${m}` : `${d}.${m}` };
+
+  let day: ResponseOf<"day">["day"];
+  if (schedule && (status === "ScheduleApplies" || status === "NoOutages")) {
+    const windows =
+      status === "ScheduleApplies" ? mergeWindows(dayInfo(schedule, date, tz, null).outages) : [];
+    const segments = planSegments(dayStart, dayEnd, windows, tz);
+    day = { ...base, overlay: null, note: null, segments, totals: totals(segments) };
+  } else {
+    // R15: emergency shutdowns over the schedule published for this day, if there was one.
+    const fixed = status === "EmergencyShutdowns" ? lastFixedSchedule(store, site, date) : null;
+    day = fixed
+      ? {
+          ...base,
+          overlay: "emergency",
+          note: "Діяли екстрені відключення · графік не діяв",
+          segments: planSegments(dayStart, dayEnd, mergeWindows(fixed.outages), tz),
+          totals: totals(null),
+        }
+      : {
+          ...base,
+          overlay: null,
+          note: null,
+          segments: [
+            {
+              start: dayStart,
+              end: dayEnd,
+              kind: "unknown",
+              label: UNKNOWN_LABEL[status] ?? "Графік недоступний",
+            },
+          ],
+          totals: totals(null),
+        };
+  }
+  return {
+    siteId,
+    day,
+    actual: records.map((o) => ({
+      start: Math.max(o.start, dayStart),
+      end: o.end === null ? null : Math.min(o.end, dayEnd),
+    })),
+  };
+}
+
 export function dayScheduleView(
   state: SiteStateStore,
   store: Store,

@@ -185,6 +185,24 @@ export class Notifier {
           { silent: true },
         );
       }),
+      bus.on("request.new", (e) => {
+        const yes = (v: boolean) => (v ? "так" : "ні");
+        deps.telegram.alert(
+          null,
+          [
+            `🙋 Заявка №${e.id}: ${escapeHtml(e.address)}${e.group ? ` (черга ${escapeHtml(e.group)})` : ""}`,
+            `Може адмініструвати Світло4U в будинку: ${yes(e.canAdmin)}`,
+            ...(e.canAdmin
+              ? [
+                  `Старий Android-смартфон на зарядці: ${yes(e.sparePhone)}`,
+                  `Роутер працює без світла: ${yes(e.routerOk)}`,
+                  `Хоче бачити напругу: ${yes(e.wantsVoltage)}`,
+                ]
+              : []),
+            `Контакт: ${escapeHtml(e.contact)}`,
+          ].join("\n"),
+        );
+      }),
       // Admin only: a weak link between the hub and its plug (no light event came of it).
       bus.on("hub.link-gap", (e) => {
         const site = deps.state.site(e.siteId);

@@ -120,6 +120,8 @@ const siteSchema = z.object({
   access: z.enum(["public", "link"]).default("public"),
   /** The picture on the main screen: the 3D figure of ЖК 4U, or none. */
   scene: z.enum(["4u", "none"]).default("none"),
+  /** Telegram users who own the building without a hub of theirs: «Мої будинки» shows it to them. */
+  owners: z.array(z.number().int()).default([]),
   yasno: z.object({ region: z.number().int(), dso: z.number().int(), group: z.string().min(1) }),
   devices: z.array(z.discriminatedUnion("kind", [espDevice, plugDevice, hubDevice])).min(1),
   detector: detectorOverrides.default({}),
@@ -255,6 +257,7 @@ export function ownerSiteConfig(
     linkUrl: home?.linkUrl ?? "https://svitlo4u.info",
     access: row.access === "public" ? "public" : "link",
     scene: "none",
+    owners: [],
     yasno: { region: row.yasnoRegion, dso: row.yasnoDso, group: row.yasnoGroup },
     origin: "owner",
     esp: [],
@@ -276,6 +279,14 @@ export function ownerSiteConfig(
         }
       : null,
   };
+}
+
+/** The developer: the user behind a private admin chat (user ids are positive, groups are not). */
+export function isAdminUser(sites: readonly SiteConfig[], userId: number): boolean {
+  return sites.some((s) => {
+    const admin = s.telegram?.adminChatId;
+    return admin !== undefined && admin > 0 && admin === userId;
+  });
 }
 
 /** The building new visitors see: the first public one in sites.yaml (ЖК 4U). */

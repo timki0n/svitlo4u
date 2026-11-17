@@ -5,6 +5,7 @@ export {
   createStore,
   type HubRow,
   type OutboxItem,
+  type RequestRow,
   type SiteRow,
   type Store,
   type TelegramChatRow,

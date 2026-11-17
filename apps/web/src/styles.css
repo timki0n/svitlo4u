@@ -126,7 +126,8 @@ a {
   font-size: 22px;
 }
 
-.support {
+/* «Про проєкт» at the right of the header */
+.header-link {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -141,7 +142,8 @@ a {
   text-decoration: none;
 }
 
-.support:active {
+.header-link:active,
+.header-link[aria-current="page"] {
   box-shadow: var(--inset-sm);
 }
 
@@ -1115,6 +1117,11 @@ a {
     inset 0 0 0 1.5px var(--warn);
 }
 
+.button[data-kind="primary"] {
+  background: var(--bar-on);
+  color: #241405;
+}
+
 .field {
   flex: 1;
   min-width: 0;
@@ -1123,10 +1130,24 @@ a {
   border: 0;
   border-radius: 15px;
   background: var(--well);
-  box-shadow: var(--inset-sm);
+  /* the rim: a field must stand out from its card (3:1) */
+  box-shadow:
+    var(--inset-sm),
+    inset 0 0 0 1px rgba(163, 165, 173, 0.65);
   color: var(--text);
   font: inherit;
   font-size: 15px;
+}
+
+.field::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
+.field-label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 /* ── my hub ─────────────────────────────────────────────────────────────────────────────── */
@@ -1180,13 +1201,241 @@ a {
   line-height: 1.45;
 }
 
-/* ── brand ──────────────────────────────────────────────────────────────────────────────── */
+/* ── the building's name: a switch for owners ──────────────────────────────────────────────── */
 
-.brand-row {
+.site-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 15px;
+  background: var(--surface-2);
+  box-shadow: var(--raised-sm);
+  text-decoration: none;
+}
+
+.site-switch:active {
+  box-shadow: var(--inset-sm);
+}
+
+.site-switch svg {
+  flex: none;
+}
+
+.site-switch .label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.brand,
+.header-link {
+  flex: none;
+}
+
+/* «Про проєкт» gives its room to a long building name on phones: the icon stays (it is labelled) */
+@media (max-width: 440px) {
+  .header:has(.site-switch[data-long]) .header-link {
+    width: 44px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .header:has(.site-switch[data-long]) .header-link-label {
+    display: none;
+  }
+}
+
+@media (max-width: 350px) {
+  .header-link {
+    width: 44px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .header-link-label {
+    display: none;
+  }
+}
+
+/* ── «Мої будинки», «Знайти мій будинок» ─────────────────────────────────────────────────────── */
+
+.hub-state[data-power="off"] .dot {
+  background: var(--off);
+  box-shadow: none;
+}
+
+.hub-state[data-power="unknown"] .dot {
+  background: var(--muted);
+  box-shadow: none;
+}
+
+/* the screen's one orange button: the building shown is often not mine (a link, the default) */
+.find-building {
+  width: 100%;
+  min-height: 52px;
+  font-size: 16px;
+}
+
+/* a state, not a button: pressed in, like the current tab */
+.badge {
+  flex: none;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--well);
+  box-shadow: var(--inset-sm);
+  color: var(--light);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.request-done {
+  flex: none;
+}
+
+.fav-row,
+.picked {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 12px;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 44px;
+}
+
+.picked {
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.fav-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  min-width: 0;
+  color: var(--text);
+  font-weight: 700;
+  font-size: 15px;
+  text-decoration: none;
+}
+
+.pick-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pick-list.houses {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+}
+
+.pick {
+  min-height: 44px;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--surface-2);
+  box-shadow: var(--raised-sm);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pick-list.houses .pick {
+  text-align: center;
+}
+
+.pick:active {
+  box-shadow: var(--inset-sm);
+}
+
+.request-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* a 44 px target that takes only its text's room: the padding reaches into the gaps around it */
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 11px 0;
+  margin: -11px 0;
+  font-size: 14px;
+  line-height: 1.45;
+  cursor: pointer;
+}
+
+.check input {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin: 1px 0 0;
+  accent-color: var(--light);
+}
+
+/* the setup questions, open under «Можу адмініструвати»: in line with its text */
+.setup {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin: -2px 0 10px;
+  padding-left: 34px;
+}
+
+.checks {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.checks legend {
+  padding: 0;
+  margin-bottom: 12px;
+}
+
+/* the voltage stands apart from «Що у вас є»: a wish, not a thing at home */
+.checks + .checks {
+  padding-top: 16px;
+  border-top: 1px solid var(--rim);
+}
+
+.check-about {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+/* the consent under «Залишити заявку»: a footnote, not a question */
+.consent {
+  margin: -4px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: center;
+  color: var(--muted);
+}
+
+/* ── brand ──────────────────────────────────────────────────────────────────────────────── */
+
+/* one line always: a long building name is cut, never pushed to a second row */
+.brand-row {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 12px;
   min-width: 0;
 }
 
@@ -1228,4 +1477,108 @@ a {
   font-size: 15px;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.result:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* ── «Про проєкт» ───────────────────────────────────────────────────────────────────────── */
+
+.about-hero {
+  align-items: flex-start;
+  gap: 8px;
+  padding: 22px 20px;
+}
+
+.about-name {
+  margin: 6px 0 0;
+  font-family: Unbounded, "Manrope Variable", sans-serif;
+  font-weight: 600;
+  font-size: 18px;
+}
+
+.about-lead {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.about-text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.about-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.about-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.about-list strong {
+  display: block;
+  font-size: 15px;
+}
+
+.about-list .muted {
+  display: block;
+  margin-top: 2px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* the icon in a small pressed-in well, like the empty states */
+.about-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  background: var(--well);
+  box-shadow: var(--inset-sm);
+}
+
+.about-compare {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 4px 0 0;
+}
+
+.about-compare div {
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.about-compare dt {
+  display: inline;
+  font-weight: 700;
+}
+
+.about-compare dd {
+  display: inline;
+  margin: 0;
+  color: var(--muted);
+}
+
+.about-code {
+  align-self: center;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
 }

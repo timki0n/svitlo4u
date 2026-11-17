@@ -31,6 +31,7 @@ const site: SiteConfig = {
   linkUrl: "https://svitlo4u.info",
   access: "public",
   scene: "4u",
+  owners: [],
   origin: "config",
   yasno: { region: 25, dso: 902, group: "12.1" },
   esp: [

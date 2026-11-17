@@ -27,9 +27,10 @@ import type { OutboxItem, Store } from "@svitlo/storage";
 import type { FastifyInstance } from "fastify";
 import { Bot, type Context, GrammyError, HttpError, InputFile, type Transformer } from "grammy";
 import type { Update, UserFromGetMe } from "grammy/types";
+import type { AddressItem, YasnoAddresses } from "../adapters/yasno-addresses.ts";
 import type { Clock, Timer } from "../runtime/clock.ts";
 import type { ScheduleImages } from "../services/images.ts";
-import { cleanName, type HubOwnership, YASNO_FEEDS, YASNO_GROUPS } from "../services/ownership.ts";
+import { cleanName, type HubOwnership, YASNO_FEEDS } from "../services/ownership.ts";
 import { lastFixedSchedule } from "../services/schedule.ts";
 import type { SiteStateStore } from "../services/state.ts";
 import {
@@ -41,10 +42,14 @@ import {
 import {
   CLAIM_BAD_CODE_TEXT,
   CLAIM_FAILED_TEXT,
+  CLAIM_NO_GROUP_TEXT,
+  CLAIM_NO_HOUSE_TEXT,
+  CLAIM_NO_STREET_TEXT,
   CLAIM_PRIVATE_TEXT,
   CLAIM_TAKEN_TEXT,
-  claimGroupText,
+  claimHouseText,
   claimNameText,
+  claimStreetText,
   escapeHtml,
   FEED_USAGE_TEXT,
   feedText,
@@ -125,6 +130,8 @@ export type TelegramDeps = {
   noticeMs?: number;
   /** Hub owners (claims by the sticker's QR, their buildings); null: no hubs. */
   ownership?: () => HubOwnership | null;
+  /** YASNO's address search: a claimed hub's building gets its queue by the address. */
+  addresses?: YasnoAddresses | null;
 };
 
 const COMMANDS = [
@@ -252,7 +259,19 @@ class BotConn {
 type SiteBot = { site: SiteConfig; config: TelegramSiteConfig; conn: BotConn };
 
 /** The claim of a hub without a building, between the scan and the name (by Telegram user). */
-type PendingClaim = { hubId: string; group: string | null; until: number };
+type PendingClaim = {
+  hubId: string;
+  step: "street" | "house" | "name";
+  /** What the last search offered (the buttons). */
+  streets: AddressItem[];
+  houses: AddressItem[];
+  street: AddressItem | null;
+  address: { streetId: number; houseId: number; text: string } | null;
+  group: string | null;
+  until: number;
+};
+const OFFER_STREETS = 8;
+const OFFER_HOUSES = 12;
 const CLAIM_TTL_MS = 30 * 60_000;
 
 export class TelegramChannel {
@@ -314,7 +333,7 @@ export class TelegramChannel {
     return this.bots.get(siteId)?.conn.bot ?? null;
   }
 
-  /** The bot leaves a group or channel (its owner removed it in «Мій хаб»). */
+  /** The bot leaves a group or channel (its owner removed it in «Мої будинки»). */
   async leaveChat(siteId: string, chatId: number): Promise<boolean> {
     const conn = this.bots.get(siteId)?.conn;
     if (!conn) return false;
@@ -843,7 +862,7 @@ export class TelegramChannel {
           });
         return;
       }
-      // A channel takes the building of whoever added the bot (they chose it in «Мій хаб»).
+      // A channel takes the building of whoever added the bot (they chose it in «Мої будинки»).
       if (chat.type === "channel" && admin?.can_post_messages && follows.length === 0) {
         const siteId = this.deps.ownership?.()?.buildingOf(update.from.id) ?? null;
         const target = siteId ? this.bots.get(siteId) : undefined;
@@ -939,26 +958,49 @@ export class TelegramChannel {
       }
     });
 
+    // The claim of a hub without a building: the street, the house (→ its queue), the name.
     bot.on("callback_query:data", async (ctx) => {
       const data = ctx.callbackQuery.data;
       const userId = ctx.from.id;
       const claim = this.pendingClaim(userId);
-      const group = /^g:(hub-[0-9a-f]{6}):(\d\.\d)$/.exec(data);
+      const pick = /^(st|hs):(hub-[0-9a-f]{6}):(\d{1,10})$/.exec(data);
       const noName = /^n:(hub-[0-9a-f]{6})$/.exec(data);
       await ctx.answerCallbackQuery().catch(() => {});
       if (!claim) return;
-      if (group && claim.hubId === group[1]) {
-        claim.group = group[2] as string;
-        await ctx
-          .editMessageText(claimNameText(claim.group), {
+      const edit = (text: string, keyboard?: { text: string; callback_data: string }[][]) =>
+        ctx
+          .editMessageText(text, {
             ...SEND_OPTIONS,
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: `Без назви: «${DEFAULT_HOUSE_NAME}»`, callback_data: `n:${claim.hubId}` }],
-              ],
-            },
+            ...(keyboard ? { reply_markup: { inline_keyboard: keyboard } } : {}),
           })
           .catch(() => {});
+      if (pick && claim.hubId === pick[2]) {
+        const id = Number(pick[3]);
+        if (pick[1] === "st") {
+          const street = claim.streets.find((s) => s.id === id);
+          if (!street) return;
+          claim.street = street;
+          claim.step = "house";
+          await edit(claimHouseText(street.name));
+          return;
+        }
+        const house = claim.houses.find((h) => h.id === id);
+        if (!house || !claim.street) return;
+        const group = await this.deps.addresses?.group(claim.street.id, house.id);
+        if (!group) {
+          await edit(CLAIM_NO_GROUP_TEXT);
+          return;
+        }
+        claim.address = {
+          streetId: claim.street.id,
+          houseId: house.id,
+          text: `${claim.street.name}, ${house.name}`,
+        };
+        claim.group = group;
+        claim.step = "name";
+        await edit(claimNameText(group, claim.address.text), [
+          [{ text: `Без назви: «${DEFAULT_HOUSE_NAME}»`, callback_data: `n:${claim.hubId}` }],
+        ]);
         return;
       }
       if (noName && claim.hubId === noName[1] && claim.group) {
@@ -966,11 +1008,45 @@ export class TelegramChannel {
       }
     });
 
-    // The building's name: the next plain text of a person in the middle of a claim.
+    // What a person in the middle of a claim types: the street, the house number, the name.
     bot.on("message:text", async (ctx, next) => {
       const claim = ctx.chat.type === "private" ? this.pendingClaim(ctx.from.id) : null;
-      if (!claim?.group || ctx.message.text.startsWith("/")) return next();
-      const name = cleanName(ctx.message.text);
+      const text = ctx.message.text;
+      if (!claim || text.startsWith("/")) return next();
+      const addresses = this.deps.addresses;
+      const buttons = (items: AddressItem[], kind: string) =>
+        items.map((item) => [
+          { text: item.name, callback_data: `${kind}:${claim.hubId}:${item.id}` },
+        ]);
+      if (claim.step === "street" && addresses) {
+        const streets = (await addresses.streets(text).catch(() => [])).slice(0, OFFER_STREETS);
+        claim.streets = streets;
+        if (streets.length === 0) {
+          await reply(ctx, CLAIM_NO_STREET_TEXT);
+          return;
+        }
+        await reply(ctx, "Оберіть вулицю:", {
+          reply_markup: { inline_keyboard: buttons(streets, "st") },
+        });
+        return;
+      }
+      if (claim.step === "house" && addresses && claim.street) {
+        const houses = (await addresses.houses(claim.street.id, text).catch(() => [])).slice(
+          0,
+          OFFER_HOUSES,
+        );
+        claim.houses = houses;
+        if (houses.length === 0) {
+          await reply(ctx, CLAIM_NO_HOUSE_TEXT);
+          return;
+        }
+        await reply(ctx, "Оберіть будинок:", {
+          reply_markup: { inline_keyboard: buttons(houses, "hs") },
+        });
+        return;
+      }
+      if (claim.step !== "name" || !claim.group) return next();
+      const name = cleanName(text);
       if (!name) return next();
       await this.finishClaim(conn, ctx, ctx.from.id, claim, name);
     });
@@ -1011,7 +1087,7 @@ export class TelegramChannel {
         return;
       case "mine":
         if (result.site) await this.welcomeOwner(conn, ctx, result.site, result.hubId);
-        else await this.askGroup(ctx, result.hubId);
+        else await this.askAddress(ctx, result.hubId);
         return;
       case "claimed":
         this.alert(
@@ -1022,24 +1098,25 @@ export class TelegramChannel {
         await this.welcomeOwner(conn, ctx, result.site, result.hubId);
         return;
       case "needs-building":
-        await this.askGroup(ctx, result.hubId);
+        await this.askAddress(ctx, result.hubId);
         return;
     }
   }
 
-  private async askGroup(ctx: Context, hubId: string): Promise<void> {
+  /** A hub without a building: its address gives the queue (YASNO), then the name. */
+  private async askAddress(ctx: Context, hubId: string): Promise<void> {
     const userId = ctx.from?.id as number;
-    this.pending.set(userId, { hubId, group: null, until: this.deps.clock.now() + CLAIM_TTL_MS });
-    const rows: { text: string; callback_data: string }[][] = [];
-    for (let i = 0; i < YASNO_GROUPS.length; i += 4) {
-      rows.push(
-        YASNO_GROUPS.slice(i, i + 4).map((g) => ({ text: g, callback_data: `g:${hubId}:${g}` })),
-      );
-    }
-    await ctx.reply(claimGroupText(hubId), {
-      ...SEND_OPTIONS,
-      reply_markup: { inline_keyboard: rows },
+    this.pending.set(userId, {
+      hubId,
+      step: "street",
+      streets: [],
+      houses: [],
+      street: null,
+      address: null,
+      group: null,
+      until: this.deps.clock.now() + CLAIM_TTL_MS,
     });
+    await ctx.reply(claimStreetText(hubId), SEND_OPTIONS);
   }
 
   private async finishClaim(
@@ -1059,15 +1136,17 @@ export class TelegramChannel {
       await ctx.reply(CLAIM_FAILED_TEXT, SEND_OPTIONS);
       return;
     }
+    // The address gave the queue; it is the admin's to give a building in the search, not the owner's.
+    const where = claim.address ? `${escapeHtml(claim.address.text)}, ` : "";
     this.alert(
       site.id,
-      `🏠 ${claim.hubId}: новий будинок «${escapeHtml(site.name)}» (${site.id}, черга ${site.yasno.group}), власник ${describeSender(ctx)}`,
+      `🏠 ${claim.hubId}: новий будинок «${escapeHtml(site.name)}» (${site.id}, ${where}черга ${site.yasno.group}), власник ${describeSender(ctx)}`,
       { silent: true },
     );
     await this.welcomeOwner(conn, ctx, site, claim.hubId);
   }
 
-  /** The owner follows the building in their private chat; buttons: «Мій хаб», the group. */
+  /** The owner follows the building in their private chat; buttons: «Мої будинки», the group. */
   private async welcomeOwner(
     conn: BotConn,
     ctx: Context,
@@ -1082,7 +1161,7 @@ export class TelegramChannel {
     const webApp = site.telegram?.webApp ?? this.home(conn).config.webApp;
     const keyboard = [
       ...(webApp
-        ? [[{ text: "Мій хаб", web_app: { url: `${webApp.url.replace(/\/+$/, "")}/my` } }]]
+        ? [[{ text: "Мої будинки", web_app: { url: `${webApp.url.replace(/\/+$/, "")}/my` } }]]
         : []),
       ...(username
         ? [

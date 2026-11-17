@@ -38,7 +38,7 @@ export class HubPowerService {
   private savedAt = Number.NEGATIVE_INFINITY;
   /** The previous report's boot / firmware / rolled-back version (this core run). */
   private last: { boot: string; fw: string | null; rejected: string | null } | null = null;
-  /** The last report as «Мій хаб» shows it. */
+  /** The last report as «Мої будинки» shows it. */
   private latest: HubReportEvent | null = null;
 
   constructor(deps: HubPowerServiceDeps) {
@@ -65,7 +65,7 @@ export class HubPowerService {
     this.persist();
   }
 
-  /** What the owner sees in «Мій хаб». */
+  /** What the owner sees in «Мої будинки». */
   status(): HubStatus {
     const r = this.latest;
     return {

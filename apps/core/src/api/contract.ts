@@ -10,7 +10,7 @@ import { SCHEDULE_STATUSES } from "@svitlo/domain";
 import { z } from "zod";
 
 /** Contract version: bump the major for breaking changes (new paths under /api/v2). */
-export const API_VERSION = "1.4.0";
+export const API_VERSION = "1.5.0";
 
 const ms = z.number().describe("Unix time, ms");
 const duration = z.number().describe("Duration, ms");
@@ -150,6 +150,14 @@ export const Widget = z.object({
       .describe("Real outages in the timeline so far (end null = ongoing)"),
   }),
   refreshAt: ms.describe("When the widget should be re-rendered at the latest"),
+});
+
+export const PastDay = z.object({
+  siteId: z.string(),
+  day: TimelineDay,
+  actual: z
+    .array(z.object({ start: ms, end: ms.nullable() }))
+    .describe("Real outages of the day, cut to it (end null = still going on)"),
 });
 
 const labelledOutages = z.array(interval.extend({ label: z.string() }));
@@ -409,6 +417,15 @@ export const routes = {
     params: SiteParams,
     query: z.object({ date: localDate.optional().describe("Default: today") }),
     response: DaySchedule,
+  },
+  day: {
+    method: "GET",
+    path: "/api/v1/sites/{siteId}/day",
+    summary: "One day as the timeline draws it: its plan and its real outages (e.g. yesterday)",
+    tag: "sites",
+    params: SiteParams,
+    query: z.object({ date: localDate }),
+    response: PastDay,
   },
   outages: {
     method: "GET",

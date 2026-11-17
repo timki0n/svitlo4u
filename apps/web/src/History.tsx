@@ -11,7 +11,7 @@ import {
 } from "./api.ts";
 import { addDays, duration, shortDate, zoned } from "./format.ts";
 import { Guard } from "./Guard.tsx";
-import { Header, Icon, Segmented } from "./ui.tsx";
+import { Header, Icon, Segmented, SiteName } from "./ui.tsx";
 
 const PERIODS = [
   ["7", "7 днів"],
@@ -63,9 +63,8 @@ export function HistoryScreen({ site, now }: { site: Site | null; now: number })
 
   return (
     <main className="screen">
-      <Header>
-        <h1 className="title">Історія</h1>
-      </Header>
+      <Header>{site && <SiteName name={site.name} />}</Header>
+      <h1 className="sr-only">Історія</h1>
       <Segmented label="Період" value={period} onChange={setPeriod} options={PERIODS} />
       {from && today && (
         <p className="muted" style={{ marginTop: -4, fontSize: 13 }}>
