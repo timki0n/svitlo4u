@@ -10,6 +10,8 @@ export type Live = {
   widget: Widget | null;
   /** Server time now (the phone's clock may be off; the core's clock decides). */
   now: number;
+  /** Server clock minus this device's, ms: for a screen that keeps its own clock between renders. */
+  skew: number;
   connection: Connection;
   /** When the data was last confirmed by the core. */
   updatedAt: number | null;
@@ -256,6 +258,7 @@ export function useLive(requested: string | null): Live {
     state,
     widget,
     now: Date.now() + offset.current,
+    skew: offset.current,
     connection,
     updatedAt,
     error,

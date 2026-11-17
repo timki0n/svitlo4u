@@ -42,6 +42,7 @@ export function RenderSchedule({ siteId, which }: { siteId: string; which: "toda
     state: data.state,
     widget: data.widget,
     now: data.widget.now,
+    skew: 0, // a still picture: no clock runs
     connection: "live",
     updatedAt: data.widget.now,
     error: false,

@@ -65,23 +65,37 @@ const ICONS = {
   offline: (
     <path d="M2 2l20 20M8.5 16.4a5 5 0 0 1 7 0M5 12.9a10 10 0 0 1 5.2-2.8M19 12.9a10 10 0 0 0-2.3-1.6M12 20h.01" />
   ),
+  gear: (
+    <>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </>
+  ),
+  edit: <path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />,
+  close: <path d="M18 6 6 18M6 6l12 12" />,
+  chevron: <path d="M9 6l6 6-6 6" />,
+  chat: <path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1.1-4.6A8 8 0 1 1 21 12z" />,
+  megaphone: <path d="M3 11l18-5v12L3 14v-3zM11.6 16.8a3 3 0 1 1-5.8-1.6" />,
 };
 
 export function Icon({
   name,
   size = 18,
   color = "currentColor",
+  fill = "none",
 }: {
   name: keyof typeof ICONS;
   size?: number;
   color?: string;
+  /** Filled: a ★ that is on. */
+  fill?: string;
 }) {
   return (
     <svg
       width={size}
       height={size}
       viewBox="0 0 24 24"
-      fill="none"
+      fill={fill}
       stroke={color}
       strokeWidth={2}
       strokeLinecap="round"
@@ -150,13 +164,16 @@ export function BackLink({ href }: { href: string }) {
   );
 }
 
-export function Header({ children }: { children: ReactNode }) {
+/** `mark={false}`: a screen of houses already («Мої будинки») does without one more. */
+export function Header({ children, mark = true }: { children: ReactNode; mark?: boolean }) {
   return (
     <header className="header">
       <div className="brand-row">
-        <a className="brand" href="/" aria-label="Світло4U — на головну">
-          <Mark />
-        </a>
+        {mark && (
+          <a className="brand" href="/" aria-label="Світло4U — на головну">
+            <Mark />
+          </a>
+        )}
         {children}
       </div>
       {/* «Підтримати» lives on «Про проєкт» now */}

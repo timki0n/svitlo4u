@@ -1156,31 +1156,6 @@ a {
   font-size: 12px;
 }
 
-.hub-state {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-weight: 700;
-  font-size: 15px;
-}
-
-.hub-state .dot {
-  background: var(--warn);
-}
-
-.hub-state[data-ok="true"] .dot {
-  background: var(--light);
-  box-shadow: 0 0 10px var(--light-glow);
-}
-
-.hub-facts {
-  font-size: 13px;
-}
-
-.hub-facts:empty {
-  display: none;
-}
-
 .hub-rename {
   display: flex;
   gap: 10px;
@@ -1263,16 +1238,6 @@ a {
 
 /* ── «Мої будинки», «Знайти мій будинок» ─────────────────────────────────────────────────────── */
 
-.hub-state[data-power="off"] .dot {
-  background: var(--off);
-  box-shadow: none;
-}
-
-.hub-state[data-power="unknown"] .dot {
-  background: var(--muted);
-  box-shadow: none;
-}
-
 /* the screen's one orange button: the building shown is often not mine (a link, the default) */
 .find-building {
   width: 100%;
@@ -1280,23 +1245,331 @@ a {
   font-size: 16px;
 }
 
-/* a state, not a button: pressed in, like the current tab */
-.badge {
+/* One depth per group: a raised surface, rows split by a hairline; the open one sits in a well. */
+.mine-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mine-group > .small-label {
+  padding: 0 4px;
+}
+
+.mine-list,
+.mine-current {
+  display: flex;
+  flex-direction: column;
+  border-radius: 22px;
+}
+
+.mine-list {
+  padding: 4px 0;
+  margin: 0;
+  background: var(--surface);
+  box-shadow: var(--raised);
+}
+
+.mine-current {
+  padding: 6px 0;
+  background: var(--well);
+  box-shadow: var(--inset);
+}
+
+.mine-list > * {
+  position: relative;
+}
+
+.mine-list > * + *::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: var(--indent, 68px);
+  height: 1px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.mine-list[data-indent="chat"] {
+  --indent: 60px;
+}
+
+.mine-facts {
+  --indent: 16px;
+}
+
+.mine-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 4px 8px 4px 12px;
+}
+
+.mine-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.mine-tile {
   flex: none;
-  padding: 6px 12px;
-  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
   background: var(--well);
   box-shadow: var(--inset-sm);
-  color: var(--light);
-  font-size: 12px;
+}
+
+/* the open building's house stands up out of its well */
+.mine-current .mine-tile {
+  background: var(--surface-2);
+  box-shadow: var(--raised-sm);
+}
+
+.mine-tile[data-size="sm"] {
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+}
+
+.mine-tile[data-flat] {
+  background: transparent;
+  box-shadow: none;
+}
+
+.mine-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mine-name {
+  overflow: hidden;
+  font-size: 15px;
   font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mine-current .mine-name {
+  font-size: 16px;
+}
+
+.mine-line {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.mine-line[data-warn],
+.manage-state[data-warn],
+.warn-text {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+/* the row's one small action: the gear, ★ or × */
+.mine-action {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.mine-action:active,
+.mine-action[aria-expanded="true"] {
+  box-shadow: var(--inset-sm);
+}
+
+.mine-action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.mine-alert {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--warn);
+  box-shadow: 0 0 0 2px var(--surface);
+}
+
+.mine-current .mine-alert {
+  box-shadow: 0 0 0 2px var(--well);
+}
+
+.mine-note {
+  padding: 0 4px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.house path {
+  fill: none;
+  stroke: var(--text);
+  stroke-width: 9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.house[data-power="on"] rect {
+  fill: var(--light);
+  filter: drop-shadow(0 0 6px rgba(255, 122, 26, 0.6));
+}
+
+.house[data-power="off"] rect {
+  fill: var(--off);
+}
+
+.house[data-power="unknown"] path {
+  stroke: var(--muted);
+}
+
+.house[data-power="unknown"] rect {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 6;
+}
+
+/* #/my/<id>: one of my buildings */
+.manage-hero {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.manage-tile {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 72px;
+  border-radius: 22px;
+  background: var(--well);
+  box-shadow: var(--inset);
+}
+
+.manage-head {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.manage-head .title {
+  overflow-wrap: anywhere;
+}
+
+.manage-state {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.mine-fact {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 0 16px;
+  font-size: 14px;
+}
+
+.mine-fact dd {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--muted);
+  text-align: right;
+}
+
+.mine-fact .dot[data-ok] {
+  background: var(--light);
+  box-shadow: 0 0 8px var(--light-glow);
+}
+
+.mine-chevron {
+  flex: none;
+  display: inline-flex;
+  transition: transform 0.15s;
+}
+
+.mine-open[aria-expanded="true"] .mine-chevron {
+  transform: rotate(90deg);
+}
+
+.mine-more {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 16px 14px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.mine-list > .mine-more {
+  padding-top: 14px;
+}
+
+.mine-add {
+  min-height: 52px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mine-danger {
+  width: 100%;
+  min-height: 48px;
+  padding: 0 16px;
+  border: 0;
+  background: transparent;
+  color: var(--warn);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
 }
 
 .request-done {
   flex: none;
 }
 
-.fav-row,
 .picked {
   display: flex;
   align-items: center;
@@ -1308,18 +1581,6 @@ a {
 .picked {
   font-weight: 700;
   font-size: 15px;
-}
-
-.fav-name {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 44px;
-  min-width: 0;
-  color: var(--text);
-  font-weight: 700;
-  font-size: 15px;
-  text-decoration: none;
 }
 
 .pick-list {
@@ -1460,23 +1721,6 @@ a {
 .hub-note {
   font-size: 13px;
   line-height: 1.45;
-}
-
-.chat-row {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px 14px;
-  border-radius: 16px;
-  background: var(--well);
-  box-shadow: var(--inset-sm);
-}
-
-.chat-title {
-  font-weight: 700;
-  font-size: 15px;
-  min-width: 0;
-  overflow-wrap: anywhere;
 }
 
 .result:focus:not(:focus-visible) {

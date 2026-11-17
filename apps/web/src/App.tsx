@@ -18,7 +18,8 @@ function tabFromHash(): Tab {
   if (hash === "game" || hash.startsWith("game/")) return "game";
   // «Мої будинки» (the button by the building's name) and «Знайти мій будинок» from there;
   // «Про проєкт» (the link at the right of the header)
-  if (hash === "my" || hash === "add" || hash === "about") return hash;
+  if (hash === "my" || hash.startsWith("my/")) return "my"; // #/my/<id>: one of my buildings
+  if (hash === "add" || hash === "about") return hash;
   return hash === "schedule" || hash === "history" ? hash : "now";
 }
 
