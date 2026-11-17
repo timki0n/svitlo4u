@@ -9,8 +9,8 @@ plug's last answer; the first answer after that means it is back. The hub decide
 tells the core when it happened by its own clock (the last answer before the silence, the first
 one after it), so the core gets exact times even when the internet was down in between.
 
-The alert delay follows the plug's signal at the hub (averaged over about a minute): 10 s from
-−60 dBm, 14 s to −70, 18 s to −78, 22 s below. A shorter silence is a problem of the link, not
+The alert delay follows the plug's signal at the hub (averaged over about a minute): 15 s from
+−70 dBm, 18 s to −78, 22 s below. A shorter silence is a problem of the link, not
 the light: the radio link drops for up to ~15 s now and then (a router renews its links every
 15 s; at −79 dBm two such gaps came as false «off», 2026-11-16). They are counted (`plug.gaps`)
 and tell the admin. A blink of the power shorter than the delay looks the same (the TS011F does
@@ -48,7 +48,7 @@ back within milliseconds.
     "rssi": -61,
     "gaps": 0,
     "longestGap": 0,
-    "delay": 14,
+    "delay": 15,
     "rssiAvg": -62
   },
   "events": [{ "up": 1200.153, "mains": "off" }, { "up": 1210.882, "mains": "on" }],

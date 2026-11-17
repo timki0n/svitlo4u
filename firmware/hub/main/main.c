@@ -142,5 +142,6 @@ void app_main(void) {
         zb_start();
         report_start();
     }
+    watch_start(!setup);
     xTaskCreate(ui_task, "ui", 4096, NULL, 3, NULL);
 }

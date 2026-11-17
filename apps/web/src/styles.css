@@ -1582,3 +1582,94 @@ a {
   font-weight: 700;
   color: var(--muted);
 }
+
+.about-note {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* The bot's chat, pressed into the card: real messages as they arrive, a picture, not a feed. */
+.chat {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+  padding: 12px 10px 14px;
+  border-radius: 18px;
+  background: var(--well);
+  box-shadow: var(--inset-sm);
+}
+
+.chat-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 4px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.chat-head strong {
+  display: block;
+  font-size: 14px;
+}
+
+.chat-head .muted {
+  display: block;
+  font-size: 12px;
+}
+
+.chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-day {
+  align-self: center;
+  margin: 4px 0 2px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+/* an incoming message: the corner at the bottom left is the bubble's tail */
+.chat-msg {
+  position: relative;
+  align-self: flex-start;
+  max-width: 92%;
+  padding: 8px 11px 7px;
+  border-radius: 15px 15px 15px 5px;
+  background: var(--surface-2);
+  box-shadow: 3px 3px 8px var(--shadow);
+  font-size: 13.5px;
+  line-height: 1.45;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+/* room on the last line for the time in the corner */
+.chat-pad {
+  display: inline-block;
+  width: 40px;
+}
+
+.chat-time {
+  position: absolute;
+  right: 10px;
+  bottom: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.chat-link {
+  color: var(--cool);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}

@@ -24,11 +24,13 @@ static char boot_id[9];
 static uint32_t seq;
 static volatile server_state_t server_state = SERVER_UNKNOWN;
 static volatile int last_status;
+static volatile uint32_t last_reply_at; // any HTTP answer: the network works
 static char response[1536]; // an update offer carries a long URL
 static int response_len;
 
 server_state_t report_server_state(void) { return server_state; }
 int report_last_status(void) { return last_status; }
+uint32_t report_last_reply_ms(void) { return last_reply_at; }
 
 void report_kick(void) {
     if (task) xTaskNotifyGive(task);
@@ -127,6 +129,7 @@ static bool send_report(void) {
     esp_err_t err = esp_http_client_perform(c);
     int status = err == ESP_OK ? esp_http_client_get_status_code(c) : -1;
     last_status = status;
+    if (err == ESP_OK) last_reply_at = hub_ms();
     if (status != 200) {
         server_state = (status == 401 || status == 403) ? SERVER_REJECTED : SERVER_FAILING;
         ESP_LOGW(TAG, "report %lu: %s, status %d", (unsigned long)sent_seq, esp_err_to_name(err), status);
@@ -178,5 +181,6 @@ static void report_task(void *arg) {
 
 void report_start(void) {
     snprintf(boot_id, sizeof(boot_id), "%08lx", (unsigned long)esp_random());
+    last_reply_at = hub_ms();
     xTaskCreate(report_task, "report", 8192, NULL, 4, &task);
 }

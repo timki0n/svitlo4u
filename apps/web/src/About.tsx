@@ -37,9 +37,47 @@ const ABILITIES: [Parameters<typeof Icon>[0]["name"], string, ReactNode][] = [
   ],
 ];
 
+/** Looks like a link in the chat; the chat is a picture, so it leads nowhere. */
+function ChatLink({ children }: { children: ReactNode }) {
+  return <span className="chat-link">{children}</span>;
+}
+
 /**
- * «Про проєкт» (#/about, the link at the right of the header): what Світло4U is, what it does and
- * how it differs from schedule apps and «is the device online» bots, and «Підтримати».
+ * Messages the bot really sent to ЖК 4U (the exact wording; 16–17.11.2026, the schedule without the
+ * night slot that did not happen), as one evening and the next day.
+ */
+const CHAT: ({ day: string } | { time: string; text: ReactNode })[] = [
+  { day: "16 листопада" },
+  {
+    time: "21:00",
+    text: (
+      <>
+        🔔 З'явився <ChatLink>графік на завтра</ChatLink>!{"\n\n"}📅 Розклад на 17.11.2026{"\n\n"}
+        1. 12:00 – 17:00 (5 год.){"\n"}2. 21:00 – 00:00 (3 год.)
+      </>
+    ),
+  },
+  { day: "17 листопада" },
+  {
+    time: "12:11",
+    text: (
+      <>
+        🔔⚠️ Світло ЗНИКЛО.{"\n"}Час зі світлом: 16 год. 56 хв.{"\n"}За <ChatLink>графіком</ChatLink>{" "}
+        світло має відновитися о 17:00.
+      </>
+    ),
+  },
+  {
+    time: "16:18",
+    text: "🔔✅ Світло ВІДНОВЛЕНО.\nЧас без світла: 4 год. 6 хв.\nНайближче відключення о 21:00",
+  },
+  { time: "16:31", text: "⚠️ Низька напруга: 190 В.\nБережіть техніку." },
+];
+
+/**
+ * «Про проєкт» (#/about, the link at the right of the header): what Світло4U is, what it does, how
+ * its messages look in Telegram, how it differs from schedule apps and «is the device online» bots,
+ * the way to one's own building, and «Підтримати».
  */
 export function AboutScreen({ back }: { back: string }) {
   return (
@@ -78,6 +116,42 @@ export function AboutScreen({ back }: { back: string }) {
         </ul>
       </section>
 
+      <section className="card" aria-labelledby="about-chat">
+        <h2 className="small-label" id="about-chat">
+          Сповіщення в Telegram
+        </h2>
+        <div className="chat">
+          <div className="chat-head" aria-hidden="true">
+            <Mark size={30} />
+            <span>
+              <strong>Світло4U</strong>
+              <span className="muted">бот</span>
+            </span>
+          </div>
+          <ol className="chat-log" aria-label="Приклад сповіщень бота">
+            {CHAT.map((item) =>
+              "day" in item ? (
+                <li key={item.day} className="chat-day">
+                  {item.day}
+                </li>
+              ) : (
+                <li key={item.time} className="chat-msg">
+                  {item.text}
+                  <span className="chat-pad" />
+                  <time className="chat-time">{item.time}</time>
+                </li>
+              ),
+            )}
+          </ol>
+        </div>
+        <p className="muted about-note">
+          Справжні повідомлення для ЖК 4U. Бот:{" "}
+          <a href={`https://t.me/${BOT}`} target="_blank" rel="noopener">
+            @{BOT}
+          </a>
+        </p>
+      </section>
+
       <section className="card" aria-labelledby="about-diff">
         <h2 className="small-label" id="about-diff">
           Чим відрізняється
@@ -106,6 +180,11 @@ export function AboutScreen({ back }: { back: string }) {
           </div>
         </dl>
       </section>
+
+      <a className="button find-building" data-kind="primary" href="#/add">
+        <Icon name="search" />
+        Знайти мій будинок
+      </a>
 
       <section className="card" aria-labelledby="about-support">
         <h2 className="small-label" id="about-support">

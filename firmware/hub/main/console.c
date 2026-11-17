@@ -4,6 +4,7 @@
 //   server <url|default>       report URL (default https://svitlo4u.info/iot/hub)
 //   wifi <ssid> <password>     home Wi-Fi without the setup page (no spaces in the name)
 //   wifi-forget | portal | pair | plug-forget | reboot
+//   test loop-stuck|wifi-lost|kick-stuck   break the hub the way the watchdog (watch.c) must fix
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -11,6 +12,7 @@
 #include "driver/usb_serial_jtag.h"
 #include "driver/usb_serial_jtag_vfs.h"
 #include "esp_system.h"
+#include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "hub.h"
@@ -33,8 +35,12 @@ static void status(void) {
     const char *ss[] = {"no report yet", "ok", "failing", "rejected (check id/secret)"};
     outf("\r\n%s fw %s, up %.0f s, reset %s\r\n", g_cfg.dev[0] ? g_cfg.dev : "(not provisioned)", hub_fw_version(),
          hub_up(), hub_reset_reason());
-    outf("wifi: %s%s%s (reason %u)%s\r\n", ws[net_wifi_state()], g_cfg.ssid[0] ? " to " : "", g_cfg.ssid,
+    wifi_ap_record_t ap;
+    bool has_ap = esp_wifi_sta_get_ap_info(&ap) == ESP_OK;
+    outf("wifi: %s%s%s (reason %u)%s", ws[net_wifi_state()], g_cfg.ssid[0] ? " to " : "", g_cfg.ssid,
          net_wifi_reason(), net_portal_active() ? ", setup page ON" : "");
+    if (has_ap) outf(", %d dBm, channel %u", ap.rssi, ap.primary);
+    out("\r\n");
     outf("server: %s (last HTTP %d) %s\r\n", ss[report_server_state()], report_last_status(), g_cfg.server);
     outf("zigbee: %s%s; plug %s, mains %s", p.network_up ? "up" : "starting",
          p.pairing_open ? ", pairing open" : "", p.paired ? "paired" : "not paired",
@@ -47,6 +53,9 @@ static void status(void) {
          (unsigned long)p.link_gaps, p.longest_gap_ms / 1000.0, (unsigned long)(p.confirm_ms / 1000),
          p.has_rssi_avg ? p.rssi_avg : 0.0f);
     static char diag[600];
+    watch_describe(diag, sizeof(diag));
+    out(diag);
+    out("\r\n");
     ota_describe(diag, sizeof(diag));
     out(diag);
     out("\r\n");
@@ -91,9 +100,11 @@ static void run(char *line) {
         out("\r\nrebooting\r\n");
         vTaskDelay(pdMS_TO_TICKS(200));
         esp_restart();
+    } else if (!strcmp(cmd, "test") && a && watch_test(a)) {
+        outf("\r\ntest %s: watch the log\r\n", a);
     } else {
         out("\r\ncommands: status | provision <dev> <secret> | server <url|default> | wifi <ssid> <pass> |"
-            " wifi-forget | portal | pair | plug-forget | reboot\r\n");
+            " wifi-forget | portal | pair | plug-forget | reboot | test loop-stuck|wifi-lost|kick-stuck\r\n");
     }
 }
 

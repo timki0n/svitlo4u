@@ -52,8 +52,9 @@ static volatile uint32_t retry_mode, retry_at_ms;
 static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 static mains_t mains = MAINS_UNKNOWN;
 static double mains_since = -1;
-static uint32_t verdict_at_ms;
-static uint32_t last_answer_ms;
+static volatile uint32_t verdict_at_ms;
+static volatile uint32_t last_answer_ms;
+static volatile uint32_t answers_during_read; // the race fixed in poll_task, counted for `status`
 static bool answered;
 static float voltage;
 static bool has_voltage;
@@ -73,8 +74,7 @@ static bool has_rssi_avg;
 /** How long the plug must be silent to call it an outage: shorter when it is heard well. */
 static uint32_t confirm_ms(void) {
     if (!has_rssi_avg) return CONFIRM_MAX_MS;
-    if (rssi_avg >= -60) return 10000;
-    if (rssi_avg >= -70) return 14000;
+    if (rssi_avg >= -70) return 15000; // 10 s at ≥ -60 dBm was too eager (2026-11-17)
     if (rssi_avg >= -78) return 18000;
     return CONFIRM_MAX_MS;
 }
@@ -232,9 +232,11 @@ void zb_status(plug_status_t *out) {
 void zb_open_pairing(void) { pairing_requested = true; }
 
 void zb_diag(char *out, size_t size) {
-    size_t len = snprintf(out, size, "reads sent ok %lu, failed %lu, last answer %lu ms ago; neighbors:",
+    uint32_t last = last_answer_ms;
+    size_t len = snprintf(out, size,
+                          "reads sent ok %lu, failed %lu, last answer %lu ms ago, answers during a read %lu; neighbors:",
                           (unsigned long)sent_ok, (unsigned long)sent_failed,
-                          (unsigned long)(answered ? hub_ms() - last_answer_ms : 0));
+                          (unsigned long)(answered ? hub_ms() - last : 0), (unsigned long)answers_during_read);
     if (!network_up) return;
     esp_zigbee_lock_acquire(portMAX_DELAY);
     ezb_nwk_info_iterator_t it = EZB_NWK_INFO_ITERATOR_INIT;
@@ -506,19 +508,25 @@ static void poll_task(void *arg) {
             last_read = now;
             read_attrs(EZB_ZCL_CLUSTER_ID_ELECTRICAL_MEASUREMENT, voltage_attr, 1);
         }
-        // The verdict: a long silence means no mains (the plug has no battery).
+        // The verdict: a long silence means no mains (the plug has no battery). The answer first, then
+        // the clock: the reads above wait for the Zigbee task, which may take an answer meanwhile, and
+        // against the clock from the top of the loop that answer was 49 days old (uint32 wrap): a
+        // false «off» and «on» at once on 2026-11-17 at 17:05.
+        uint32_t last = last_answer_ms, verdict_at = verdict_at_ms;
+        if ((int32_t)(last - now) > 0) answers_during_read++;
+        now = hub_ms();
         if (mains == MAINS_ON) {
-            uint32_t silent = now - last_answer_ms;
+            uint32_t silent = now - last;
             if (!suspect && silent >= SUSPECT_MS) {
                 suspect = true;
-                gap_from_ms = last_answer_ms;
+                gap_from_ms = last;
                 ESP_LOGI(TAG, "the plug is silent %lu ms: waiting before calling it off", (unsigned long)silent);
             }
             if (suspect && silent >= confirm_ms()) {
                 suspect = false;
-                set_mains(MAINS_OFF, last_answer_ms / 1000.0, true);
+                set_mains(MAINS_OFF, last / 1000.0, true);
             }
-        } else if (mains == MAINS_UNKNOWN && !answered && now - verdict_at_ms >= UNKNOWN_TO_OFF_MS) {
+        } else if (mains == MAINS_UNKNOWN && !answered && now - verdict_at >= UNKNOWN_TO_OFF_MS) {
             set_mains(MAINS_OFF, -1, false); // when it went is unknown: no event
         }
     }

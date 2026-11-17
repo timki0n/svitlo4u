@@ -108,6 +108,13 @@ uint16_t net_wifi_reason(void);
 bool net_portal_active(void);
 /** Apply new credentials: save, connect. */
 void net_wifi_set(const char *ssid, const char *pass);
+/** hub_ms() of the last Wi-Fi or IP event the hub handled, and of the last address it got. */
+uint32_t net_wifi_event_ms(void);
+uint32_t net_wifi_up_ms(void);
+/** Reconnect from scratch, even if the hub missed the drop (the watchdog). Blocks for up to 3 s. */
+void net_wifi_kick(void);
+/** Console test: drop Wi-Fi and lose the event about it, as on 2026-11-17. */
+void net_test_lose_disconnect(void);
 
 // ---------------------------------------------------------------------------------------------
 // Reports to the core (report.c)
@@ -119,6 +126,19 @@ void report_start(void);
 void report_kick(void);
 server_state_t report_server_state(void);
 int report_last_status(void);
+/** hub_ms() of the last report that got any HTTP answer (from the start of reporting). */
+uint32_t report_last_reply_ms(void);
+
+// ---------------------------------------------------------------------------------------------
+// Watchdog: the hub must not stay silent while it could talk (watch.c)
+
+void watch_start(bool normal);
+/** Restart now, remembering why (the next boot shows it in the console). */
+void watch_restart(const char *why);
+/** Status line for the console. */
+void watch_describe(char *out, size_t room);
+/** Console tests: "loop-stuck", "wifi-lost", "kick-stuck"; false for an unknown one. */
+bool watch_test(const char *what);
 
 // ---------------------------------------------------------------------------------------------
 // Updates over the air (ota.c)

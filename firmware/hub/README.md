@@ -62,7 +62,8 @@ status
 ```
 
 Other commands: `server <url|default>` (report URL, default `https://svitlo4u.info/iot/hub`),
-`wifi <ssid> <password>`, `wifi-forget`, `portal`, `pair`, `plug-forget`, `reboot`.
+`wifi <ssid> <password>`, `wifi-forget`, `portal`, `pair`, `plug-forget`, `reboot`, and
+`test loop-stuck|wifi-lost|kick-stuck` to break the hub the way the watchdog must fix.
 
 ## Use
 
@@ -74,5 +75,11 @@ Other commands: `server <url|default>` (report URL, default `https://svitlo4u.in
   page.
 - **Updates**: on their own when the light is on; `status` in the console shows the slot, the
   state and a version that was rolled back.
+- **Watchdog** (`main/watch.c`): the Wi-Fi driver lost the router without telling the firmware
+  (it happens when the router changes its channel) → the hub reconnects within ~15 s; no answer
+  from the server for 3 minutes while Wi-Fi looks connected → it reconnects too (again after 3, 6,
+  12… up to 30 minutes); a stuck event loop, a stuck driver, a reconnect that hangs or Wi-Fi that
+  goes quiet → it restarts. `status` shows the reconnects and why it last restarted itself.
+- **Router**: a fixed 2.4 GHz channel (1, 6 or 11) instead of «auto» spares the hub those drops.
 - **LED**: blue blinking — setup page; cyan blinking — looking for the plug; purple — no key or no
   plug; yellow — no Wi-Fi or no answer from the server; green — light on; red — light off.

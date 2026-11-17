@@ -28,6 +28,9 @@ extern const char portal_html_end[] asm("_binary_portal_html_end");
 
 static volatile wifi_state_t wifi_state = WIFI_NONE;
 static volatile uint16_t wifi_reason;
+static volatile uint32_t wifi_event_at, wifi_up_at; // the last Wi-Fi/IP event handled, the last IP
+static volatile uint32_t disconnects;
+static volatile bool test_lose_disconnect;
 static volatile bool portal_on;
 static volatile uint32_t portal_started_ms;
 static uint32_t backoff_ms = 1000;
@@ -40,26 +43,12 @@ static char ap_ssid[32];
 
 wifi_state_t net_wifi_state(void) { return wifi_state; }
 uint16_t net_wifi_reason(void) { return wifi_reason; }
+uint32_t net_wifi_event_ms(void) { return wifi_event_at; }
+uint32_t net_wifi_up_ms(void) { return wifi_up_at; }
 bool net_portal_active(void) { return portal_on; }
 
 // ---------------------------------------------------------------------------------------------
 // Station
-
-static void connect_now(void *arg) {
-    if (!g_cfg.ssid[0]) return;
-    wifi_state = WIFI_CONNECTING;
-    esp_wifi_connect();
-}
-
-static void apply_sta_config(void) {
-    wifi_config_t wc = {0};
-    strncpy((char *)wc.sta.ssid, g_cfg.ssid, sizeof(wc.sta.ssid));
-    strncpy((char *)wc.sta.password, g_cfg.pass, sizeof(wc.sta.password));
-    wc.sta.pmf_cfg.capable = true;
-    wc.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
-    wc.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
-    esp_wifi_set_config(WIFI_IF_STA, &wc);
-}
 
 static bool zigbee_mode; // normal mode: Zigbee shares the radio
 
@@ -79,10 +68,64 @@ static void coex_for(bool wifi_connected) {
     esp_ieee802154_set_coex_config(c);
 }
 
+static void connect_now(void *arg) {
+    if (!g_cfg.ssid[0]) return;
+    wifi_state = WIFI_CONNECTING;
+    // Connecting needs the defaults (a missed drop leaves the connected ones: 2026-11-17 the connect
+    // then failed without a word, «Coexist: Wi-Fi connect fail»).
+    coex_for(false);
+    esp_err_t err = esp_wifi_connect();
+    if (err != ESP_OK) ESP_LOGW(TAG, "Wi-Fi: connect: %s", esp_err_to_name(err));
+}
+
+static void apply_sta_config(void) {
+    wifi_config_t wc = {0};
+    strncpy((char *)wc.sta.ssid, g_cfg.ssid, sizeof(wc.sta.ssid));
+    strncpy((char *)wc.sta.password, g_cfg.pass, sizeof(wc.sta.password));
+    wc.sta.pmf_cfg.capable = true;
+    wc.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
+    wc.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    esp_wifi_set_config(WIFI_IF_STA, &wc);
+}
+
+/** Every Wi-Fi and IP event goes to the log: the next silence must show where it began. */
+static void log_event(esp_event_base_t base, int32_t id, void *data) {
+    if (base == IP_EVENT) {
+        if (id == IP_EVENT_STA_GOT_IP)
+            ESP_LOGI(TAG, "Wi-Fi: got " IPSTR, IP2STR(&((ip_event_got_ip_t *)data)->ip_info.ip));
+        else
+            ESP_LOGW(TAG, "Wi-Fi: lost the address");
+        return;
+    }
+    switch (id) {
+    case WIFI_EVENT_STA_START: ESP_LOGI(TAG, "Wi-Fi: station started"); break;
+    case WIFI_EVENT_STA_STOP: ESP_LOGI(TAG, "Wi-Fi: station stopped"); break;
+    case WIFI_EVENT_HOME_CHANNEL_CHANGE: break; // every start and every connect
+    case WIFI_EVENT_STA_CONNECTED:
+        ESP_LOGI(TAG, "Wi-Fi: associated, channel %u", ((wifi_event_sta_connected_t *)data)->channel);
+        break;
+    case WIFI_EVENT_STA_DISCONNECTED: {
+        wifi_event_sta_disconnected_t *d = data;
+        ESP_LOGW(TAG, "Wi-Fi: disconnected, reason %u, %d dBm", d->reason, d->rssi);
+        break;
+    }
+    case WIFI_EVENT_STA_BEACON_TIMEOUT: ESP_LOGW(TAG, "Wi-Fi: beacon timeout"); break;
+    case WIFI_EVENT_SCAN_DONE: break; // the setup page scans on every visit
+    default: ESP_LOGI(TAG, "Wi-Fi: event %ld", (long)id);
+    }
+}
+
 static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data) {
+    if (test_lose_disconnect && base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        test_lose_disconnect = false; // `test wifi-lost`: as if this event never came
+        return;
+    }
+    wifi_event_at = hub_ms();
+    log_event(base, id, data);
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         connect_now(NULL);
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        disconnects++;
         coex_for(false);
         wifi_reason = ((wifi_event_sta_disconnected_t *)data)->reason;
         if (!g_cfg.ssid[0]) {
@@ -97,9 +140,9 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         wifi_state = WIFI_CONNECTED;
         wifi_reason = 0;
+        wifi_up_at = hub_ms();
         backoff_ms = 1000;
         coex_for(true);
-        ESP_LOGI(TAG, "Wi-Fi connected");
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STACONNECTED) {
         portal_started_ms = hub_ms(); // someone is on the page: keep it up
     }
@@ -112,6 +155,25 @@ void net_wifi_set(const char *ssid, const char *pass) {
     apply_sta_config();
     esp_wifi_disconnect();
     connect_now(NULL);
+}
+
+void net_wifi_kick(void) {
+    uint32_t seen = disconnects;
+    esp_timer_stop(reconnect_timer);
+    backoff_ms = 1000;
+    esp_wifi_disconnect();
+    // Normally the drop comes back as an event and the retries take over. A hub that never heard
+    // of the previous drop may hear nothing now either (the station is already down): connect.
+    for (int i = 0; i < 30 && disconnects == seen; i++) vTaskDelay(pdMS_TO_TICKS(100));
+    if (disconnects == seen) {
+        ESP_LOGW(TAG, "Wi-Fi: no event for the disconnect, connecting anyway");
+        connect_now(NULL);
+    }
+}
+
+void net_test_lose_disconnect(void) {
+    test_lose_disconnect = true;
+    esp_wifi_disconnect();
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -363,6 +425,7 @@ void net_start(bool setup) {
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_LOST_IP, wifi_event, NULL));
 
     const esp_timer_create_args_t rt = {.callback = connect_now, .name = "wifi_retry"};
     esp_timer_create(&rt, &reconnect_timer);
