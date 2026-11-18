@@ -70,11 +70,7 @@
                           },
                           "scene": {
                             "type": "string",
-                            "enum": [
-                              "4u",
-                              "none"
-                            ],
-                            "description": "The picture of the main screen: the 3D figure of ЖК 4U"
+                            "description": "The picture of the main screen: the id of the building's 3D model (`4u`: ЖК 4U, with its window game), or `none`"
                           }
                         },
                         "required": [
@@ -184,11 +180,7 @@
                     },
                     "scene": {
                       "type": "string",
-                      "enum": [
-                        "4u",
-                        "none"
-                      ],
-                      "description": "The picture of the main screen: the 3D figure of ЖК 4U"
+                      "description": "The picture of the main screen: the id of the building's 3D model (`4u`: ЖК 4U, with its window game), or `none`"
                     }
                   },
                   "required": [

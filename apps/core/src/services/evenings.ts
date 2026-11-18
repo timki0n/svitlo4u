@@ -17,6 +17,7 @@
  * session it began in.
  */
 import { randomInt } from "node:crypto";
+import { MODEL_4U } from "@svitlo/domain";
 import type { Store } from "@svitlo/storage";
 import {
   BATTLE_BLOCKS,
@@ -49,7 +50,8 @@ import type { Clock } from "../runtime/clock.ts";
 import { type GamePlayerView, type GameService, PRESENCE_MS } from "./game.ts";
 import { CALL_MS, HOLD_MS, NOPE_MS, ROUNDS, roundRules } from "./rounds.ts";
 
-export const EVENING_DOORS = 5;
+/** The doors of the ground floor in the building's model (ЖК 4U: the five shops). */
+export const EVENING_DOORS = MODEL_4U.doors.places.length;
 export const EVENING_PARTS = 3;
 export const EVENING_PART_POINTS = 50;
 export const EVENING_GAMES = ["battle", "poker", "durak", "colors", "blackout"] as const;

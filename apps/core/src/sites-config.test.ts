@@ -171,6 +171,9 @@ ${extra}`;
       access: "link",
       scene: "4u",
     });
+    // any building's model from packages/domain, nothing else
+    expect(parseSitesConfig(yaml("    scene: kolasa-27v"), env)[0]?.scene).toBe("kolasa-27v");
+    expect(() => parseSitesConfig(yaml("    scene: castle"), env)).toThrow(/building model/);
     expect(() => parseSitesConfig(yaml("", "my"), env)).toThrow(/reserved/);
     expect(() => parseSitesConfig(yaml("", "api"), env)).toThrow(/reserved/);
   });

@@ -3,7 +3,12 @@
  * Secrets never live in the file — a device names the environment variable holding its key.
  */
 import { readFileSync } from "node:fs";
-import { DEFAULT_DETECTOR_CONFIG, type DetectorConfig, KYIV_TZ } from "@svitlo/domain";
+import {
+  BUILDING_MODELS,
+  DEFAULT_DETECTOR_CONFIG,
+  type DetectorConfig,
+  KYIV_TZ,
+} from "@svitlo/domain";
 import { parse } from "yaml";
 import { z } from "zod";
 
@@ -118,8 +123,11 @@ const siteSchema = z.object({
   linkUrl: z.url().default("https://svitlo4u.info"),
   /** "public": listed on the site; "link": only by its address (svitlo4u.info/<id>). */
   access: z.enum(["public", "link"]).default("public"),
-  /** The picture on the main screen: the 3D figure of ЖК 4U, or none. */
-  scene: z.enum(["4u", "none"]).default("none"),
+  /** The picture on the main screen: the id of the building's 3D model (packages/domain), or none. */
+  scene: z
+    .string()
+    .refine((id) => id === "none" || id in BUILDING_MODELS, "a building model id, or none")
+    .default("none"),
   /** Telegram users who own the building without a hub of theirs: «Мої будинки» shows it to them. */
   owners: z.array(z.number().int()).default([]),
   yasno: z.object({ region: z.number().int(), dso: z.number().int(), group: z.string().min(1) }),

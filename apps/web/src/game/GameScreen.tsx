@@ -456,11 +456,15 @@ function FacadeFigure({
   useEffect(() => {
     let cancelled = false;
     import("../scene3d.ts")
-      .then(({ createFacade }) => {
+      .then(({ BUILDING_MODELS, createFacade }) => {
         if (cancelled || !host.current || !canvas.current) return;
+        // the game's rules (GAME_FLOORS, GAME_COLS) are ЖК 4U's until sites carry their models
+        const building = BUILDING_MODELS["4u"];
+        if (!building) throw new Error("no building model");
         const s = createFacade(
           host.current,
           canvas.current,
+          building,
           (w) => latest.current.onSelect(w),
           (d) => latest.current.onDoor(d),
         );

@@ -49,7 +49,11 @@ export const Site = z.object({
   access: z
     .enum(["public", "link"])
     .describe("public: listed; link: only by its address (a private house)"),
-  scene: z.enum(["4u", "none"]).describe("The picture of the main screen: the 3D figure of ЖК 4U"),
+  scene: z
+    .string()
+    .describe(
+      "The picture of the main screen: the id of the building's 3D model (`4u`: ЖК 4U, with its window game), or `none`",
+    ),
 });
 
 export const Hint = z

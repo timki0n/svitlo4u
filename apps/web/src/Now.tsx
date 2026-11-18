@@ -30,7 +30,7 @@ export function NowScreen({ live }: { live: Live }) {
         <SiteName name={site.name} />
       </Header>
       <ConnectionNotice connection={live.connection} updatedAt={live.updatedAt} tz={tz} />
-      {site.scene === "4u" && <Building mode={mode} />}
+      {site.scene !== "none" && <Building mode={mode} scene={site.scene} />}
       <section className="state" aria-live="polite">
         <div className="lamp" data-power={lamp} aria-hidden="true" />
         <h1>{widget.title}</h1>

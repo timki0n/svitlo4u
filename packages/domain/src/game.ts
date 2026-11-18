@@ -2,16 +2,17 @@
  * Rules of the window game shared by the web (puzzles) and the core (points, rating).
  * A game session is an outage: it starts when the light goes out and lasts until the next outage.
  */
+import { flatStoreys, MODEL_4U, windowsPerStorey } from "./building.ts";
 import { addDays, localDate, localMidnight } from "./time.ts";
 
 /**
  * Residential storeys of the tower (the ground floor is shops) and the windows of a storey, numbered
- * round the tower going right as seen from outside: 1–10 the street side, 11–12 an end, 13–20 the
- * yard side (its open galleries have no windows), 21–22 the other end. The game shows the tower
- * alone (no annex), so every one of them can be played.
+ * round the tower going right as seen from outside (see the building's model): for ЖК 4U 1–10 the
+ * street side, 11–12 an end, 13–20 the yard side (its open galleries have no windows), 21–22 the
+ * other end. The game shows the tower alone (no annex), so every one of them can be played.
  */
-export const GAME_FLOORS = { first: 2, last: 27 } as const;
-export const GAME_COLS = 22;
+export const GAME_FLOORS: { readonly first: number; readonly last: number } = flatStoreys(MODEL_4U);
+export const GAME_COLS = windowsPerStorey(MODEL_4U);
 export const GAME_WINDOWS = (GAME_FLOORS.last - GAME_FLOORS.first + 1) * GAME_COLS;
 
 export type GameTier = 0 | 1 | 2;
