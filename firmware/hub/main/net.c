@@ -26,15 +26,35 @@ extern const char portal_html_end[] asm("_binary_portal_html_end");
 #define PORTAL_IP "192.168.4.1"
 #define PORTAL_AUTO_STOP_MS (15 * 60 * 1000) // once the home Wi-Fi works
 
+// Getting Wi-Fi back. A router that changes its channel (some do it many times a day) took the hub
+// 1–3 minutes on 2026-11-18 where a plain ESP32 on the same router needed 12 s: the driver warns
+// («beacon timeout»), asks the router for 2.5 s whether it is still there, drops it — and, sharing
+// the radio with Zigbee, often does not say so; the event came only after the next connect had
+// failed. So the hub looks itself right after the warning, and retries fast at first.
+#define BEACON_CHECK_MS 3000 // the driver's own check of the router takes 2.5 s
+#define RETRY_FIRST_MS 500   // an event the driver held back may still come within it (300 ms seen)
+#define RETRY_MAX_MS 30000
+#define ATTEMPT_MAX_MS 8000  // a connect: the scan of every channel and the handshake
+#define QUICK_TRIES 2        // first the router it just had (found at once on the same channel)
+
 static volatile wifi_state_t wifi_state = WIFI_NONE;
 static volatile uint16_t wifi_reason;
 static volatile uint32_t wifi_event_at, wifi_up_at; // the last Wi-Fi/IP event handled, the last IP
-static volatile uint32_t disconnects;
+static volatile uint32_t disconnects;               // «disconnected» events handled
+static volatile bool attempt;                       // a connect is running, its result has not come
+static volatile bool associated;                    // the router took the hub (the address may follow)
+static volatile uint32_t attempt_at;
+static volatile uint8_t beacon_looks;               // looks left after a «beacon timeout»
+// Losses of a working Wi-Fi since the boot (the report's `wifi`).
+static volatile uint32_t drops, down_at, last_down_ms;
+static volatile uint16_t drop_reason;
 static volatile bool test_lose_disconnect;
 static volatile bool portal_on;
 static volatile uint32_t portal_started_ms;
-static uint32_t backoff_ms = 1000;
-static esp_timer_handle_t reconnect_timer, portal_timer;
+static uint32_t backoff_ms = RETRY_FIRST_MS;
+static uint8_t router_bssid[6], router_channel, quick_left;
+static bool router_known;
+static esp_timer_handle_t reconnect_timer, beacon_timer, portal_timer;
 static httpd_handle_t httpd;
 static int dns_sock = -1;
 static TaskHandle_t dns_task_handle;
@@ -68,24 +88,94 @@ static void coex_for(bool wifi_connected) {
     esp_ieee802154_set_coex_config(c);
 }
 
-static void connect_now(void *arg) {
-    if (!g_cfg.ssid[0]) return;
-    wifi_state = WIFI_CONNECTING;
-    // Connecting needs the defaults (a missed drop leaves the connected ones: 2026-11-17 the connect
-    // then failed without a word, «Coexist: Wi-Fi connect fail»).
-    coex_for(false);
-    esp_err_t err = esp_wifi_connect();
-    if (err != ESP_OK) ESP_LOGW(TAG, "Wi-Fi: connect: %s", esp_err_to_name(err));
-}
-
-static void apply_sta_config(void) {
+/** `quick`: the router it had a moment ago, starting from its channel; else the best one anywhere. */
+static void apply_sta_config(bool quick) {
     wifi_config_t wc = {0};
     strncpy((char *)wc.sta.ssid, g_cfg.ssid, sizeof(wc.sta.ssid));
     strncpy((char *)wc.sta.password, g_cfg.pass, sizeof(wc.sta.password));
     wc.sta.pmf_cfg.capable = true;
     wc.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
-    wc.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    if (quick) {
+        wc.sta.scan_method = WIFI_FAST_SCAN;
+        wc.sta.bssid_set = true;
+        memcpy(wc.sta.bssid, router_bssid, sizeof(wc.sta.bssid));
+        wc.sta.channel = router_channel;
+    } else {
+        wc.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    }
     esp_wifi_set_config(WIFI_IF_STA, &wc);
+}
+
+static void retry_later(void) {
+    esp_timer_stop(reconnect_timer);
+    esp_timer_start_once(reconnect_timer, (uint64_t)backoff_ms * 1000);
+    backoff_ms = backoff_ms * 2 < RETRY_MAX_MS ? backoff_ms * 2 : RETRY_MAX_MS;
+}
+
+static void connect_now(void *arg) {
+    if (!g_cfg.ssid[0]) return;
+    uint32_t now = hub_ms();
+    if (wifi_state == WIFI_CONNECTED) return;                 // a retry set before it came up
+    if (attempt && now - attempt_at < ATTEMPT_MAX_MS) return; // one is running
+    wifi_state = WIFI_CONNECTING;
+    // Connecting needs the defaults (a missed drop leaves the connected ones: 2026-11-17 the connect
+    // then failed without a word, «Coexist: Wi-Fi connect fail»), and the radio to itself: reads of
+    // the plug during the scan cost both sides.
+    coex_for(false);
+    if (zigbee_mode) zb_hold(ATTEMPT_MAX_MS);
+    bool quick = router_known && quick_left > 0;
+    if (quick) quick_left--;
+    apply_sta_config(quick);
+    associated = false;
+    attempt = true;
+    attempt_at = now;
+    esp_err_t err = esp_wifi_connect();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Wi-Fi: connect: %s", esp_err_to_name(err));
+        attempt = false; // no event will follow
+        if (zigbee_mode) zb_hold(0);
+        retry_later();
+    }
+}
+
+/** Wi-Fi is gone — an event said so, or the hub found the driver without the router: connect again. */
+static void link_down(uint16_t reason, bool was_up) {
+    attempt = false;
+    associated = false;
+    if (zigbee_mode) zb_hold(0);
+    coex_for(false);
+    wifi_reason = reason;
+    if (!g_cfg.ssid[0]) {
+        wifi_state = WIFI_NONE;
+        return;
+    }
+    if (was_up) {
+        drops++;
+        drop_reason = reason;
+        down_at = hub_ms();
+        backoff_ms = RETRY_FIRST_MS;
+        quick_left = QUICK_TRIES;
+        wifi_state = WIFI_CONNECTING;
+    } else {
+        wifi_state = backoff_ms >= 8000 ? WIFI_FAILED : WIFI_CONNECTING;
+    }
+    // Never block: retry later, slower each time (the legacy ESP blocked its loop for 10 s).
+    retry_later();
+}
+
+/** 3 s after the driver's «beacon timeout», and once more 3 s later: did it keep the router? */
+static void after_beacon_timeout(void *arg) {
+    if (wifi_state != WIFI_CONNECTED) return; // the drop came as an event meanwhile
+    wifi_ap_record_t ap;
+    if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) { // the router answered: as before
+        coex_for(true);
+        if (zigbee_mode) zb_hold(0);
+        if (beacon_looks && --beacon_looks) esp_timer_start_once(beacon_timer, (uint64_t)BEACON_CHECK_MS * 1000);
+        return;
+    }
+    ESP_LOGW(TAG, "Wi-Fi: the driver dropped the router without an event: reconnecting");
+    link_down(WIFI_REASON_BEACON_TIMEOUT, true);
+    esp_wifi_disconnect(); // the driver's own state in line; its event, if any, is late news now
 }
 
 /** Every Wi-Fi and IP event goes to the log: the next silence must show where it began. */
@@ -124,25 +214,56 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     log_event(base, id, data);
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         connect_now(NULL);
-    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        disconnects++;
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_STOP) {
+        esp_timer_stop(reconnect_timer); // a restart is on its way: nothing to connect with
+        esp_timer_stop(beacon_timer);
+        attempt = false;
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_BEACON_TIMEOUT) {
+        // The driver asks the router whether it is still there: the radio is Wi-Fi's for that. Then
+        // it keeps the router or drops it, and may not tell: look in 3 s.
+        if (wifi_state != WIFI_CONNECTED) return;
         coex_for(false);
-        wifi_reason = ((wifi_event_sta_disconnected_t *)data)->reason;
-        if (!g_cfg.ssid[0]) {
-            wifi_state = WIFI_NONE;
+        if (zigbee_mode) zb_hold(BEACON_CHECK_MS + 500);
+        beacon_looks = 2;
+        esp_timer_stop(beacon_timer);
+        esp_timer_start_once(beacon_timer, (uint64_t)BEACON_CHECK_MS * 1000);
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        uint16_t reason = ((wifi_event_sta_disconnected_t *)data)->reason;
+        bool was_up = wifi_state == WIFI_CONNECTED;
+        disconnects++;
+        // News the hub already acted on: the driver held the event back (it comes when the next
+        // connect fails, or right into the one after), a retry is set or running. Only never
+        // without one of them.
+        if (!was_up && ((!attempt && !associated) || reason == WIFI_REASON_BEACON_TIMEOUT)) {
+            if (!attempt && !esp_timer_is_active(reconnect_timer)) {
+                associated = false;
+                retry_later();
+            }
             return;
         }
-        wifi_state = backoff_ms >= 8000 ? WIFI_FAILED : WIFI_CONNECTING;
-        // Never block: retry later, slower each time (the legacy ESP blocked its loop for 10 s).
-        esp_timer_stop(reconnect_timer);
-        esp_timer_start_once(reconnect_timer, (uint64_t)backoff_ms * 1000);
-        backoff_ms = backoff_ms < 30000 ? backoff_ms * 2 : 30000;
+        link_down(reason, was_up);
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_CONNECTED) {
+        attempt = false; // the address is next; Zigbee waits for it (zb_hold runs out by itself)
+        associated = true;
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+        uint32_t now = hub_ms();
         wifi_state = WIFI_CONNECTED;
         wifi_reason = 0;
-        wifi_up_at = hub_ms();
-        backoff_ms = 1000;
+        wifi_up_at = now;
+        attempt = false;
+        esp_timer_stop(reconnect_timer);
+        backoff_ms = RETRY_FIRST_MS;
+        if (down_at) last_down_ms = now - down_at;
+        down_at = 0;
+        wifi_ap_record_t ap;
+        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+            memcpy(router_bssid, ap.bssid, sizeof(router_bssid));
+            router_channel = ap.primary;
+            router_known = true;
+        }
         coex_for(true);
+        if (zigbee_mode) zb_hold(0);
+        report_kick(); // the core hears of the hub at once, not at the next half-minute
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STACONNECTED) {
         portal_started_ms = hub_ms(); // someone is on the page: keep it up
     }
@@ -150,9 +271,13 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 
 void net_wifi_set(const char *ssid, const char *pass) {
     config_save_wifi(ssid, pass);
-    backoff_ms = 1000;
-    wifi_reason = 0; // the page must not show the previous network's failure
-    apply_sta_config();
+    esp_timer_stop(reconnect_timer);
+    backoff_ms = RETRY_FIRST_MS;
+    wifi_reason = 0;      // the page must not show the previous network's failure
+    router_known = false; // another network: nothing to try first
+    attempt = false;
+    associated = false;
+    wifi_state = WIFI_CONNECTING; // the old network's «disconnected» is not news
     esp_wifi_disconnect();
     connect_now(NULL);
 }
@@ -160,21 +285,45 @@ void net_wifi_set(const char *ssid, const char *pass) {
 void net_wifi_kick(void) {
     uint32_t seen = disconnects;
     esp_timer_stop(reconnect_timer);
-    backoff_ms = 1000;
+    backoff_ms = RETRY_FIRST_MS;
+    attempt = false; // whatever was running is given up
+    associated = false;
     esp_wifi_disconnect();
     // Normally the drop comes back as an event and the retries take over. A hub that never heard
     // of the previous drop may hear nothing now either (the station is already down): connect.
     for (int i = 0; i < 30 && disconnects == seen; i++) vTaskDelay(pdMS_TO_TICKS(100));
-    if (disconnects == seen) {
-        ESP_LOGW(TAG, "Wi-Fi: no event for the disconnect, connecting anyway");
-        connect_now(NULL);
-    }
+    if (disconnects == seen) ESP_LOGW(TAG, "Wi-Fi: no event for the disconnect, connecting anyway");
+    if (wifi_state == WIFI_CONNECTED)
+        link_down(WIFI_REASON_UNSPECIFIED, true); // no event took it down: do it here
+    else if (!attempt && !esp_timer_is_active(reconnect_timer))
+        connect_now(NULL); // an event the hub was not waiting for sets no retry
 }
 
 void net_test_lose_disconnect(void) {
     test_lose_disconnect = true;
     esp_wifi_disconnect();
 }
+
+void net_test_beacon_lost(void) {
+    esp_event_post(WIFI_EVENT, WIFI_EVENT_STA_BEACON_TIMEOUT, NULL, 0, 0);
+    vTaskDelay(pdMS_TO_TICKS(2500)); // the driver's check of the router
+    net_test_lose_disconnect();
+}
+
+void net_wifi_info(wifi_info_t *out) {
+    memset(out, 0, sizeof(*out));
+    wifi_ap_record_t ap;
+    if (wifi_state == WIFI_CONNECTED && esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+        out->has_router = true;
+        out->rssi = ap.rssi;
+        out->channel = ap.primary;
+    }
+    out->drops = drops;
+    out->reason = drop_reason;
+    out->last_down_ms = last_down_ms;
+}
+
+bool net_wifi_sleep(bool on) { return esp_wifi_set_ps(on ? WIFI_PS_MIN_MODEM : WIFI_PS_NONE) == ESP_OK; }
 
 // ---------------------------------------------------------------------------------------------
 // Captive DNS: answer every A query with the hub's address
@@ -275,6 +424,8 @@ static esp_err_t scan_get(httpd_req_t *req) {
     bool paused = g_cfg.ssid[0] && wifi_state != WIFI_CONNECTED;
     if (paused) {
         esp_timer_stop(reconnect_timer);
+        attempt = false;
+        associated = false;
         esp_wifi_disconnect();
     }
     esp_err_t scanned = esp_wifi_scan_start(&sc, true);
@@ -429,11 +580,13 @@ void net_start(bool setup) {
 
     const esp_timer_create_args_t rt = {.callback = connect_now, .name = "wifi_retry"};
     esp_timer_create(&rt, &reconnect_timer);
+    const esp_timer_create_args_t bt = {.callback = after_beacon_timeout, .name = "wifi_beacon"};
+    esp_timer_create(&bt, &beacon_timer);
     const esp_timer_create_args_t pt = {.callback = leave_setup_cb, .name = "leave_setup"};
     esp_timer_create(&pt, &portal_timer);
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    apply_sta_config();
+    apply_sta_config(false);
     ESP_ERROR_CHECK(esp_wifi_start());
     if (setup) {
         portal_start();

@@ -23,6 +23,7 @@ import {
   gameSolves,
   gameUnlocks,
   heartbeatMinutes,
+  hubHealth,
   hubs,
   notificationOutbox,
   outages,
@@ -620,6 +621,27 @@ export function createStore(db: Db) {
             ),
           )
           .orderBy(asc(heartbeatMinutes.minute))
+          .all();
+      },
+    },
+
+    hubHealth: {
+      /** One reading of a hub's Wi-Fi (see the schema: on a change and every 10 minutes). */
+      add(row: typeof hubHealth.$inferInsert): void {
+        db.insert(hubHealth).values(row).onConflictDoNothing().run();
+      },
+      list(hubId: string, range: Interval) {
+        return db
+          .select()
+          .from(hubHealth)
+          .where(
+            and(
+              eq(hubHealth.hubId, hubId),
+              gte(hubHealth.t, range.start),
+              lt(hubHealth.t, range.end),
+            ),
+          )
+          .orderBy(asc(hubHealth.t))
           .all();
       },
     },

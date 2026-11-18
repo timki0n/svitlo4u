@@ -21,6 +21,8 @@ import type { SiteStateStore } from "./state.ts";
 
 /** Saved at least this often while reports come (the last report survives a core restart). */
 const PERSIST_EVERY_MS = 60_000;
+/** The hub's Wi-Fi goes to its history on a change, and this often without one. */
+const HEALTH_EVERY_MS = 10 * 60_000;
 
 export type HubPowerServiceDeps = {
   site: SiteConfig;
@@ -40,6 +42,8 @@ export class HubPowerService {
   private last: { boot: string; fw: string | null; rejected: string | null } | null = null;
   /** The last report as «Мої будинки» shows it. */
   private latest: HubReportEvent | null = null;
+  /** The last reading of the hub's Wi-Fi put into its history: when, and what it said. */
+  private health: { t: number; key: string } | null = null;
 
   constructor(deps: HubPowerServiceDeps) {
     this.deps = deps;
@@ -77,6 +81,7 @@ export class HubPowerService {
       linkGaps: r?.linkGaps ?? null,
       alertDelay: r?.alertDelay ?? null,
       rssi: r?.rssiAvg ?? r?.rssi ?? null,
+      wifiRssi: r?.wifi?.rssi ?? null,
     };
   }
 
@@ -84,6 +89,7 @@ export class HubPowerService {
     const { state, store, bus } = this.deps;
     this.noticeFirmware(event);
     this.noticeLinkGaps(event);
+    this.keepHealth(event);
     this.latest = event;
     state.update(this.siteId, {
       lastEspAt: event.t,
@@ -107,6 +113,34 @@ export class HubPowerService {
       },
     });
     if (this.deps.clock.now() - this.savedAt >= PERSIST_EVERY_MS) this.persist();
+  }
+
+  /**
+   * The hub's Wi-Fi into its history: every drop, forced reconnect, lost report and channel change
+   * by the time of the report that told of it (the signal alone only every 10 minutes).
+   */
+  private keepHealth(event: HubReportEvent): void {
+    const w = event.wifi;
+    if (!w) return;
+    const key = [event.boot, w.channel, w.drops, w.kicks, w.lost, w.redone].join(" ");
+    if (this.health && this.health.key === key && event.t - this.health.t < HEALTH_EVERY_MS) return;
+    this.health = { t: event.t, key };
+    const whole = (x: number | null) => (x === null ? null : Math.round(x));
+    this.deps.store.hubHealth.add({
+      hubId: this.deps.hub.id,
+      t: event.t,
+      boot: event.boot,
+      wifiRssi: whole(w.rssi),
+      wifiChannel: whole(w.channel),
+      drops: w.drops,
+      dropReason: w.reason,
+      lastDown: w.lastDown,
+      kicks: w.kicks,
+      lost: w.lost,
+      redone: w.redone,
+      plugRssi: whole(event.rssiAvg ?? event.rssi),
+      plugGaps: event.linkGaps,
+    });
   }
 
   /** The plug fell silent for a while but the hub judged it the radio, not the mains. */

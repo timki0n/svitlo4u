@@ -574,16 +574,27 @@ function BuildingScreen({
             {status.voltage !== null && status.mains === "on" && (
               <Fact name="Напруга">{Math.round(status.voltage)} В</Fact>
             )}
-            {status.rssi !== null && (
-              <Fact name="Сигнал розетки">
-                {signalWord(status.rssi)} · {String(status.rssi).replace("-", "−")} dBm
+            {status.wifiRssi !== null && (
+              <Fact name="Wi-Fi">
+                {status.wifiRssi < WIFI_WEAK ? (
+                  <span className="warn-text">{dbm("Слабкий", status.wifiRssi)}</span>
+                ) : (
+                  dbm(status.wifiRssi >= WIFI_GOOD ? "Добрий" : "Середній", status.wifiRssi)
+                )}
               </Fact>
+            )}
+            {status.rssi !== null && (
+              <Fact name="Сигнал розетки">{dbm(signalWord(status.rssi), status.rssi)}</Fact>
             )}
             {status.alertDelay !== null && <Fact name="Сповіщає за">~{status.alertDelay} с</Fact>}
             <Fact name="Прошивка">{[status.fw, hub.id].filter(Boolean).join(" · ")}</Fact>
           </dl>
           {quiet !== null ? (
             <p className="muted mine-note">{SILENT_NOTE}</p>
+          ) : status.wifiRssi !== null && status.wifiRssi < WIFI_WEAK ? (
+            <p className="muted mine-note">
+              Wi-Fi біля хаба слабкий: він може зникати зі зв'язку. Поставте хаб ближче до роутера.
+            </p>
           ) : (
             status.rssi !== null && (
               <p className="muted mine-note">Що кращий сигнал розетки, то швидше сповіщення.</p>
@@ -840,6 +851,15 @@ function Chats({ building, onChange }: { building: MyBuilding; onChange: (me: Me
       )}
     </section>
   );
+}
+
+/** The router's signal at the hub, dBm: below this the hub drops off Wi-Fi now and then. */
+const WIFI_WEAK = -75;
+const WIFI_GOOD = -65;
+
+/** «Середній · −63 dBm». */
+function dbm(word: string, value: number): string {
+  return `${word} · ${String(Math.round(value)).replace("-", "−")} dBm`;
 }
 
 /** The plug's signal at the hub in words (the delay before an outage alert follows it). */

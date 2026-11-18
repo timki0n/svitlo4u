@@ -7,7 +7,8 @@
 //    a minute without an answer → restart;
 //  - the driver is asked every 5 s whether it still has the router; the firmware thinks it is
 //    connected, the driver has not had the router for 10 s → reconnect Wi-Fi; a driver that stops
-//    answering for a minute → restart;
+//    answering for a minute → restart (since 0.2.5 net.c looks itself 3 s after the driver's
+//    «beacon timeout» and usually gets there first: this stays for a drop without that warning);
 //  - Wi-Fi looks connected, yet no report got any answer for 3 minutes → reconnect Wi-Fi from
 //    scratch; again after 3, 6, 12… up to 30 minutes (the internet behind a working router can be
 //    down for hours, and that is not the hub's to fix);
@@ -177,6 +178,8 @@ void watch_start(bool normal) {
     xTaskCreate(watch_task, "watch", 3072, normal ? (void *)1 : NULL, 8, NULL);
 }
 
+uint32_t watch_kicks(void) { return kicks; }
+
 void watch_describe(char *out, size_t room) {
     uint32_t now = hub_ms();
     snprintf(out, room,
@@ -195,6 +198,10 @@ bool watch_test(const char *what) {
     } else if (!strcmp(what, "kick-stuck")) {
         kick_hang_test = true;
         net_test_lose_disconnect();
+    } else if (!strcmp(what, "beacon-lost")) {
+        net_test_beacon_lost();
+    } else if (!strcmp(what, "conn-dead")) {
+        report_test_dead_connection();
     } else {
         return false;
     }

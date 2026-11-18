@@ -67,6 +67,7 @@ export const NO_STATUS: HubStatus = {
   linkGaps: null,
   alertDelay: null,
   rssi: null,
+  wifiRssi: null,
 };
 
 export type ClaimResult =

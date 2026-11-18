@@ -36,6 +36,7 @@ function report(over: Partial<HubReportEvent> = {}): HubReportEvent {
     longestGap: 0,
     alertDelay: 8,
     rssiAvg: -55,
+    wifi: null,
     events: [],
     ota: { state: "idle", version: null, error: null, rejected: null },
     remote: "127.0.0.1",

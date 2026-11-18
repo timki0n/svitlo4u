@@ -52,40 +52,85 @@ back within milliseconds.
     "rssiAvg": -62
   },
   "events": [{ "up": 1200.153, "mains": "off" }, { "up": 1210.882, "mains": "on" }],
+  "wifi": {
+    "rssi": -68,
+    "ch": 8,
+    "drops": 2,
+    "reason": 200,
+    "down": 4.6,
+    "kicks": 0,
+    "lost": 0,
+    "redone": 5
+  },
   "ota": { "state": "idle", "version": null, "error": null, "rejected": null }
 }
 ```
 
-| Field             | Meaning                                                                            |
-| ----------------- | ---------------------------------------------------------------------------------- |
-| `v`               | protocol version, `1`                                                              |
-| `dev`             | device id from `config/sites.yaml` (`kind: hub`)                                   |
-| `boot`            | random hex generated once per boot, never reused                                   |
-| `seq`             | request counter, starts at 0 after boot, +1 per request                            |
-| `up`              | seconds since boot, with milliseconds, when the request was built                  |
-| `rst`             | reset reason of this boot, as in the ESP protocol (`poweron`, `brownout`, `sw`, …) |
-| `fw`              | firmware version                                                                   |
-| `plug.paired`     | a plug is paired                                                                   |
-| `plug.mains`      | `on` (plug answers), `off` (plug silent) or `unknown` (not decided yet after boot) |
-| `plug.since`      | hub uptime (s) when the current `mains` verdict began, `null` if unknown           |
-| `plug.voltage`    | last voltage the plug measured, V, `null` if none yet                              |
-| `plug.rssi`       | signal of the plug's last answer, dBm, `null` if none                              |
-| `plug.gaps`       | silences shorter than the alert delay since the boot: gaps of the radio link       |
-| `plug.longestGap` | the longest of them, s                                                             |
-| `plug.delay`      | the alert delay now, s (follows the signal)                                        |
-| `plug.rssiAvg`    | the plug's signal averaged over about a minute, dBm, `null` if none                |
-| `events`          | mains changes the core has not acknowledged yet, oldest first, by hub uptime (s)   |
-| `ota.state`       | `idle`, `downloading`, `ready` (waits to restart into it) or `failed`              |
-| `ota.version`     | the version being downloaded / ready / failed, else `null`                         |
-| `ota.error`       | why the last attempt failed (`http 403`, `sha256`, `version`, …), else `null`      |
-| `ota.rejected`    | a version that did not confirm itself and was rolled back, else `null`             |
+| Field             | Meaning                                                                                |
+| ----------------- | -------------------------------------------------------------------------------------- |
+| `v`               | protocol version, `1`                                                                  |
+| `dev`             | device id from `config/sites.yaml` (`kind: hub`)                                       |
+| `boot`            | random hex generated once per boot, never reused                                       |
+| `seq`             | request counter, starts at 0 after boot, +1 per request                                |
+| `up`              | seconds since boot, with milliseconds, when the request was built                      |
+| `rst`             | reset reason of this boot, as in the ESP protocol (`poweron`, `brownout`, `sw`, …)     |
+| `fw`              | firmware version                                                                       |
+| `plug.paired`     | a plug is paired                                                                       |
+| `plug.mains`      | `on` (plug answers), `off` (plug silent) or `unknown` (not decided yet after boot)     |
+| `plug.since`      | hub uptime (s) when the current `mains` verdict began, `null` if unknown               |
+| `plug.voltage`    | last voltage the plug measured, V, `null` if none yet                                  |
+| `plug.rssi`       | signal of the plug's last answer, dBm, `null` if none                                  |
+| `plug.gaps`       | silences shorter than the alert delay since the boot: gaps of the radio link           |
+| `plug.longestGap` | the longest of them, s                                                                 |
+| `plug.delay`      | the alert delay now, s (follows the signal)                                            |
+| `plug.rssiAvg`    | the plug's signal averaged over about a minute, dBm, `null` if none                    |
+| `events`          | mains changes the core has not acknowledged yet, oldest first, by hub uptime (s)       |
+| `wifi.rssi`       | the router's signal at the hub, dBm (firmware 0.2.5+; the whole `wifi` is optional)    |
+| `wifi.ch`         | the router's channel                                                                   |
+| `wifi.drops`      | times a working Wi-Fi was lost since the boot                                          |
+| `wifi.reason`     | reason of the last drop (ESP-IDF `wifi_err_reason_t`: 200 = beacon timeout), 0 if none |
+| `wifi.down`       | how long the last drop lasted, s (until the address was back)                          |
+| `wifi.kicks`      | reconnects the hub's watchdog had to force                                             |
+| `wifi.lost`       | reports that got no answer, neither on the kept connection nor on a new one            |
+| `wifi.redone`     | reports whose kept connection was dead and that went through on a new one              |
+| `ota.state`       | `idle`, `downloading`, `ready` (waits to restart into it) or `failed`                  |
+| `ota.version`     | the version being downloaded / ready / failed, else `null`                             |
+| `ota.error`       | why the last attempt failed (`http 403`, `sha256`, `version`, …), else `null`          |
+| `ota.rejected`    | a version that did not confirm itself and was rolled back, else `null`                 |
 
 Times are hub uptimes, not clock times: the core converts them as
 `receivedAt − (up − event.up) × 1000`. No clock sync is needed and an internet gap does not shift
 anything.
 
-The hub sends a request every **30 s**, at once after a mains change, and keeps resending every few
-seconds until the core acknowledges. It drops the events up to the acknowledged `seq`.
+The hub sends a request every **30 s**, at once after a mains change and when its Wi-Fi is back,
+and keeps resending every few seconds (3 s, then slower up to 30 s) while requests fail. It drops
+the events up to the acknowledged `seq`.
+
+The connection is kept between requests. The internet drops such connections whenever it likes
+(measured 2026-11-18 at a home with a busy line: several times an hour, and a PC next to the hub
+lost its own at the same moments), so a request that got no answer at all is sent once more at
+once, on a new connection (0.2.5; before that the hub waited for the next half-minute, a 64-s hole
+each time).
+
+## Wi-Fi
+
+The hub shares one radio between Wi-Fi and Zigbee. Measured on the bench (2026-11-18): in the
+steady state Wi-Fi stays up for hours; what breaks it is the router (one that changes its channel
+by itself does it many times a day) and a weak signal. Since 0.2.5:
+
+- the driver's «beacon timeout» warning makes the hub look 3 s later (and once more after 3 s)
+  whether the driver still has the router: it drops it without an event when it shares the radio;
+- the reconnect first tries the router it just had, starting from its channel (found in a fraction
+  of a second when the router stayed, in one pass over the channels when it moved), then any
+  router of the network; retries after 0.5, 1, 2, 4… up to 30 s;
+- while Wi-Fi connects (and while the driver checks its router) the hub does not read the plug,
+  and the plug's silence in that time does not count towards the alert delay: a reconnect is not
+  a power cut;
+- the watchdog (`main/watch.c`) stays behind all that.
+
+The core keeps the `wifi` block in `hub_health`: a row for every change of its counters or channel
+and at least every 10 minutes. «Мої будинки» shows the signal and says when it is weak (below
+−75 dBm).
 
 ## Response
 

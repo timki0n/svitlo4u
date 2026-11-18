@@ -16,6 +16,8 @@ export type HubStatus = {
   alertDelay: number | null;
   /** The plug's signal at the hub, dBm (averaged). */
   rssi: number | null;
+  /** The router's Wi-Fi signal at the hub, dBm; null from firmware before 0.2.5. */
+  wifiRssi: number | null;
 };
 
 /** A group (or one of its topics) or a channel that gets the building's notices. */

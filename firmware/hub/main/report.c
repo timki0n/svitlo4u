@@ -1,5 +1,8 @@
-// Reports to the core (docs/hub-protocol.md): POST every 30 s, at once after a mains change, and
-// again every few seconds until the core acknowledges the events.
+// Reports to the core (docs/hub-protocol.md): POST every 30 s, at once after a mains change and when
+// Wi-Fi is back, and again every few seconds while they fail. The connection is kept between
+// reports; the internet drops such connections whenever it likes (several times an hour at a home
+// with a busy line, 2026-11-18: a PC next to the hub lost its own at the same moments), so a report
+// that got no answer goes once more at once, on a new connection.
 #include <stdio.h>
 #include <string.h>
 
@@ -11,6 +14,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "hub.h"
+#include "lwip/sockets.h"
 #include "mbedtls/md.h"
 
 static const char *TAG = "report";
@@ -25,12 +29,21 @@ static uint32_t seq;
 static volatile server_state_t server_state = SERVER_UNKNOWN;
 static volatile int last_status;
 static volatile uint32_t last_reply_at; // any HTTP answer: the network works
+static volatile uint32_t lost, redone;  // no answer on either connection; saved by the second try
+static esp_http_client_handle_t client;
 static char response[1536]; // an update offer carries a long URL
 static int response_len;
 
 server_state_t report_server_state(void) { return server_state; }
 int report_last_status(void) { return last_status; }
 uint32_t report_last_reply_ms(void) { return last_reply_at; }
+uint32_t report_lost(void) { return lost; }
+uint32_t report_redone(void) { return redone; }
+
+void report_test_dead_connection(void) {
+    int fd = client ? esp_http_client_get_socket(client) : -1;
+    if (fd >= 0) shutdown(fd, SHUT_RDWR);
+}
 
 void report_kick(void) {
     if (task) xTaskNotifyGive(task);
@@ -86,6 +99,16 @@ static int build(char *buf, size_t size, size_t *out_len) {
         len += snprintf(buf + len, size - len, "%s{\"up\":%.3f,\"mains\":\"%s\"}", i ? "," : "", ev[i].up,
                         ev[i].on ? "on" : "off");
     len += snprintf(buf + len, size - len, "]");
+    wifi_info_t w;
+    net_wifi_info(&w);
+    len += snprintf(buf + len, size - len, ",\"wifi\":{\"rssi\":");
+    add_num(buf, size, &len, "%.0f", w.rssi, w.has_router);
+    len += snprintf(buf + len, size - len, ",\"ch\":");
+    add_num(buf, size, &len, "%.0f", w.channel, w.has_router);
+    len += snprintf(buf + len, size - len,
+                    ",\"drops\":%lu,\"reason\":%u,\"down\":%.1f,\"kicks\":%lu,\"lost\":%lu,\"redone\":%lu}",
+                    (unsigned long)w.drops, w.reason, w.last_down_ms / 1000.0, (unsigned long)watch_kicks(),
+                    (unsigned long)lost, (unsigned long)redone);
     len += ota_json(buf + len, size - len);
     len += snprintf(buf + len, size - len, "}");
     *out_len = len;
@@ -94,7 +117,6 @@ static int build(char *buf, size_t size, size_t *out_len) {
 
 static esp_http_client_handle_t client_for(const char *url) {
     static char current[sizeof(g_cfg.server)];
-    static esp_http_client_handle_t client;
     if (client && strcmp(current, url) == 0) return client;
     if (client) esp_http_client_cleanup(client);
     strcpy(current, url);
@@ -110,16 +132,18 @@ static esp_http_client_handle_t client_for(const char *url) {
     return client;
 }
 
-/** One report; true when the core acknowledged it. */
-static bool send_report(void) {
-    static char body[2048];
+typedef enum { SENT_ACKED, SENT_REFUSED, SENT_DEAD } sent_t;
+
+/** One request: acknowledged, answered otherwise, or no answer at all (the connection). */
+static sent_t send_once(void) {
+    static char body[2560];
     size_t len;
     int n = build(body, sizeof(body), &len);
     char sig[65];
     hmac_hex(g_cfg.secret, body, len, sig);
 
     esp_http_client_handle_t c = client_for(g_cfg.server);
-    if (!c) return false;
+    if (!c) return SENT_DEAD;
     esp_http_client_set_header(c, "Content-Type", "application/json");
     esp_http_client_set_header(c, "X-Signature", sig);
     esp_http_client_set_post_field(c, body, len);
@@ -136,8 +160,9 @@ static bool send_report(void) {
         if (err != ESP_OK) {
             // A broken keep-alive connection: start over next time.
             esp_http_client_close(c);
+            return SENT_DEAD;
         }
-        return false;
+        return SENT_REFUSED;
     }
     cJSON *j = cJSON_Parse(response);
     const cJSON *ack = cJSON_GetObjectItem(j, "ack");
@@ -158,23 +183,41 @@ static bool send_report(void) {
         server_state = SERVER_FAILING;
     }
     cJSON_Delete(j);
-    return acked;
+    return acked ? SENT_ACKED : SENT_REFUSED;
+}
+
+/** One report; true when the core acknowledged it. */
+static bool send_report(void) {
+    sent_t sent = send_once();
+    if (sent != SENT_DEAD) return sent == SENT_ACKED;
+    // No answer at all: most often the kept connection was dead. Once more, on a new one.
+    if (net_wifi_state() == WIFI_CONNECTED) sent = send_once();
+    if (sent == SENT_DEAD) {
+        lost++;
+        return false;
+    }
+    redone++;
+    ESP_LOGI(TAG, "the report went through on a new connection");
+    return sent == SENT_ACKED;
 }
 
 static void report_task(void *arg) {
     uint32_t retry_ms = RETRY_MIN_MS;
+    bool failing = false;
     for (;;) {
-        mains_event_t probe;
-        bool pending = events_peek(&probe, 1) > 0;
-        uint32_t wait = pending && server_state != SERVER_OK ? retry_ms : EVERY_MS;
-        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(wait));
+        // After a failure soon again, slower each time, with events to tell or without (the core
+        // must not wait 30 s to hear that the hub is fine).
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(failing ? retry_ms : EVERY_MS));
         if (!config_provisioned() || net_wifi_state() != WIFI_CONNECTED) continue;
         if (send_report()) {
+            failing = false;
             retry_ms = RETRY_MIN_MS;
             // More events may have come while sending: go again at once.
+            mains_event_t probe;
             if (events_peek(&probe, 1) > 0) xTaskNotifyGive(task);
         } else {
-            retry_ms = retry_ms * 2 < RETRY_MAX_MS ? retry_ms * 2 : RETRY_MAX_MS;
+            if (failing) retry_ms = retry_ms * 2 < RETRY_MAX_MS ? retry_ms * 2 : RETRY_MAX_MS;
+            failing = true;
         }
     }
 }

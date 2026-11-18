@@ -70,6 +70,7 @@ function hub(c: Core) {
     fw?: string;
     ota?: unknown;
     gaps?: number;
+    wifi?: unknown;
   }) => {
     const raw = JSON.stringify({
       v: 1,
@@ -91,6 +92,7 @@ function hub(c: Core) {
       },
       events: fields.events ?? [],
       ...(fields.ota === undefined ? {} : { ota: fields.ota }),
+      ...(fields.wifi === undefined ? {} : { wifi: fields.wifi }),
     });
     return c.app.inject({
       method: "POST",
@@ -230,6 +232,58 @@ describe("hub site (integration)", () => {
       alertDelay: 12,
       rssi: -66,
     });
+  });
+
+  it("the hub's Wi-Fi: the signal for «Мої будинки», every change into its history", async () => {
+    const clock = new ManualClock(T0 + 30_000);
+    const c = await start(clock);
+    const report = hub(c);
+    const wifi = { rssi: -68, ch: 8, drops: 0, reason: 0, down: 0, kicks: 0, lost: 0, redone: 0 };
+    const history = () =>
+      c.store.hubHealth
+        .list("hub-2a4c11", { start: 0, end: T0 + 3_600_000 })
+        .map((r) => [r.t - T0, r.wifiRssi, r.wifiChannel, r.drops, r.lastDown, r.redone]);
+
+    // firmware before 0.2.5 says nothing of its Wi-Fi
+    await report({ up: 30, mains: "on", since: 1 });
+    expect(c.hubs.get("hub-test")?.status().wifiRssi).toBeNull();
+    expect(history()).toEqual([]);
+
+    await report({ up: 60, mains: "on", since: 1, wifi });
+    expect(c.hubs.get("hub-test")?.status().wifiRssi).toBe(-68);
+    // the same counters: nothing new for 10 minutes, whatever the signal does
+    clock.advanceBy(30_000);
+    await report({ up: 90, mains: "on", since: 1, wifi: { ...wifi, rssi: -74 } });
+    // a report that went through on a second try, then a drop onto another channel
+    clock.advanceBy(30_000);
+    await report({ up: 120, mains: "on", since: 1, wifi: { ...wifi, redone: 1 } });
+    clock.advanceBy(30_000);
+    await report({
+      up: 150,
+      mains: "on",
+      since: 1,
+      wifi: { ...wifi, ch: 3, drops: 1, reason: 200, down: 4.6, redone: 1 },
+    });
+    clock.advanceBy(600_000);
+    await report({
+      up: 750,
+      mains: "on",
+      since: 1,
+      wifi: { ...wifi, rssi: -80, ch: 3, drops: 1, reason: 200, down: 4.6, redone: 1 },
+    });
+    expect(history()).toEqual([
+      [30_000, -68, 8, 0, 0, 0],
+      [90_000, -68, 8, 0, 0, 1],
+      [120_000, -68, 3, 1, 4.6, 1],
+      [720_000, -80, 3, 1, 4.6, 1],
+    ]);
+    expect(c.hubs.get("hub-test")?.status().wifiRssi).toBe(-80);
+
+    // a strange `wifi` costs nothing
+    clock.advanceBy(30_000);
+    const odd = await report({ up: 780, mains: "on", since: 1, wifi: { rssi: "loud", drops: -1 } });
+    expect(odd.json()).toMatchObject({ ok: true });
+    expect(c.hubs.get("hub-test")?.status().wifiRssi).toBeNull();
   });
 
   it("a hub site gets the hub power service, not the ESP one", async () => {

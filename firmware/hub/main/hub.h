@@ -81,6 +81,11 @@ void zb_open_pairing(void);
 void zb_forget_plug(void);
 /** Radio-level read results and the neighbor table, for the console. */
 void zb_diag(char *out, size_t size);
+/**
+ * Wi-Fi needs the radio for up to `ms` (a connect, the router's check after lost beacons): no reads
+ * of the plug meanwhile, and its silence in that time says nothing about the mains. 0: over.
+ */
+void zb_hold(uint32_t ms);
 
 /** Mains changes waiting for the core's acknowledgement. */
 typedef struct {
@@ -115,6 +120,21 @@ uint32_t net_wifi_up_ms(void);
 void net_wifi_kick(void);
 /** Console test: drop Wi-Fi and lose the event about it, as on 2026-11-17. */
 void net_test_lose_disconnect(void);
+/** Console test: the same, after the driver's «beacon timeout» warning (how it really goes). */
+void net_test_beacon_lost(void);
+
+/** Wi-Fi as the reports and the console tell it (the report's `wifi`). */
+typedef struct {
+    bool has_router;       // connected: `rssi` and `channel` are the router's
+    int8_t rssi;           // dBm
+    uint8_t channel;
+    uint32_t drops;        // times a working Wi-Fi was lost since the boot
+    uint16_t reason;       // of the last drop (esp_wifi codes), 0 if none
+    uint32_t last_down_ms; // how long the last drop lasted, until the address was back
+} wifi_info_t;
+void net_wifi_info(wifi_info_t *out);
+/** Console: Wi-Fi sleeping between the router's beacons (the default) or always listening. */
+bool net_wifi_sleep(bool on);
 
 // ---------------------------------------------------------------------------------------------
 // Reports to the core (report.c)
@@ -128,6 +148,11 @@ server_state_t report_server_state(void);
 int report_last_status(void);
 /** hub_ms() of the last report that got any HTTP answer (from the start of reporting). */
 uint32_t report_last_reply_ms(void);
+/** Reports that got no answer even on a new connection, and those the second try saved. */
+uint32_t report_lost(void);
+uint32_t report_redone(void);
+/** Console test: kill the kept connection under the next report (as the internet does). */
+void report_test_dead_connection(void);
 
 // ---------------------------------------------------------------------------------------------
 // Watchdog: the hub must not stay silent while it could talk (watch.c)
@@ -137,8 +162,10 @@ void watch_start(bool normal);
 void watch_restart(const char *why);
 /** Status line for the console. */
 void watch_describe(char *out, size_t room);
-/** Console tests: "loop-stuck", "wifi-lost", "kick-stuck"; false for an unknown one. */
+/** Console tests: "loop-stuck", "wifi-lost", "kick-stuck", "beacon-lost", "conn-dead"; false for an unknown one. */
 bool watch_test(const char *what);
+/** Reconnects the watchdog had to force since the boot. */
+uint32_t watch_kicks(void);
 
 // ---------------------------------------------------------------------------------------------
 // Updates over the air (ota.c)

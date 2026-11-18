@@ -55,6 +55,9 @@ static double mains_since = -1;
 static volatile uint32_t verdict_at_ms;
 static volatile uint32_t last_answer_ms;
 static volatile uint32_t answers_during_read; // the race fixed in poll_task, counted for `status`
+// Wi-Fi has the radio (zb_hold): until when, how long in all, and how long by the last answer —
+// the plug's silence in that time is not the plug's.
+static volatile uint32_t hold_until_ms, held_ms, held_at_answer_ms;
 static bool answered;
 static float voltage;
 static bool has_voltage;
@@ -158,6 +161,7 @@ static void plug_alive(int8_t signal, bool announce) {
         }
     }
     last_answer_ms = now;
+    held_at_answer_ms = held_ms;
     if (!announce) {
         rssi = signal;
         has_rssi = true;
@@ -230,6 +234,8 @@ void zb_status(plug_status_t *out) {
 }
 
 void zb_open_pairing(void) { pairing_requested = true; }
+
+void zb_hold(uint32_t ms) { hold_until_ms = hub_ms() + ms; }
 
 void zb_diag(char *out, size_t size) {
     uint32_t last = last_answer_ms;
@@ -469,10 +475,14 @@ static void poll_task(void *arg) {
     static uint16_t basic_attrs[] = {0x0004, 0x0000, 0x0001, 0x0005, 0x0007, 0xFFFE};
     static uint16_t voltage_attr[] = {0x0505};
     static uint16_t scale_attrs[] = {0x0600, 0x0601};
-    uint32_t last_read = 0, last_scale = 0;
+    uint32_t last_read = 0, last_scale = 0, before = hub_ms();
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(100));
         uint32_t now = hub_ms();
+        // Wi-Fi is connecting or checking its router: the radio is its own, the plug waits.
+        bool held = (int32_t)(hold_until_ms - now) > 0;
+        if (held) held_ms += now - before;
+        before = now;
         if (retry_mode && now >= retry_at_ms) {
             uint32_t mode = retry_mode;
             retry_mode = 0;
@@ -488,23 +498,22 @@ static void poll_task(void *arg) {
             esp_zigbee_lock_release();
         }
         if (!g_cfg.plug_paired) continue;
-        if (need_basic_read) {
+        if (held) {
+            // nothing to send; the verdict below still runs (on the time that counts)
+        } else if (need_basic_read) {
             need_basic_read = false;
             read_attrs(EZB_ZCL_CLUSTER_ID_BASIC, basic_attrs, 6);
             continue;
-        }
-        if (need_power_on && answered && mains == MAINS_ON) {
+        } else if (need_power_on && answered && mains == MAINS_ON) {
             need_power_on = false;
             plug_power_on();
             continue;
-        }
-        if (need_scale_read || (answered && now - last_scale >= SCALE_EVERY_MS)) {
+        } else if (need_scale_read || (answered && now - last_scale >= SCALE_EVERY_MS)) {
             need_scale_read = false;
             last_scale = now;
             read_attrs(EZB_ZCL_CLUSTER_ID_ELECTRICAL_MEASUREMENT, scale_attrs, 2);
             continue;
-        }
-        if (now - last_read >= READ_EVERY_MS) {
+        } else if (now - last_read >= READ_EVERY_MS) {
             last_read = now;
             read_attrs(EZB_ZCL_CLUSTER_ID_ELECTRICAL_MEASUREMENT, voltage_attr, 1);
         }
@@ -512,11 +521,13 @@ static void poll_task(void *arg) {
         // the clock: the reads above wait for the Zigbee task, which may take an answer meanwhile, and
         // against the clock from the top of the loop that answer was 49 days old (uint32 wrap): a
         // false «off» and «on» at once on 2026-11-17 at 17:05.
-        uint32_t last = last_answer_ms, verdict_at = verdict_at_ms;
+        uint32_t last = last_answer_ms, verdict_at = verdict_at_ms, excused = held_ms - held_at_answer_ms;
         if ((int32_t)(last - now) > 0) answers_during_read++;
         now = hub_ms();
         if (mains == MAINS_ON) {
+            // Silence while Wi-Fi had the radio does not count: a reconnect is not a power cut.
             uint32_t silent = now - last;
+            silent = silent > excused ? silent - excused : 0;
             if (!suspect && silent >= SUSPECT_MS) {
                 suspect = true;
                 gap_from_ms = last;

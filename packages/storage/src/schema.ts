@@ -249,6 +249,34 @@ export const heartbeatMinutes = sqliteTable(
   (t) => [primaryKey({ columns: [t.deviceId, t.minute] })],
 );
 
+/**
+ * A hub's Wi-Fi as it reports it (firmware 0.2.5+): a row when something changed — a drop, a
+ * reconnect the watchdog forced, a report without an answer, the channel, a new boot — and at
+ * least every 10 minutes. Counters run since the hub's boot.
+ */
+export const hubHealth = sqliteTable(
+  "hub_health",
+  {
+    hubId: text("hub_id").notNull(),
+    t: integer("t").notNull(),
+    boot: text("boot").notNull(),
+    /** The router's signal at the hub, dBm, and its channel. */
+    wifiRssi: integer("wifi_rssi"),
+    wifiChannel: integer("wifi_channel"),
+    drops: integer("drops").notNull(),
+    /** The last drop: its reason (esp_wifi codes) and how long it lasted, s. */
+    dropReason: integer("drop_reason").notNull(),
+    lastDown: real("last_down").notNull(),
+    kicks: integer("kicks").notNull(),
+    /** Reports that got no answer on either connection / that the second try saved. */
+    lost: integer("lost").notNull(),
+    redone: integer("redone").notNull(),
+    plugRssi: integer("plug_rssi"),
+    plugGaps: integer("plug_gaps"),
+  },
+  (t) => [primaryKey({ columns: [t.hubId, t.t] })],
+);
+
 /** Notifications waiting for delivery or retry. Sent immediately; the row only guards retries. */
 export const notificationOutbox = sqliteTable(
   "notification_outbox",

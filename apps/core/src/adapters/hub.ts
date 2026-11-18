@@ -50,9 +50,27 @@ export type HubReportEvent = {
   alertDelay: number | null;
   /** The plug's signal averaged over about a minute, dBm. */
   rssiAvg: number | null;
+  /** The hub's own Wi-Fi; null from firmware before 0.2.5. */
+  wifi: HubWifi | null;
   events: { up: number; mains: "on" | "off" }[];
   ota: HubOtaStatus | null;
   remote: string;
+};
+
+/** The hub's Wi-Fi: the router as it hears it now, and what went wrong since the boot. */
+export type HubWifi = {
+  /** The router's signal at the hub, dBm, and its channel. */
+  rssi: number | null;
+  channel: number | null;
+  /** Times a working Wi-Fi was lost; the last one's reason (esp_wifi codes) and length, s. */
+  drops: number;
+  reason: number;
+  lastDown: number;
+  /** Reconnects the hub's watchdog had to force. */
+  kicks: number;
+  /** Reports that got no answer on either connection / that the second try saved. */
+  lost: number;
+  redone: number;
 };
 
 export type HubRejectReason = "malformed" | "unknown-device" | "bad-signature" | "replay";
@@ -113,6 +131,23 @@ function parseOta(v: unknown): HubOtaStatus | null {
   };
 }
 
+/** Lenient like `ota`: diagnostics must not cost a power report. */
+function parseWifi(v: unknown): HubWifi | null {
+  if (typeof v !== "object" || v === null) return null;
+  const o = v as Record<string, unknown>;
+  const count = (x: unknown, max = 1e9): number => (isNum(x) && x >= 0 && x <= max ? x : 0);
+  return {
+    rssi: numOrNull(o.rssi, -127, 20) ?? null,
+    channel: numOrNull(o.ch, 1, 196) ?? null,
+    drops: count(o.drops),
+    reason: count(o.reason, 65535),
+    lastDown: count(o.down),
+    kicks: count(o.kicks),
+    lost: count(o.lost),
+    redone: count(o.redone),
+  };
+}
+
 export class HubVerifier {
   private readonly devices = new Map<string, HubDeviceConfig>();
   private readonly replay = new Map<string, { boot: string; seq: number; recentBoots: string[] }>();
@@ -161,7 +196,7 @@ export class HubVerifier {
       return { ok: false, reason: "bad-signature", deviceId: dev };
     }
 
-    const { v, boot, seq, up, rst, fw, plug, events, ota } = body;
+    const { v, boot, seq, up, rst, fw, plug, events, ota, wifi } = body;
     const p = (typeof plug === "object" && plug !== null ? plug : {}) as Record<string, unknown>;
     const mains = p.mains;
     const mainsSince = numOrNull(p.since, 0, 1e9);
@@ -235,6 +270,7 @@ export class HubVerifier {
         longestGap,
         alertDelay,
         rssiAvg,
+        wifi: parseWifi(wifi),
         events: parsedEvents,
         ota: parseOta(ota),
         remote,

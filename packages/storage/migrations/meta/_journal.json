@@ -57,6 +57,13 @@
       "when": 1794864253180,
       "tag": "0007_addresses_favorites_requests",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1795026840542,
+      "tag": "0008_hub_health",
+      "breakpoints": true
     }
   ]
 }

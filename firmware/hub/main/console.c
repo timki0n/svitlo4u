@@ -5,6 +5,8 @@
 //   wifi <ssid> <password>     home Wi-Fi without the setup page (no spaces in the name)
 //   wifi-forget | portal | pair | plug-forget | reboot
 //   test loop-stuck|wifi-lost|kick-stuck   break the hub the way the watchdog (watch.c) must fix
+//   test beacon-lost|conn-dead             lose the router as it really goes; kill the kept connection
+//   sleep on|off               Wi-Fi sleeping between beacons (the default) or always listening
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -40,8 +42,13 @@ static void status(void) {
     outf("wifi: %s%s%s (reason %u)%s", ws[net_wifi_state()], g_cfg.ssid[0] ? " to " : "", g_cfg.ssid,
          net_wifi_reason(), net_portal_active() ? ", setup page ON" : "");
     if (has_ap) outf(", %d dBm, channel %u", ap.rssi, ap.primary);
-    out("\r\n");
-    outf("server: %s (last HTTP %d) %s\r\n", ss[report_server_state()], report_last_status(), g_cfg.server);
+    wifi_info_t w;
+    net_wifi_info(&w);
+    outf("; lost %lu times (last: reason %u, back in %.1f s)\r\n", (unsigned long)w.drops, w.reason,
+         w.last_down_ms / 1000.0);
+    outf("server: %s (last HTTP %d) %s; reports without an answer %lu, saved by a second try %lu\r\n",
+         ss[report_server_state()], report_last_status(), g_cfg.server, (unsigned long)report_lost(),
+         (unsigned long)report_redone());
     outf("zigbee: %s%s; plug %s, mains %s", p.network_up ? "up" : "starting",
          p.pairing_open ? ", pairing open" : "", p.paired ? "paired" : "not paired",
          p.mains == MAINS_ON ? "ON" : p.mains == MAINS_OFF ? "OFF" : "unknown");
@@ -102,9 +109,12 @@ static void run(char *line) {
         esp_restart();
     } else if (!strcmp(cmd, "test") && a && watch_test(a)) {
         outf("\r\ntest %s: watch the log\r\n", a);
+    } else if (!strcmp(cmd, "sleep") && a && (!strcmp(a, "on") || !strcmp(a, "off"))) {
+        outf("\r\nWi-Fi sleep %s: %s (until the restart)\r\n", a, net_wifi_sleep(!strcmp(a, "on")) ? "ok" : "refused");
     } else {
         out("\r\ncommands: status | provision <dev> <secret> | server <url|default> | wifi <ssid> <pass> |"
-            " wifi-forget | portal | pair | plug-forget | reboot | test loop-stuck|wifi-lost|kick-stuck\r\n");
+            " wifi-forget | portal | pair | plug-forget | reboot | sleep on|off |"
+            " test loop-stuck|wifi-lost|kick-stuck|beacon-lost|conn-dead\r\n");
     }
 }
 
