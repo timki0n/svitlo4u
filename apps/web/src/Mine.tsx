@@ -579,7 +579,7 @@ function BuildingScreen({
                 {status.wifiRssi < WIFI_WEAK ? (
                   <span className="warn-text">{dbm("Слабкий", status.wifiRssi)}</span>
                 ) : (
-                  dbm(status.wifiRssi >= WIFI_GOOD ? "Добрий" : "Середній", status.wifiRssi)
+                  dbm(status.wifiRssi >= WIFI_GOOD ? "Гарний" : "Середній", status.wifiRssi)
                 )}
               </Fact>
             )}
@@ -864,7 +864,7 @@ function dbm(word: string, value: number): string {
 
 /** The plug's signal at the hub in words (the delay before an outage alert follows it). */
 function signalWord(rssi: number): string {
-  if (rssi >= -60) return "Добрий";
+  if (rssi >= -60) return "Гарний";
   if (rssi >= -75) return "Середній";
   return "Слабкий";
 }
