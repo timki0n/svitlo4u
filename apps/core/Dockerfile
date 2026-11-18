@@ -28,8 +28,8 @@ COPY packages/storage/package.json packages/storage/
 RUN --mount=type=cache,id=pnpm-store-web,target=/pnpm-store \
     pnpm install --frozen-lockfile --filter "@svitlo/web" --store-dir /pnpm-store
 COPY tsconfig.base.json ./
-# the game's rules (floors, points) are shared with the core
-COPY packages/domain/src/game.ts packages/domain/src/time.ts packages/domain/src/
+# the game's rules (floors, points) and the buildings' models are shared with the core
+COPY packages/domain/src/building.ts packages/domain/src/game.ts packages/domain/src/time.ts packages/domain/src/
 COPY apps/web apps/web
 RUN pnpm --filter @svitlo/web build
 
