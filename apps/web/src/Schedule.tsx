@@ -196,6 +196,7 @@ export function DayView({
               from={range.start + q * 6 * 3_600_000}
               to={q === 3 ? range.end : range.start + (q + 1) * 6 * 3_600_000}
               firstHour={q * 6}
+              emergency={emergency || day.status === "EmergencyShutdowns"}
               plan={plan}
               fact={fact}
               now={today ? now : over ? range.end : null}
@@ -261,10 +262,13 @@ function Band({
   fact,
   now,
   marks,
+  emergency,
 }: {
   from: number;
   to: number;
   firstHour: number;
+  /** Emergency shutdowns: the schedule does not hold, red stripes over the cells. */
+  emergency: boolean;
   plan: readonly Piece[];
   fact: readonly Piece[];
   /** Today: the fact line ends here, the rest of it is still ahead. */
@@ -328,7 +332,7 @@ function Band({
               <span key={m.at} className="fact-tick" style={{ left: `${pct(m.at, from, to)}%` }} />
             ))}
       </div>
-      <div className="band-track" aria-hidden="true">
+      <div className="band-track" aria-hidden="true" data-emergency={emergency ? "" : undefined}>
         {/* The hours lie under the plan: its hatch is drawn over them. */}
         {[0, 1, 2, 3, 4, 5].map((h) => (
           <span key={`h${h}`} className="hour-label" style={{ left: `${((h + 0.5) / 6) * 100}%` }}>
