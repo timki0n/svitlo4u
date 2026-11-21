@@ -76,6 +76,19 @@ const ICONS = {
   chevron: <path d="M9 6l6 6-6 6" />,
   chat: <path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1.1-4.6A8 8 0 1 1 21 12z" />,
   megaphone: <path d="M3 11l18-5v12L3 14v-3zM11.6 16.8a3 3 0 1 1-5.8-1.6" />,
+  phone: (
+    <>
+      <rect x="6" y="2" width="12" height="20" rx="3" />
+      <path d="M10.5 18.5h3" />
+    </>
+  ),
+  copy: (
+    <>
+      <rect x="9" y="9" width="12" height="12" rx="2.5" />
+      <path d="M5 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5" />
+    </>
+  ),
+  check: <path d="M20 6 9 17l-5-5" />,
 };
 
 export function Icon({
@@ -191,8 +204,8 @@ export function Header({ children, mark = true }: { children: ReactNode; mark?: 
   );
 }
 
-export type Tab = "now" | "schedule" | "history" | "game" | "my" | "add" | "about";
-type NavTab = Exclude<Tab, "my" | "add" | "about">;
+export type Tab = "now" | "schedule" | "history" | "game" | "my" | "add" | "about" | "widget";
+type NavTab = Exclude<Tab, "my" | "add" | "about" | "widget">;
 
 export function Nav({ tab, site }: { tab: Tab; site: Site | null }) {
   // The game plays on the windows of ЖК 4U's figure.

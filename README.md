@@ -49,6 +49,12 @@ export RENDERER_CDP_URL=http://127.0.0.1:9222 RENDER_WEB_URL=http://localhost:51
 pnpm --filter @svitlo/core render 4u tomorrow tomorrow.png
 ```
 
+The iPhone widget is `apps/web/src/widget/scriptable.js`, a script for the free Scriptable app that
+reads `/api/v1/sites/<id>/widget` (home screen sizes and the lock screen; the last data stays on
+screen offline). `#/widget`, linked from «Про проєкт», hands it out set to the building being
+viewed. Tests run it against a stand-in for Scriptable's API (`scriptable-mock.ts`), which can also
+draw its layouts as HTML.
+
 ## API
 
 `/api/v1/*`: state, widget, schedules, outages, analytics and live updates (SSE). The contract is

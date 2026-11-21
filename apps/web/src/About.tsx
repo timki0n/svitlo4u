@@ -23,6 +23,13 @@ const ABILITIES: [Parameters<typeof Icon>[0]["name"], string, ReactNode][] = [
     "Сповіщення для будинку",
     "Повідомлення, щойно світло зникає чи повертається, і графік на завтра.",
   ],
+  [
+    "phone",
+    "Віджет на iPhone",
+    <>
+      Стан світла й графік на головному чи заблокованому екрані. <a href="#/widget">Як поставити</a>
+    </>,
+  ],
   // the game lives in the bot's Mini App (for buildings with a facade to play on: ЖК 4U for now)
   [
     "game",

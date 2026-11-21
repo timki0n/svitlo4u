@@ -1800,6 +1800,90 @@ a {
   line-height: 1.5;
 }
 
+/* «Віджет на iPhone»: the steps numbered in the same wells, their buttons under the text */
+.step-number {
+  color: var(--light);
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.step-action {
+  margin-top: 10px;
+}
+
+.script-fallback {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 13px;
+}
+
+/* the text of a step with a list in it takes the row's width */
+.step-body {
+  flex: 1;
+  min-width: 0;
+}
+
+/* «Інший будинок»: the links to copy, in a pressed-in well */
+.widget-links {
+  display: flex;
+  flex-direction: column;
+  margin-top: 10px;
+  padding: 4px 0;
+  border-radius: 16px;
+  background: var(--well);
+  box-shadow: var(--inset-sm);
+}
+
+.widget-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 4px 14px;
+}
+
+.widget-link + .widget-link {
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.widget-link .mine-name {
+  font-size: 14px;
+}
+
+.about-list .step-hint {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+/* a tap selects the whole link, should copying fail */
+.widget-link-url {
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: all;
+  -webkit-user-select: all;
+}
+
+.script-text {
+  width: 100%;
+  min-height: 160px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--well);
+  box-shadow: var(--inset-sm);
+  color: var(--text);
+  font:
+    12px / 1.45 ui-monospace,
+    Menlo,
+    Consolas,
+    monospace;
+  resize: vertical;
+}
+
 /* the icon in a small pressed-in well, like the empty states */
 .about-icon {
   flex: none;

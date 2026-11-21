@@ -12,14 +12,16 @@ import { Header, Nav, type Tab } from "./ui.tsx";
 
 /** The game (its puzzles and the facade) loads only when opened. */
 const GameScreen = lazy(() => import("./game/GameScreen.tsx"));
+/** «Віджет на iPhone» carries the widget script's text: also only when opened. */
+const WidgetScreen = lazy(() => import("./Widget.tsx"));
 
 function tabFromHash(): Tab {
   const hash = location.hash.replace(/^#\/?/, "");
   if (hash === "game" || hash.startsWith("game/")) return "game";
   // «Мої будинки» (the button by the building's name) and «Знайти мій будинок» from there;
-  // «Про проєкт» (the link at the right of the header)
+  // «Про проєкт» (the link at the right of the header) and «Віджет на iPhone» from there
   if (hash === "my" || hash.startsWith("my/")) return "my"; // #/my/<id>: one of my buildings
-  if (hash === "add" || hash === "about") return hash;
+  if (hash === "add" || hash === "about" || hash === "widget") return hash;
   return hash === "schedule" || hash === "history" ? hash : "now";
 }
 
@@ -58,7 +60,7 @@ function Site({ siteId }: { siteId: string | null }) {
   const live = useLive(siteId);
 
   useEffect(() => {
-    if (tab !== "my" && tab !== "add" && tab !== "about") setLastMain(tab);
+    if (tab !== "my" && tab !== "add" && tab !== "about" && tab !== "widget") setLastMain(tab);
   }, [tab]);
 
   useEffect(() => {
@@ -104,6 +106,11 @@ function Site({ siteId }: { siteId: string | null }) {
         {tab === "my" && <MineScreen live={live} back={back} />}
         {tab === "add" && <AddScreen />}
         {tab === "about" && <AboutScreen back={back} />}
+        {tab === "widget" && (
+          <Suspense fallback={<main className="screen" />}>
+            <WidgetScreen live={live} back="#/about" />
+          </Suspense>
+        )}
         {tab === "game" && (
           <Suspense
             fallback={
