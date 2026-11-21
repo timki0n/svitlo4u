@@ -121,11 +121,64 @@ export class DrawContext {
   size = new Size(0, 0);
   opaque = true;
   respectScreenScale = false;
-  readonly shapes: { d: string; fill: Color | null; stroke: Color | null; width: number }[] = [];
+  readonly shapes: {
+    d: string;
+    fill: Color | null;
+    stroke: Color | null;
+    width: number;
+    text?: string;
+  }[] = [];
+  readonly texts: string[] = [];
   private current: string[] = [];
   private fill: Color | null = null;
   private stroke: Color | null = null;
   private width = 1;
+  private font: Font | null = null;
+  private textColor: Color | null = null;
+  private textAlign: "left" | "center" | "right" = "left";
+  setFont(font: Font): void {
+    this.font = font;
+  }
+  setTextColor(color: Color): void {
+    this.textColor = color;
+  }
+  setTextAlignedLeft(): void {
+    this.textAlign = "left";
+  }
+  setTextAlignedCenter(): void {
+    this.textAlign = "center";
+  }
+  setTextAlignedRight(): void {
+    this.textAlign = "right";
+  }
+  fillRect(rect: Rect): void {
+    const { x, y, width: w, height: h } = rect;
+    this.shapes.push({
+      d: `M${n(x)} ${n(y)}h${n(w)}v${n(h)}h${n(-w)}Z`,
+      fill: this.fill,
+      stroke: null,
+      width: 0,
+    });
+  }
+  /** Text from the rect's top, aligned in its width (no wrapping: the widget's labels are short). */
+  drawTextInRect(text: string, rect: Rect): void {
+    this.texts.push(text);
+    const size = this.font?.size ?? 12;
+    const x =
+      this.textAlign === "left"
+        ? rect.x
+        : this.textAlign === "right"
+          ? rect.x + rect.width
+          : rect.x + rect.width / 2;
+    const anchor = { left: "start", center: "middle", right: "end" }[this.textAlign];
+    this.shapes.push({
+      d: "",
+      fill: null,
+      stroke: null,
+      width: 0,
+      text: `<text x="${n(x)}" y="${n(rect.y + size * 0.98)}" text-anchor="${anchor}" font-family="Manrope, 'Segoe UI', system-ui, sans-serif" font-size="${size}" font-weight="${this.font?.weight ?? 400}" fill="${css(this.textColor)}">${escapeHtml(text)}</text>`,
+    });
+  }
   addPath(path: Path): void {
     this.current.push(...path.d);
   }
@@ -155,9 +208,11 @@ export class DrawContext {
     const { width, height } = this.size;
     const body = this.shapes
       .map((s) =>
-        s.fill
-          ? `<path d="${s.d}" fill="${css(s.fill)}"/>`
-          : `<path d="${s.d}" fill="none" stroke="${css(s.stroke)}" stroke-width="${s.width}"/>`,
+        s.text
+          ? s.text
+          : s.fill
+            ? `<path d="${s.d}" fill="${css(s.fill)}"/>`
+            : `<path d="${s.d}" fill="none" stroke="${css(s.stroke)}" stroke-width="${s.width}"/>`,
       )
       .join("");
     return new Image(

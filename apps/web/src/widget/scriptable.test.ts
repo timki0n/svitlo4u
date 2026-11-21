@@ -162,7 +162,7 @@ describe("Scriptable widget", () => {
       respond: () => ({ status: 502, body: "<html>Bad gateway</html>" }),
       files,
     });
-    expect(texts(proxy.widget)).toContain("Немає зв'язку · дані на 17:45");
+    expect(texts(proxy.widget)).toContain("дані на 17:45");
 
     const never = await runScript(source, {
       family: "small",
@@ -215,8 +215,23 @@ describe("Scriptable widget", () => {
     const medium = await runScript(source, { family: "medium", now: NOW, respond: ok(data) });
     expect(texts(medium.widget)).toContain("Завтра: 04:00–08:00");
     const large = await runScript(source, { family: "large", now: NOW, respond: ok(data) });
-    expect(drawings(large.widget)).toHaveLength(2);
+    expect(texts(large.widget)).toContain("Завтра: 04:00–08:00");
     expect(texts(large.widget)).toContain("світло було 16 год. 12 хв.");
+  });
+
+  it("draws today in the bands of the site's «Графік» on the large widget", async () => {
+    const run = await runScript(source, { family: "large", now: NOW, respond: ok() });
+    const [day, ...rest] = drawings(run.widget);
+    expect(rest).toHaveLength(0);
+    // the plan's edges inside an hour, the real changes and «now»
+    for (const text of ["00:00", "03:30", "10:30", "14:30", "19:30", "23:00"]) {
+      expect(day, text).toContain(`>${text}</text>`);
+    }
+    expect(day).toContain(">11:36</text>");
+    expect(day).toContain(">13:08</text>");
+    expect(day).toContain(">зараз 17:45</text>");
+    // tomorrow's schedule is not out: nothing about it
+    expect(texts(run.widget).join(" ")).not.toContain("Завтра");
   });
 });
 

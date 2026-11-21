@@ -6,6 +6,7 @@ const SITE = "4u";
 const ORIGIN = "https://svitlo4u.info";
 
 const MINUTE = 60 * 1000;
+const HOUR = 60 * MINUTE;
 
 /** The site's colours (one dark theme): orange is light, blue is no light. */
 const C = {
@@ -26,13 +27,35 @@ const C = {
   stripes: new Color("#ff6b57", 0.3),
   future: new Color("#a3a5ad", 0.45),
   now: new Color("#f2efea"),
+  // the large widget's day, as on the site's «Графік»
+  bandHatch: new Color("#8fa3c8", 0.36),
+  bandFill: new Color("#6c7fa6", 0.2),
+  bandEdge: new Color("#8fa3c8", 0.6),
+  hour: new Color("#f2efea", 0.72),
+  mark: new Color("#f2efea", 0.8),
+  soft: new Color("#f2efea", 0.82),
+  hourLine: new Color("#ffffff", 0.1),
+  tick: new Color("#f2efea", 0.6),
 };
 
 /** Strips of a day: the plan on the upper lane, what really happened on the lower one. */
 const SMALL_STRIP = { width: 130, height: 18, radius: 6, padX: 5, plan: [3, 4], fact: [9.5, 5] };
 const MEDIUM_STRIP = { width: 310, height: 28, radius: 9, padX: 8, plan: [5, 6], fact: [14, 9] };
-const WIDE_STRIP = { width: 310, height: 32, radius: 10, padX: 9, plan: [6, 7], fact: [16, 10] };
-const PLAN_STRIP = { width: 310, height: 24, radius: 9, padX: 9, plan: [6, 12], fact: null };
+/**
+ * The large widget's day: four bands of six hours, each a row of change times, the fact line and
+ * the hour cells with the plan over them.
+ */
+const BAND_WIDTH = 310;
+
+/** The bands' geometry for a picture `height` tall: the cells take what the labels leave. */
+function bandShape(height) {
+  const gap = Math.round(height / 26);
+  const lineY = 13;
+  const lineH = 4;
+  const trackY = lineY + lineH + 4;
+  const trackH = (height - 3 * gap) / 4 - trackY;
+  return { lineY, lineH, trackY, trackH, height: trackY + trackH, gap };
+}
 
 // Times as in Kyiv, whatever the phone's zone (older iOS knows the zone as Europe/Kiev).
 const TZ = (() => {
@@ -273,6 +296,142 @@ function factPieces(start, end, actual, now) {
   return pieces;
 }
 
+/** Where light appeared or went, and «now»: the labels over the fact line. */
+function dayMarks(fact, now, start, end) {
+  const marks = [];
+  for (let i = 1; i < fact.length; i++) {
+    if (fact[i].kind !== fact[i - 1].kind)
+      marks.push({ at: fact[i].start, text: hhmm(fact[i].start) });
+  }
+  if (now >= start && now < end) marks.push({ at: now, text: `зараз ${hhmm(now)}`, now: true });
+  return marks;
+}
+
+/** As on the site: «now» always, the other labels where they do not run into one already kept. */
+function spacedMarks(marks, from, to) {
+  const box = (m) => {
+    const p = ((m.at - from) / (to - from)) * 100;
+    const w = m.now ? 20 : 10;
+    if (p > 80) return [p - w, p];
+    if (p < 12) return [p, p + w];
+    return [p - w / 2, p + w / 2];
+  };
+  const inside = marks.filter((m) => m.at >= from && m.at < to);
+  const kept = inside.filter((m) => m.now);
+  for (const m of inside.filter((x) => !x.now)) {
+    const [left, right] = box(m);
+    if (kept.every((k) => right + 2 <= box(k)[0] || box(k)[1] + 2 <= left)) kept.push(m);
+  }
+  return kept;
+}
+
+function drawMark(ctx, text, at, y, color) {
+  const p = (at / BAND_WIDTH) * 100;
+  const w = 90;
+  ctx.setFont(font(9, "semibold"));
+  ctx.setTextColor(color);
+  if (p > 80) {
+    ctx.setTextAlignedRight();
+    ctx.drawTextInRect(text, new Rect(at - w, y, w, 13));
+  } else if (p < 12) {
+    ctx.setTextAlignedLeft();
+    ctx.drawTextInRect(text, new Rect(at, y, w, 13));
+  } else {
+    ctx.setTextAlignedCenter();
+    ctx.drawTextInRect(text, new Rect(at - w / 2, y, w, 13));
+  }
+}
+
+/** «08:00», or the plan's edge when a window starts or ends inside the hour: «08:30». */
+function hourLabel(cellStart, hour, edges) {
+  const edge = edges.find((e) => e > cellStart && e < cellStart + HOUR);
+  const minutes = edge === undefined ? 0 : Math.round((edge - cellStart) / MINUTE);
+  return `${String(hour).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+/** Today as the site's «Графік» shows it: 00–06, 06–12, 12–18, 18–24. */
+function bands(day, actual, now, height) {
+  const W = BAND_WIDTH;
+  const B = bandShape(height);
+  const ctx = new DrawContext();
+  ctx.size = new Size(W, height);
+  ctx.opaque = false;
+  ctx.respectScreenScale = true;
+  const { start, end } = dayBounds(day);
+  const emergency = isEmergency(day);
+  const plan = day.segments.filter((s) => s.kind === "off");
+  const edges = plan.flatMap((s) => [s.start, s.end]);
+  const pastEnd = Math.min(Math.max(now, start), end);
+  const fact = pastEnd > start ? factPieces(start, pastEnd, actual, now) : [];
+  const marks = dayMarks(fact, now, start, end);
+
+  for (let q = 0; q < 4; q++) {
+    const from = start + q * 6 * HOUR;
+    const to = q === 3 ? end : from + 6 * HOUR;
+    const top = q * (B.height + B.gap);
+    const x = (t) => ((Math.min(Math.max(t, from), to) - from) / (to - from)) * W;
+    const lineY = top + B.lineY;
+    const trackY = top + B.trackY;
+
+    for (const m of spacedMarks(marks, from, to))
+      drawMark(ctx, m.text, x(m.at), top - 1, m.now ? C.text : C.mark);
+    // the fact line: what really happened so far, the rest of the band dashed
+    for (const p of fact) {
+      const a = Math.max(p.start, from);
+      const b = Math.min(p.end, to);
+      if (b <= a) continue;
+      const rect = new Rect(x(a) + 0.75, lineY, Math.max(0.5, x(b) - x(a) - 1.5), B.lineH);
+      fillRounded(ctx, rect, 2, p.kind === "on" ? C.fact : C.off);
+    }
+    if (now < to) {
+      const ahead = Math.max(now, from);
+      dashes(ctx, x(ahead) + (ahead > from ? 3 : 0), W, lineY + B.lineH / 2, C.future);
+    }
+    for (const m of marks) {
+      if (m.now || m.at < from || m.at >= to) continue;
+      ctx.setFillColor(C.tick);
+      ctx.fillRect(new Rect(x(m.at) - 0.5, top + 9, 1, lineY + B.lineH - (top + 9)));
+    }
+
+    // the cells: the hours under the plan's hatch
+    fillRounded(ctx, new Rect(0, trackY, W, B.trackH), 9, C.well);
+    if (emergency) hatch(ctx, new Rect(4.5, trackY, W - 9, B.trackH), C.stripes, 2.5, 9);
+    ctx.setFont(font(9.5));
+    ctx.setTextColor(C.hour);
+    ctx.setTextAlignedCenter();
+    for (let h = 0; h < 6; h++) {
+      const label = hourLabel(from + h * HOUR, q * 6 + h, edges);
+      ctx.drawTextInRect(label, new Rect((h / 6) * W, trackY + (B.trackH - 13) / 2, W / 6, 13));
+    }
+    for (const s of plan) {
+      const a = Math.max(s.start, from);
+      const b = Math.min(s.end, to);
+      if (b <= a) continue;
+      const rect = new Rect(x(a), trackY, x(b) - x(a), B.trackH);
+      if (emergency) {
+        strokeRounded(ctx, rect, 7, C.lastEdge, 1.5);
+      } else {
+        fillRounded(ctx, rect, 7, C.bandFill);
+        const inner = new Rect(
+          rect.x + 3.5,
+          rect.y + 1,
+          Math.max(0, rect.width - 7),
+          rect.height - 2,
+        );
+        hatch(ctx, inner, C.bandHatch, 1.3, 6.5);
+        strokeRounded(ctx, rect, 7, C.bandEdge, 1.2);
+      }
+    }
+    ctx.setFillColor(C.hourLine);
+    for (let h = 1; h < 6; h++) ctx.fillRect(new Rect((h / 6) * W - 0.5, trackY, 1, B.trackH));
+    if (now >= from && now < to) {
+      const nowHeight = trackY + B.trackH - lineY + 1;
+      fillRounded(ctx, new Rect(x(now) - 1, lineY - 1, 2, nowHeight), 1, C.now);
+    }
+  }
+  return ctx.getImage();
+}
+
 /** A day as on the site's «Зараз»: planned outages hatched, the fact under them, «now» across. */
 function strip(day, actual, now, shape) {
   const { width, height, radius, padX } = shape;
@@ -443,11 +602,11 @@ function totals(stack, day, size) {
   row.centerAlignContent();
   label(row, "●", size - 3, C.light);
   row.addSpacer(4);
-  label(row, `світло було ${duration(onMs)}`, size, C.text);
+  label(row, `світло було ${duration(onMs)}`, size, C.soft);
   row.addSpacer(size);
   label(row, "●", size - 3, C.off);
   row.addSpacer(4);
-  label(row, `не було ${duration(offMs)}`, size, C.text);
+  label(row, `не було ${duration(offMs)}`, size, C.soft);
   return true;
 }
 
@@ -469,44 +628,24 @@ function medium(w, v, site) {
   }
 }
 
+/** Today in the bands of the site's «Графік», its totals, tomorrow in words. */
 function large(w, v, site) {
-  header(w, v, 26, v.name);
-  w.addSpacer(16);
-  const block = w.addStack();
-  block.layoutVertically();
-  block.url = `${ORIGIN}/${site}#/schedule`;
+  header(w, v, 24, v.corner);
+  w.addSpacer(10);
   if (v.today) {
-    label(block, v.today.label, 12, C.muted, "semibold");
-    block.addSpacer(6);
-    picture(block, strip(v.today, v.actual, v.now, WIDE_STRIP));
-    hours(block);
+    const block = w.addStack();
+    block.layoutVertically();
+    block.url = `${ORIGIN}/${site}#/schedule`;
+    // the cells stretch down to the bottom; a line about tomorrow takes its room from them
+    picture(block, bands(v.today, v.actual, v.now, v.tomorrow ? 218 : 246));
     block.addSpacer(8);
     totals(block, v.today, 12);
   }
   if (v.tomorrow) {
-    block.addSpacer(18);
-    label(block, v.tomorrow.label, 12, C.muted, "semibold");
-    block.addSpacer(6);
-    const planned = v.tomorrow.segments.some((s) => s.kind === "off");
-    if (planned) {
-      picture(block, strip(v.tomorrow, [], v.now, PLAN_STRIP));
-      hours(block);
-    } else {
-      const box = block.addStack();
-      box.backgroundColor = C.well;
-      box.cornerRadius = 9;
-      box.setPadding(6, 10, 6, 10);
-      const text = tomorrowText(v.tomorrow).replace(/^Завтра:? /, "");
-      label(centered(box), text.charAt(0).toUpperCase() + text.slice(1), 12, C.muted);
-    }
+    w.addSpacer(5);
+    label(w, tomorrowText(v.tomorrow), 12, C.muted);
   }
   w.addSpacer();
-  label(
-    w,
-    v.fresh ? `Оновлено о ${hhmm(v.updated)}` : `Немає зв'язку · дані на ${hhmm(v.updated)}`,
-    10,
-    v.fresh ? C.muted : C.warn,
-  );
 }
 
 // Lock screen: the system tints these, so only the shape and the words matter.
