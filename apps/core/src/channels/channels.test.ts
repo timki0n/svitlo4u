@@ -14,7 +14,7 @@ import { ManualClock } from "../runtime/clock.ts";
 import type { ScheduleImages } from "../services/images.ts";
 import { powerLabel } from "./messages.ts";
 import { PLUG_SILENT_ALERT_MS, STARTUP_ALERT_DELAY_MS, ZIGBEE_START_ALERT_MS } from "./notifier.ts";
-import { SEND_HOLD_MAX_MS, webhookSecret } from "./telegram.ts";
+import { PHOTO_ATTEMPTS, SEND_HOLD_MAX_MS, webhookSecret } from "./telegram.ts";
 
 const LIVE = readFileSync(
   fileURLToPath(
@@ -946,6 +946,65 @@ describe("schedule pictures", () => {
     await flush(c);
     expect(asked).toEqual(["4u/tomorrow", "4u/today"]);
     expect(photos(tg, -1001)[1]?.payload.photo).toBe("PHOTO-1");
+  });
+
+  it("a new picture is uploaded once: the other chats get its file_id", async () => {
+    const tg = fakeTelegram();
+    tg.respondWith(photoReply);
+    const { core: c } = await start(LIVE_CHATS, { tg, images: fakeImages(png()).images });
+    c.bus.emit("schedule.notification", notice("tomorrow_published", "📅 Графік на завтра"));
+    await flush(c);
+    const sent = tg.calls.filter((call) => call.method === "sendPhoto").map((call) => call.payload);
+    expect(sent).toHaveLength(2);
+    expect(sent.filter((p) => typeof p.photo !== "string")).toHaveLength(1);
+    expect(sent.filter((p) => p.photo === "PHOTO-1")).toHaveLength(1);
+  });
+
+  it("a picture Telegram fails to process: the next chat uploads it, the first gets its file_id", async () => {
+    const tg = fakeTelegram();
+    let uploads = 0;
+    tg.respondWith((call) => {
+      if (call.method !== "sendPhoto") return undefined;
+      if (typeof call.payload.photo !== "string" && uploads++ === 0) {
+        return { ok: false, error_code: 400, description: "Bad Request: IMAGE_PROCESS_FAILED" };
+      }
+      return photoReply(call);
+    });
+    const { core: c } = await start(LIVE_CHATS, { tg, images: fakeImages(png()).images });
+    c.bus.emit("schedule.notification", notice("tomorrow_published", "📅 Графік на завтра"));
+    await flush(c);
+    // the other chat's success sends the waiting retry at once (the outbox's rule)
+    expect(c.store.outbox.pending()).toEqual([]);
+    const sent = tg.calls.filter((call) => call.method === "sendPhoto").map((call) => call.payload);
+    // the first upload refused, the second one taken, the retry by its file_id
+    expect(sent.map((p) => (typeof p.photo === "string" ? p.photo : "upload"))).toEqual([
+      "upload",
+      "upload",
+      "PHOTO-1",
+    ]);
+    expect(tg.sent().filter((m) => m.payload.chat_id !== ADMIN)).toHaveLength(0);
+  });
+
+  it("a picture Telegram keeps refusing: three tries, then the text alone", async () => {
+    const tg = fakeTelegram();
+    tg.respondWith((call) =>
+      call.method === "sendPhoto"
+        ? { ok: false, error_code: 400, description: "Bad Request: IMAGE_PROCESS_FAILED" }
+        : undefined,
+    );
+    const { core: c, clock } = await start(LIVE_CHATS, { tg, images: fakeImages(png()).images });
+    c.bus.emit("schedule.notification", notice("tomorrow_published", "📅 Графік на завтра"));
+    await flush(c);
+    clock.advanceBy(5_000);
+    await flush(c);
+    expect(tg.sentTo(-1001)).toHaveLength(0);
+    clock.advanceBy(10_000);
+    await flush(c);
+    for (const chat of [-1001, -1002]) {
+      expect(photos(tg, chat)).toHaveLength(PHOTO_ATTEMPTS);
+      expect(tg.sentTo(chat).map((m) => m.payload.text)).toEqual(["📅 Графік на завтра"]);
+    }
+    expect(c.store.outbox.pending()).toEqual([]);
   });
 
   it("a text too long for a caption follows the picture; no picture → text alone", async () => {

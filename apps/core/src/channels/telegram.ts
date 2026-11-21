@@ -142,6 +142,28 @@ const COMMANDS = [
   { command: "start", description: "Про бота" },
 ];
 
+/**
+ * Telegram could not take a picture: its own processing (IMAGE_PROCESS_FAILED comes now and then
+ * for a good PNG that goes through a moment later), the picture's sizes, a stale file_id.
+ */
+const PHOTO_REFUSED = [
+  "image_process_failed",
+  "photo_invalid_dimensions",
+  "photo_save_file_invalid",
+  "photo_ext_invalid",
+  "wrong file identifier",
+  "wrong remote file identifier",
+  "file_reference",
+];
+/** Tries with the picture (now, +5 s, +15 s) before the text goes alone. */
+export const PHOTO_ATTEMPTS = 3;
+
+function photoRefused(error: unknown): error is GrammyError {
+  if (!(error instanceof GrammyError) || error.error_code !== 400) return false;
+  const description = error.description.toLowerCase();
+  return PHOTO_REFUSED.some((marker) => description.includes(marker));
+}
+
 const DEAD_CHAT = [
   "chat not found",
   "user is deactivated",
@@ -284,6 +306,8 @@ export class TelegramChannel {
   private readonly cleanups = new Map<NodeJS.Timeout, () => Promise<unknown>>();
   /** Uploaded pictures: file → Telegram file_id, so other chats get it without a new upload. */
   private readonly photoIds = new Map<string, string>();
+  /** Pictures being uploaded now: file → its file_id once there (null: the upload failed). */
+  private readonly uploads = new Map<string, Promise<string | null>>();
   private started = false;
   private stopped = false;
   /** Until then sends wait for the bot to connect; later they go anyway. */
@@ -484,27 +508,11 @@ export class TelegramChannel {
       text += `\n\n${latencyFooter(payload.latency.eventAt, payload.latency.detectedAt, this.deps.clock.now())}`;
     }
     if (payload.photo) {
-      const known = this.photoIds.get(payload.photo);
-      if (known || existsSync(payload.photo)) {
-        try {
-          const message = await bot.api.sendPhoto(
-            target.chatId,
-            known ?? new InputFile(payload.photo),
-            {
-              ...(text ? { caption: text, parse_mode: "HTML" as const } : {}),
-              ...(target.threadId !== null ? { message_thread_id: target.threadId } : {}),
-              ...(payload.silent ? { disable_notification: true } : {}),
-            },
-          );
-          const fileId = message.photo?.at(-1)?.file_id;
-          if (!known && fileId) this.rememberPhoto(payload.photo, fileId);
-          return { status: "sent" };
-        } catch (error) {
-          return this.classify(item, target, error);
-        }
-      }
-      // The picture is gone (old files are cleaned up): the text alone still goes out.
-      if (!text) return { status: "failed", error: "picture file is gone", quiet: true };
+      const result = await this.sendPhoto(bot, item, target, payload.photo, text, payload.silent);
+      if (result !== "text") return result;
+      // No picture to send (old files are cleaned up, or Telegram kept refusing it): the text
+      // alone still goes out.
+      if (!text) return { status: "failed", error: "no picture to send", quiet: true };
     }
     try {
       await bot.api.sendMessage(target.chatId, text, {
@@ -526,6 +534,59 @@ export class TelegramChannel {
       return this.classify(item, target, error);
     }
   };
+
+  /**
+   * The picture with the text as its caption, or "text": there is no picture to send (the file is
+   * gone, or Telegram kept refusing it) and the text goes alone. A new picture is uploaded once:
+   * the other chats wait for its file_id instead of uploading the same file at the same moment.
+   */
+  private async sendPhoto(
+    bot: Bot,
+    item: OutboxItem,
+    target: ChatTarget,
+    file: string,
+    text: string,
+    silent: boolean | undefined,
+  ): Promise<DeliveryResult | "text"> {
+    let known = this.photoIds.get(file);
+    // checked again after each wait: a failed upload lets the next chat try it
+    for (
+      let pending = this.uploads.get(file);
+      !known && pending;
+      pending = this.uploads.get(file)
+    ) {
+      known = (await pending) ?? undefined;
+    }
+    if (!known && !existsSync(file)) return "text";
+    const upload = known ? null : Promise.withResolvers<string | null>();
+    if (upload) this.uploads.set(file, upload.promise);
+    try {
+      const message = await bot.api.sendPhoto(target.chatId, known ?? new InputFile(file), {
+        ...(text ? { caption: text, parse_mode: "HTML" as const } : {}),
+        ...(target.threadId !== null ? { message_thread_id: target.threadId } : {}),
+        ...(silent ? { disable_notification: true } : {}),
+      });
+      const fileId = message.photo?.at(-1)?.file_id ?? null;
+      if (!known && fileId) this.rememberPhoto(file, fileId);
+      upload?.resolve(fileId);
+      return { status: "sent" };
+    } catch (error) {
+      upload?.resolve(null);
+      if (!photoRefused(error)) return this.classify(item, target, error);
+      const description = `${error.error_code} ${error.description}`;
+      if (known && /file.?(identifier|reference)/i.test(error.description)) {
+        this.photoIds.delete(file);
+      }
+      if (item.attempts + 1 < PHOTO_ATTEMPTS) return { status: "retry", error: description };
+      this.deps.log.warn(
+        { site: item.siteId, target: item.target, error: description },
+        "picture refused, the text goes alone",
+      );
+      return "text";
+    } finally {
+      if (upload && this.uploads.get(file) === upload.promise) this.uploads.delete(file);
+    }
+  }
 
   private rememberPhoto(file: string, fileId: string): void {
     this.photoIds.set(file, fileId);
