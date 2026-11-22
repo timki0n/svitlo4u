@@ -44,6 +44,8 @@ export class HubPowerService {
   private latest: HubReportEvent | null = null;
   /** The last reading of the hub's Wi-Fi put into its history: when, and what it said. */
   private health: { t: number; key: string } | null = null;
+  /** The boot already put into the hub's boots (this core run). */
+  private bootKept: string | null = null;
 
   constructor(deps: HubPowerServiceDeps) {
     this.deps = deps;
@@ -90,6 +92,8 @@ export class HubPowerService {
     this.noticeFirmware(event);
     this.noticeLinkGaps(event);
     this.keepHealth(event);
+    this.keepBoot(event);
+    this.keepSilences(event);
     this.latest = event;
     state.update(this.siteId, {
       lastEspAt: event.t,
@@ -141,6 +145,50 @@ export class HubPowerService {
       plugRssi: whole(event.rssiAvg ?? event.rssi),
       plugGaps: event.linkGaps,
     });
+  }
+
+  /** A boot the core has not seen yet: when it began, why, and the hub's own word on it. */
+  private keepBoot(event: HubReportEvent): void {
+    if (this.bootKept === event.boot) return;
+    this.bootKept = event.boot;
+    this.deps.store.hubBoots.add({
+      hubId: this.deps.hub.id,
+      boot: event.boot,
+      t: event.t,
+      startedAt: event.t - Math.round(event.up * 1000),
+      rst: event.rst,
+      why: event.why,
+      fw: event.fw,
+    });
+  }
+
+  /**
+   * The hub's journal of the plug's silences, at the times the hub measured. The hub repeats an
+   * entry until a report with it is acknowledged; the table keeps each once.
+   */
+  private keepSilences(event: HubReportEvent): void {
+    const ms = (s: number | null) => (s === null ? null : Math.round(s * 1000));
+    for (const s of event.silences) {
+      this.deps.store.hubSilences.add({
+        hubId: this.deps.hub.id,
+        boot: event.boot,
+        upMs: Math.round(s.up * 1000),
+        t: event.t - Math.round((event.up - s.up) * 1000),
+        lenMs: Math.round(s.len * 1000),
+        readsOk: s.readsOk,
+        readsFailed: s.readsFailed,
+        heldMs: Math.round(s.held * 1000),
+        reports: s.reports,
+        conns: s.conns,
+        drops: s.drops,
+        sinceReportMs: ms(s.sinceReport),
+        endSinceReportMs: ms(s.endSinceReport),
+        end: s.end,
+        off: s.off,
+        saved: s.saved,
+        plugRssi: s.rssi === null ? null : Math.round(s.rssi),
+      });
+    }
   }
 
   /** The plug fell silent for a while but the hub judged it the radio, not the mains. */

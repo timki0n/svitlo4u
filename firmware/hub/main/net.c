@@ -323,6 +323,8 @@ void net_wifi_info(wifi_info_t *out) {
     out->last_down_ms = last_down_ms;
 }
 
+uint32_t net_wifi_drops(void) { return drops; }
+
 bool net_wifi_sleep(bool on) { return esp_wifi_set_ps(on ? WIFI_PS_MIN_MODEM : WIFI_PS_NONE) == ESP_OK; }
 
 // ---------------------------------------------------------------------------------------------

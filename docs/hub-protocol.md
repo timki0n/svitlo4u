@@ -9,14 +9,21 @@ plug's last answer; the first answer after that means it is back. The hub decide
 tells the core when it happened by its own clock (the last answer before the silence, the first
 one after it), so the core gets exact times even when the internet was down in between.
 
-The alert delay follows the plug's signal at the hub (averaged over about a minute): 15 s from
-−70 dBm, 18 s to −78, 22 s below. A shorter silence is a problem of the link, not
+The alert delay follows the plug's signal at the hub (averaged over about a minute): 17 s from
+−70 dBm, 20 s to −78, 24 s below. A shorter silence is a problem of the link, not
 the light: the radio link drops for up to ~15 s now and then (a router renews its links every
 15 s; at −79 dBm two such gaps came as false «off», 2026-11-16). They are counted (`plug.gaps`)
 and tell the admin. A blink of the power shorter than the delay looks the same (the TS011F does
 not announce itself when it starts again, and needs 3–4 s to: a 5 s unplug is ~8.4 s of silence)
 and is not an outage on purpose. The time in the notice stays exact; the delay is only how soon
 it comes.
+
+The last 2 s of the delay are a look of their own (0.2.6): the hub sends a plain report — what an
+alert would do to the shared radio anyway — and reads the plug every 0.4 s. Before that the
+delays were 15/18/22 s, and three false «off» in a row (delays of 18, 22 and 15 s; the last one
+on 2026-11-20 at −36 dBm, a metre from the router) had the plug answering 0.2–0.9 s after the
+word was out. Why the plug goes quiet with the mains on is not known yet: the hub journals every
+silence of 3 s or more (`silences`) to find out.
 
 The hub also tells the plug to come on whenever the power returns (Tuya `0x8002` and ZCL
 `StartUpOnOff` of its On/Off cluster) and turns it on after its own start and after an outage.
@@ -38,8 +45,9 @@ back within milliseconds.
   "boot": "9f3a1c2e",
   "seq": 17,
   "up": 1234.567,
-  "rst": "poweron",
-  "fw": "0.1.0",
+  "rst": "sw",
+  "why": "Wi-Fi went silent",
+  "fw": "0.2.6",
   "plug": {
     "paired": true,
     "mains": "on",
@@ -48,10 +56,10 @@ back within milliseconds.
     "rssi": -61,
     "gaps": 0,
     "longestGap": 0,
-    "delay": 15,
+    "delay": 17,
     "rssiAvg": -62
   },
-  "events": [{ "up": 1200.153, "mains": "off" }, { "up": 1210.882, "mains": "on" }],
+  "events": [{ "up": -310.4, "mains": "off" }, { "up": 1210.882, "mains": "on" }],
   "wifi": {
     "rssi": -68,
     "ch": 8,
@@ -62,7 +70,25 @@ back within milliseconds.
     "lost": 0,
     "redone": 5
   },
-  "ota": { "state": "idle", "version": null, "error": null, "rejected": null }
+  "ota": { "state": "idle", "version": null, "error": null, "rejected": null },
+  "silences": [
+    {
+      "up": 1100.4,
+      "len": 15.22,
+      "ok": 3,
+      "fail": 12,
+      "held": 0.0,
+      "reports": 1,
+      "conns": 0,
+      "drops": 0,
+      "sinceReport": 2.1,
+      "endSinceReport": 0.2,
+      "end": "read",
+      "off": false,
+      "saved": true,
+      "rssi": -36
+    }
+  ]
 }
 ```
 
@@ -74,6 +100,7 @@ back within milliseconds.
 | `seq`             | request counter, starts at 0 after boot, +1 per request                                |
 | `up`              | seconds since boot, with milliseconds, when the request was built                      |
 | `rst`             | reset reason of this boot, as in the ESP protocol (`poweron`, `brownout`, `sw`, …)     |
+| `why`             | 0.2.6+, only when the hub restarted itself: its word on it (see Restarts)              |
 | `fw`              | firmware version                                                                       |
 | `plug.paired`     | a plug is paired                                                                       |
 | `plug.mains`      | `on` (plug answers), `off` (plug silent) or `unknown` (not decided yet after boot)     |
@@ -85,6 +112,7 @@ back within milliseconds.
 | `plug.delay`      | the alert delay now, s (follows the signal)                                            |
 | `plug.rssiAvg`    | the plug's signal averaged over about a minute, dBm, `null` if none                    |
 | `events`          | mains changes the core has not acknowledged yet, oldest first, by hub uptime (s)       |
+| `events[].up`     | negative (0.2.6+): that long before this boot — the event outlived a restart           |
 | `wifi.rssi`       | the router's signal at the hub, dBm (firmware 0.2.5+; the whole `wifi` is optional)    |
 | `wifi.ch`         | the router's channel                                                                   |
 | `wifi.drops`      | times a working Wi-Fi was lost since the boot                                          |
@@ -97,6 +125,25 @@ back within milliseconds.
 | `ota.version`     | the version being downloaded / ready / failed, else `null`                             |
 | `ota.error`       | why the last attempt failed (`http 403`, `sha256`, `version`, …), else `null`          |
 | `ota.rejected`    | a version that did not confirm itself and was rolled back, else `null`                 |
+| `silences`        | 0.2.6+: the plug's silences of 3 s and more not acknowledged yet (at most 6 a request) |
+
+One entry of `silences` (all of it is diagnostics; the mains verdict does not depend on it):
+
+| Field            | Meaning                                                                               |
+| ---------------- | ------------------------------------------------------------------------------------- |
+| `up`             | the plug's last answer before the silence, hub uptime (s)                             |
+| `len`            | how long it lasted, s (until the plug's next message)                                 |
+| `ok`, `fail`     | reads within it that the radio delivered to the plug / did not                        |
+| `held`           | of it, the time Wi-Fi had the radio (a connect, the router's check), s                |
+| `reports`        | requests to the core started within it                                                |
+| `conns`          | those of them that had to open a new connection                                       |
+| `drops`          | Wi-Fi drops within it                                                                 |
+| `sinceReport`    | from the start of the last request before it to its start, s (`null`: none yet)       |
+| `endSinceReport` | from the start of the last request to its end, s                                      |
+| `end`            | the plug's message that ended it: `read` (an answer), `report`, `default`, `announce` |
+| `off`            | it was told as an outage                                                              |
+| `saved`          | it outlasted the delay and the plug answered in the last look                         |
+| `rssi`           | the signal of the message that ended it, dBm                                          |
 
 Times are hub uptimes, not clock times: the core converts them as
 `receivedAt − (up − event.up) × 1000`. No clock sync is needed and an internet gap does not shift
@@ -104,7 +151,26 @@ anything.
 
 The hub sends a request every **30 s**, at once after a mains change and when its Wi-Fi is back,
 and keeps resending every few seconds (3 s, then slower up to 30 s) while requests fail. It drops
-the events up to the acknowledged `seq`.
+the events and the silences up to the acknowledged `seq`.
+
+## Restarts
+
+The hub restarts itself when its watchdog finds it stuck (`main/watch.c`), for an update and to
+switch between the setup page and normal work. Since 0.2.6:
+
+- the events not yet acknowledged outlive that (RTC memory; a power cut clears it). While any wait,
+  the hub notes its uptime against the RTC clock every second; that clock runs through a restart,
+  so the next boot knows how long ago each event was and sends it with a negative `up`. The core
+  applies such an event only if it is later than the start of the state it already has (it may
+  have got it from a request whose answer was lost). A core that refuses the request with `400`
+  (one from before 0.2.6) makes the hub drop them;
+- `why` says what restarted it: one of the watchdog's rules (`the event loop stopped`,
+  `the Wi-Fi reconnect hung`, `the Wi-Fi driver stopped answering`,
+  `no Wi-Fi events after a reconnect`, `Wi-Fi went silent`), `update`, `setup page`, `pairing`,
+  `back to work`, `console`. A crash says nothing: `rst` is `panic` or `wdt` then.
+
+Measured need (2026-11-20): the home's internet was down for 2.5 hours, the hub restarted itself
+85 minutes in, and nothing kept why; an outage in that time would have been lost with the restart.
 
 The connection is kept between requests. The internet drops such connections whenever it likes
 (measured 2026-11-18 at a home with a busy line: several times an hour, and a PC next to the hub
@@ -151,6 +217,9 @@ has already moved past (replays).
   (approximate), and came back when the plug first answered after the boot.
 - Other reset reasons (`sw`, `panic`, `wdt`, …) are the hub restarting itself: nothing about the
   mains.
+- Every boot goes to `hub_boots` (when it began, `rst`, `why`, the firmware) and every entry of
+  `silences` to `hub_silences`, once each: the record to read when a hub restarted or told an
+  outage that was not one.
 
 ## Updates
 

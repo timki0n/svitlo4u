@@ -15,7 +15,9 @@
 //  - a reconnect that hangs (a stuck Wi-Fi driver) or brings no Wi-Fi event in a minute → restart;
 //  - Wi-Fi not connected and not a single Wi-Fi event for 5 minutes (retries come every ≤ 30 s and
 //    each ends in an event) → restart.
-// A restart loses the events not yet sent, so it is only for a hub that cannot send them anyway.
+// The events not yet sent outlive a restart (zb.c keeps them in RTC memory), and the next boot
+// tells the core why the hub restarted itself (the report's `why`): on 2026-11-20 it did so 85
+// minutes into a morning without internet and nothing recorded which of the rules above it was.
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -53,11 +55,13 @@ static volatile uint32_t kick_started_at, kicks;
 static volatile uint32_t probe_at, router_at;
 static volatile bool has_router;
 
-// Why the watchdog restarted the hub, kept in RTC memory over the restart.
+// Why the hub restarted itself (the watchdog, an update, the setup page), kept in RTC memory over
+// the restart.
 #define NOTE_MAGIC 0x57A7C4EDu
 static RTC_NOINIT_ATTR uint32_t note_magic;
 static RTC_NOINIT_ATTR char note[48];
 static char last_restart[48];
+static bool noted; // this boot has said why it will restart
 
 /** a is later than b (hub_ms() wraps after 49 days). */
 static bool later(uint32_t a, uint32_t b) { return (int32_t)(a - b) > 0; }
@@ -70,10 +74,18 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data) {
     }
 }
 
-void watch_restart(const char *why) {
-    ESP_LOGE(TAG, "restarting: %s", why);
+void hub_note_restart(const char *why) {
+    if (noted) return;
+    noted = true;
     strlcpy(note, why, sizeof(note));
     note_magic = NOTE_MAGIC;
+}
+
+const char *watch_last_restart(void) { return last_restart; }
+
+void watch_restart(const char *why) {
+    ESP_LOGE(TAG, "restarting: %s", why);
+    hub_note_restart(why);
     vTaskDelay(pdMS_TO_TICKS(300)); // let the log out
     // Not esp_restart(): its shutdown handlers stop Wi-Fi, and that waits for the event loop, so a
     // stuck loop hangs the restart too (seen in `test loop-stuck`). Skip them, like a panic does.
@@ -167,8 +179,12 @@ static void watch_task(void *arg) {
 
 void watch_start(bool normal) {
     if (note_magic == NOTE_MAGIC && esp_reset_reason() == ESP_RST_SW) {
+        note[sizeof(note) - 1] = 0;
         strlcpy(last_restart, note, sizeof(last_restart));
-        ESP_LOGW(TAG, "the watchdog restarted the hub: %s", last_restart);
+        // It goes into the report's JSON as it is: plain text only.
+        for (char *c = last_restart; *c; c++)
+            if (*c < 0x20 || *c > 0x7e || *c == '"' || *c == '\\') *c = '?';
+        ESP_LOGW(TAG, "the hub restarted itself: %s", last_restart);
     }
     note_magic = 0;
     loop_seen_at = probe_at = hub_ms();

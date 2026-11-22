@@ -57,6 +57,79 @@ describe("hub verifier", () => {
     } satisfies Partial<HubReportEvent>);
   });
 
+  it("takes an event from before the boot, why the hub restarted and the plug's silences (0.2.6)", () => {
+    const full = {
+      up: 12.5,
+      len: 15.22,
+      ok: 3,
+      fail: 12,
+      held: 0,
+      reports: 1,
+      conns: 0,
+      drops: 0,
+      sinceReport: 2.1,
+      endSinceReport: 0.2,
+      end: "read",
+      off: false,
+      saved: true,
+      rssi: -36,
+    };
+    const raw = body({
+      rst: "sw",
+      why: "Wi-Fi went silent",
+      events: [{ up: -179.9, mains: "off" }],
+      silences: [
+        full,
+        { up: 99, len: 4, end: "read" }, // after the report itself: skipped
+        { up: 20, len: 6.5, end: "sneeze" }, // an end the core does not know: skipped
+        { up: 21, len: 6.5, end: "announce", sinceReport: null, off: true },
+      ],
+    });
+    const result = verify(new HubVerifier([device]), raw);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.event.why).toBe("Wi-Fi went silent");
+    expect(result.event.events).toEqual([{ up: -179.9, mains: "off" }]);
+    expect(result.event.silences).toEqual([
+      {
+        up: 12.5,
+        len: 15.22,
+        readsOk: 3,
+        readsFailed: 12,
+        held: 0,
+        reports: 1,
+        conns: 0,
+        drops: 0,
+        sinceReport: 2.1,
+        endSinceReport: 0.2,
+        end: "read",
+        off: false,
+        saved: true,
+        rssi: -36,
+      },
+      {
+        up: 21,
+        len: 6.5,
+        readsOk: 0,
+        readsFailed: 0,
+        held: 0,
+        reports: 0,
+        conns: 0,
+        drops: 0,
+        sinceReport: null,
+        endSinceReport: null,
+        end: "announce",
+        off: true,
+        saved: false,
+        rssi: null,
+      },
+    ]);
+
+    // firmware before 0.2.6 says none of it; a strange journal costs nothing
+    const old = verify(new HubVerifier([device]), body({ silences: "many" }));
+    expect(old.ok && [old.event.why, old.event.silences]).toEqual([null, []]);
+  });
+
   it("rejects a wrong or missing signature and unknown devices", () => {
     const v = new HubVerifier([device]);
     const raw = body();
@@ -88,6 +161,7 @@ describe("hub verifier", () => {
       body({ seq: -1 }),
       body({ plug: { mains: "maybe" } }),
       body({ events: [{ up: 99, mains: "off" }] }), // after the report itself
+      body({ events: [{ up: -3e6, mains: "off" }] }), // over a month before the boot
       body({ events: [{ up: 1, mains: "dim" }] }),
       "[1,2]",
     ]) {

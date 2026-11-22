@@ -1,10 +1,13 @@
 // Zigbee: a coordinator with one mains-powered plug. Every second the hub reads the plug's
-// voltage; any answer means the plug — so the mains — is alive, silence for 3 s means the mains is
-// gone. The verdict and the moments it changed (by hub uptime) go to the core (report.c).
+// voltage; any answer means the plug — so the mains — is alive, a silence of the alert delay means
+// the mains is gone. The verdict and the moments it changed (by hub uptime) go to the core
+// (report.c), and so does every silence of 3 s or more, with what the radio was doing meanwhile.
 #include <inttypes.h>
 #include <string.h>
 
+#include "esp_attr.h"
 #include "esp_log.h"
+#include "esp_rtc_time.h"
 #include "esp_zigbee.h"
 #include "ezbee/zha.h"
 #include "freertos/FreeRTOS.h"
@@ -23,8 +26,14 @@ static const char *TAG = "zb";
 // does not announce itself when it starts again — and is not counted as an outage on purpose.
 // A plug that does announce makes it a cut. The delay follows the plug's signal (its average):
 // gaps come with a weak link.
+// The last 2 s of the delay are a look of their own (0.2.6): the hub sends a plain report and reads
+// the plug more often. Three false «off» in a row (delays of 18, 22 and 15 s; the last at -36 dBm
+// beside the router, 2026-11-20) had the plug answering 0.2–0.9 s after the word was out.
 #define SUSPECT_MS 5000
 #define CONFIRM_MAX_MS 22000
+#define RECHECK_MS 2000
+#define RECHECK_READ_MS 400
+#define JOURNAL_MS 3000          // a silence this long goes to the core's journal
 #define ANNOUNCE_GRACE_MS 3000   // the plug's announce may come just after its first answer
 #define UNKNOWN_TO_OFF_MS 10000  // after a boot: never answered this long → off (since unknown)
 #define SCALE_EVERY_MS (10 * 60 * 1000)
@@ -67,6 +76,7 @@ static uint16_t v_mult = 1, v_div = 1;
 static volatile uint32_t sent_ok, sent_failed; // radio-level results of the reads to the plug
 // A silence being judged, and the last one that ended without the plug rebooting.
 static bool suspect;
+static volatile bool recheck; // the delay is out: the last look before «off»
 static uint32_t gap_from_ms;
 static bool gap_pending;
 static uint32_t gap_end_ms, gap_start_ms;
@@ -74,7 +84,7 @@ static volatile uint32_t link_gaps, longest_gap_ms;
 static float rssi_avg; // the plug's signal, averaged over about a minute of answers
 static bool has_rssi_avg;
 
-/** How long the plug must be silent to call it an outage: shorter when it is heard well. */
+/** How long the plug must be silent before the last look: shorter when it is heard well. */
 static uint32_t confirm_ms(void) {
     if (!has_rssi_avg) return CONFIRM_MAX_MS;
     if (rssi_avg >= -70) return 15000; // 10 s at ≥ -60 dBm was too eager (2026-11-17)
@@ -83,34 +93,187 @@ static uint32_t confirm_ms(void) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Events waiting for the core
+// Events waiting for the core. They live in memory that a restart keeps (a power cut does not):
+// the hub restarts itself exactly when it cannot reach the core, with the events of that time
+// unsent (2026-11-20: 85 minutes into a morning without internet). While any wait, the hub notes
+// its uptime against the RTC clock every second — that clock runs through a restart — so the next
+// boot knows how long ago each one was and tells it with a negative `up`.
 
-static mains_event_t events[HUB_MAX_EVENTS];
-static int events_n;
+#define KEPT_MAGIC 0x45564e32u
+#define CARRY_MAX_S (6 * 3600) // a restart takes seconds; hours mean the note cannot be trusted
+
+typedef struct {
+    uint32_t magic, sum; // sum: of everything after it
+    int32_t n;
+    mains_event_t ev[HUB_MAX_EVENTS];
+    double beat_up;       // hub uptime at the last note, s
+    uint64_t beat_rtc_us; // the RTC clock then
+} kept_t;
+static RTC_NOINIT_ATTR kept_t kept;
+static bool kept_ready; // looked at after this boot: before that it may hold anything
+
+static uint32_t kept_sum(void) {
+    const uint8_t *p = (const uint8_t *)&kept.n, *end = (const uint8_t *)(&kept + 1);
+    uint32_t h = 2166136261u;
+    for (; p < end; p++) h = (h ^ *p) * 16777619u;
+    return h;
+}
+
+/** Under the lock, after any change: the uptime against the RTC clock, and the sum. */
+static void kept_seal(double up, uint64_t rtc_us) {
+    kept.beat_up = up;
+    kept.beat_rtc_us = rtc_us;
+    kept.magic = KEPT_MAGIC;
+    kept.sum = kept_sum();
+}
+
+/** At the start: the events the previous boot left unsent, if a restart (not a power cut) ended it. */
+static int events_restore(void) {
+    uint64_t rtc = esp_rtc_get_time_us();
+    double now = hub_up();
+    int carried = 0;
+    bool whole = kept.magic == KEPT_MAGIC && kept.sum == kept_sum() && kept.n >= 0 && kept.n <= HUB_MAX_EVENTS;
+    if (whole && kept.n > 0) {
+        double gap = rtc >= kept.beat_rtc_us ? (rtc - kept.beat_rtc_us) / 1e6 : -1;
+        if (gap >= 0 && gap < CARRY_MAX_S) {
+            for (int i = 0; i < kept.n; i++) kept.ev[i].up = now - (kept.beat_up - kept.ev[i].up) - gap;
+            carried = kept.n;
+            ESP_LOGW(TAG, "%d events from before the restart (%.1f s ago and earlier) still go to the core", carried,
+                     now - kept.ev[carried - 1].up);
+        } else {
+            ESP_LOGW(TAG, "%d events from before the restart are lost: the RTC clock does not say when", (int)kept.n);
+        }
+    }
+    if (!carried) memset(&kept, 0, sizeof(kept));
+    kept_seal(now, rtc);
+    kept_ready = true;
+    return carried;
+}
 
 void events_push(double up, bool on) {
+    if (!kept_ready) return;
+    uint64_t rtc = esp_rtc_get_time_us();
+    double now = hub_up();
     portENTER_CRITICAL(&lock);
-    if (events_n == HUB_MAX_EVENTS) {
-        memmove(events, events + 1, sizeof(events[0]) * (HUB_MAX_EVENTS - 1));
-        events_n--;
+    if (kept.n == HUB_MAX_EVENTS) {
+        memmove(kept.ev, kept.ev + 1, sizeof(kept.ev[0]) * (HUB_MAX_EVENTS - 1));
+        kept.n--;
     }
-    events[events_n++] = (mains_event_t){.up = up, .on = on};
+    kept.ev[kept.n++] = (mains_event_t){.up = up, .on = on};
+    kept_seal(now, rtc);
     portEXIT_CRITICAL(&lock);
 }
 
 int events_peek(mains_event_t *out, int max) {
+    if (!kept_ready) return 0; // the setup mode: the memory was not looked at
     portENTER_CRITICAL(&lock);
-    int n = events_n < max ? events_n : max;
-    memcpy(out, events, sizeof(events[0]) * n);
+    int n = kept.n < max ? kept.n : max;
+    memcpy(out, kept.ev, sizeof(kept.ev[0]) * n);
     portEXIT_CRITICAL(&lock);
     return n;
 }
 
 void events_drop(int n) {
+    if (!kept_ready || n <= 0) return;
     portENTER_CRITICAL(&lock);
-    if (n > events_n) n = events_n;
-    memmove(events, events + n, sizeof(events[0]) * (events_n - n));
-    events_n -= n;
+    if (n > kept.n) n = kept.n;
+    memmove(kept.ev, kept.ev + n, sizeof(kept.ev[0]) * (kept.n - n));
+    kept.n -= n;
+    kept_seal(kept.beat_up, kept.beat_rtc_us);
+    portEXIT_CRITICAL(&lock);
+}
+
+int events_drop_carried(void) {
+    if (!kept_ready) return 0;
+    portENTER_CRITICAL(&lock);
+    int left = 0, dropped = 0;
+    for (int i = 0; i < kept.n; i++) {
+        if (kept.ev[i].up < 0)
+            dropped++;
+        else
+            kept.ev[left++] = kept.ev[i];
+    }
+    kept.n = left;
+    if (dropped) kept_seal(kept.beat_up, kept.beat_rtc_us);
+    portEXIT_CRITICAL(&lock);
+    return dropped;
+}
+
+/** Every second while events wait: where the hub's uptime stands against the RTC clock. */
+static void events_beat(void) {
+    if (!kept_ready || kept.n == 0) return;
+    uint64_t rtc = esp_rtc_get_time_us();
+    double now = hub_up();
+    portENTER_CRITICAL(&lock);
+    kept_seal(now, rtc);
+    portEXIT_CRITICAL(&lock);
+}
+
+// ---------------------------------------------------------------------------------------------
+// The journal of the plug's silences, for the core
+
+static silence_t journal[HUB_MAX_SILENCES];
+static int journal_n;
+// As of the plug's last answer: what a silence that starts now is measured from.
+static struct {
+    uint32_t ok, failed, starts, conns, drops, report_at;
+} at_answer;
+
+static void journal_push(const silence_t *s) {
+    portENTER_CRITICAL(&lock);
+    if (journal_n == HUB_MAX_SILENCES) {
+        memmove(journal, journal + 1, sizeof(journal[0]) * (HUB_MAX_SILENCES - 1));
+        journal_n--;
+    }
+    journal[journal_n++] = *s;
+    portEXIT_CRITICAL(&lock);
+}
+
+int silences_peek(silence_t *out, int max) {
+    portENTER_CRITICAL(&lock);
+    int n = journal_n < max ? journal_n : max;
+    memcpy(out, journal, sizeof(journal[0]) * n);
+    portEXIT_CRITICAL(&lock);
+    return n;
+}
+
+void silences_drop(int n) {
+    if (n <= 0) return;
+    portENTER_CRITICAL(&lock);
+    if (n > journal_n) n = journal_n;
+    memmove(journal, journal + n, sizeof(journal[0]) * (journal_n - n));
+    journal_n -= n;
+    portEXIT_CRITICAL(&lock);
+}
+
+static uint32_t capped(uint32_t v, uint32_t max) { return v < max ? v : max; }
+
+/** The plug spoke after `quiet` ms: into the journal, with what happened meanwhile. */
+static void journal_silence(uint32_t from, uint32_t quiet, heard_t how, int8_t signal, bool off, bool saved) {
+    uint32_t starts = report_starts();
+    silence_t s = {
+        .up = from / 1000.0,
+        .len_ms = quiet,
+        .ok = capped(sent_ok - at_answer.ok, UINT16_MAX),
+        .failed = capped(sent_failed - at_answer.failed, UINT16_MAX),
+        .held_ms = held_ms - held_at_answer_ms,
+        .reports = capped(starts - at_answer.starts, UINT8_MAX),
+        .conns = capped(report_conns() - at_answer.conns, UINT8_MAX),
+        .drops = capped(net_wifi_drops() - at_answer.drops, UINT8_MAX),
+        .since_report_ms = at_answer.starts ? (int32_t)(from - at_answer.report_at) : -1,
+        .end_since_report_ms = starts ? (int32_t)(from + quiet - report_started_ms()) : -1,
+        .end = how,
+        .off = off,
+        .saved = saved,
+        .rssi = how == HEARD_ANNOUNCE ? 0 : signal,
+    };
+    journal_push(&s);
+}
+
+/** The gap the journal has just taken turned out to be a power cut (the plug announced itself). */
+static void journal_mark_cut(uint32_t from) {
+    portENTER_CRITICAL(&lock);
+    if (journal_n > 0 && journal[journal_n - 1].up == from / 1000.0) journal[journal_n - 1].off = true;
     portEXIT_CRITICAL(&lock);
 }
 
@@ -135,31 +298,47 @@ static void past_cut(uint32_t from, uint32_t to) {
     set_mains(MAINS_ON, to / 1000.0, true);
 }
 
-/** Any message from the plug: it is alive, so is the mains. `announce`: it has just (re)started. */
-static void plug_alive(int8_t signal, bool announce) {
+/** Any message from the plug: it is alive, so is the mains. An announce: it has just (re)started. */
+static void plug_alive(int8_t signal, heard_t how) {
+    bool announce = how == HEARD_ANNOUNCE;
     uint32_t now = hub_ms();
     if (announce && gap_pending && now - gap_end_ms < ANNOUNCE_GRACE_MS) {
         // The gap that has just ended was the plug starting again: a power cut after all.
         gap_pending = false;
         if (link_gaps) link_gaps--;
         past_cut(gap_start_ms, gap_end_ms);
+        journal_mark_cut(gap_start_ms);
     }
+    bool looked = recheck; // the delay was out and the hub was having its last look
+    bool cut = false;      // a silence told as a cut only now
     if (suspect) {
         suspect = false;
+        recheck = false;
         uint32_t gap = now - gap_from_ms;
         watch_after_gap_until = now + 10000;
         need_power_on = true; // if it was the power, the plug may come back off
         if (announce) {
             past_cut(gap_from_ms, now);
+            cut = true;
         } else {
             link_gaps++;
             if (gap > longest_gap_ms) longest_gap_ms = gap;
             gap_pending = true;
             gap_start_ms = gap_from_ms;
             gap_end_ms = now;
-            ESP_LOGW(TAG, "radio gap: the plug was silent %.1f s (the link, not the mains)", gap / 1000.0);
+            ESP_LOGW(TAG, "radio gap: the plug was silent %.1f s (the link, not the mains)%s", gap / 1000.0,
+                     looked ? ": it answered in the last look" : "");
         }
     }
+    uint32_t quiet = now - last_answer_ms;
+    if (answered && quiet >= JOURNAL_MS)
+        journal_silence(last_answer_ms, quiet, how, signal, cut || mains == MAINS_OFF, looked && !cut);
+    at_answer.ok = sent_ok;
+    at_answer.failed = sent_failed;
+    at_answer.starts = report_starts();
+    at_answer.conns = report_conns();
+    at_answer.drops = net_wifi_drops();
+    at_answer.report_at = report_started_ms();
     last_answer_ms = now;
     held_at_answer_ms = held_ms;
     if (!announce) {
@@ -225,7 +404,7 @@ void zb_status(plug_status_t *out) {
     out->network_up = network_up;
     out->link_gaps = link_gaps;
     out->longest_gap_ms = longest_gap_ms;
-    out->confirm_ms = confirm_ms();
+    out->confirm_ms = confirm_ms() + RECHECK_MS;
     out->has_rssi_avg = has_rssi_avg;
     out->rssi_avg = rssi_avg;
     uint32_t now = hub_ms();
@@ -240,9 +419,11 @@ void zb_hold(uint32_t ms) { hold_until_ms = hub_ms() + ms; }
 void zb_diag(char *out, size_t size) {
     uint32_t last = last_answer_ms;
     size_t len = snprintf(out, size,
-                          "reads sent ok %lu, failed %lu, last answer %lu ms ago, answers during a read %lu; neighbors:",
+                          "reads sent ok %lu, failed %lu, last answer %lu ms ago, answers during a read %lu, "
+                          "silences to tell the core %d; neighbors:",
                           (unsigned long)sent_ok, (unsigned long)sent_failed,
-                          (unsigned long)(answered ? hub_ms() - last : 0), (unsigned long)answers_during_read);
+                          (unsigned long)(answered ? hub_ms() - last : 0), (unsigned long)answers_during_read,
+                          journal_n);
     if (!network_up) return;
     esp_zigbee_lock_acquire(portMAX_DELAY);
     ezb_nwk_info_iterator_t it = EZB_NWK_INFO_ITERATOR_INIT;
@@ -257,6 +438,7 @@ void zb_forget_plug(void) {
     config_forget_plug();
     answered = false;
     suspect = false;
+    recheck = false;
     gap_pending = false;
     has_voltage = false;
     set_mains(MAINS_UNKNOWN, -1, false);
@@ -275,7 +457,7 @@ static void zcl_action(ezb_zcl_core_action_callback_id_t id, void *message) {
     case EZB_ZCL_CORE_READ_ATTR_RSP_CB_ID: {
         ezb_zcl_cmd_read_attr_rsp_message_t *m = message;
         if (!sender(m->in.header)) return;
-        plug_alive(m->in.header->rssi, false);
+        plug_alive(m->in.header->rssi, HEARD_READ);
         for (ezb_zcl_read_attr_rsp_variable_t *v = m->in.variables; v; v = v->next) {
             if (v->status != 0) continue;
             if (m->info.cluster_id == EZB_ZCL_CLUSTER_ID_ELECTRICAL_MEASUREMENT)
@@ -302,14 +484,14 @@ static void zcl_action(ezb_zcl_core_action_callback_id_t id, void *message) {
             for (ezb_zcl_report_attr_variable_t *v = m->in.variables; v; v = v->next)
                 ESP_LOGI(TAG, "after the silence the plug reported cluster 0x%04x attr 0x%04x", m->info.cluster_id,
                          v->attr_id);
-        plug_alive(m->in.header->rssi, false);
+        plug_alive(m->in.header->rssi, HEARD_REPORT);
         if (m->info.cluster_id == EZB_ZCL_CLUSTER_ID_ELECTRICAL_MEASUREMENT)
             for (ezb_zcl_report_attr_variable_t *v = m->in.variables; v; v = v->next)
                 take_voltage(v->attr_id, v->attr_type, v->attr_value);
     } break;
     case EZB_ZCL_CORE_DEFAULT_RSP_CB_ID: {
         ezb_zcl_cmd_default_rsp_message_t *m = message;
-        if (sender(m->in.header)) plug_alive(m->in.header->rssi, false);
+        if (sender(m->in.header)) plug_alive(m->in.header->rssi, HEARD_DEFAULT);
     } break;
     default:
         break;
@@ -392,7 +574,7 @@ static bool zb_signal(const ezb_app_signal_t *sig) {
             if (p->short_addr != g_cfg.plug_short) config_save_plug(p->short_addr, g_cfg.plug_ieee);
             ESP_LOGI(TAG, "plug announced itself (started again): 0x%04x", p->short_addr);
             need_power_on = true;
-            plug_alive(0, true);
+            plug_alive(0, HEARD_ANNOUNCE);
         } else if (pairing_open || !g_cfg.plug_paired) {
             // The device that joins while pairing is open becomes the plug (replacing the old one).
             config_save_plug(p->short_addr, p->device_addr.u64);
@@ -475,7 +657,7 @@ static void poll_task(void *arg) {
     static uint16_t basic_attrs[] = {0x0004, 0x0000, 0x0001, 0x0005, 0x0007, 0xFFFE};
     static uint16_t voltage_attr[] = {0x0505};
     static uint16_t scale_attrs[] = {0x0600, 0x0601};
-    uint32_t last_read = 0, last_scale = 0, before = hub_ms();
+    uint32_t last_read = 0, last_scale = 0, last_beat = 0, recheck_at = 0, before = hub_ms();
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(100));
         uint32_t now = hub_ms();
@@ -483,6 +665,10 @@ static void poll_task(void *arg) {
         bool held = (int32_t)(hold_until_ms - now) > 0;
         if (held) held_ms += now - before;
         before = now;
+        if (now - last_beat >= 1000) {
+            last_beat = now;
+            events_beat();
+        }
         if (retry_mode && now >= retry_at_ms) {
             uint32_t mode = retry_mode;
             retry_mode = 0;
@@ -513,7 +699,7 @@ static void poll_task(void *arg) {
             last_scale = now;
             read_attrs(EZB_ZCL_CLUSTER_ID_ELECTRICAL_MEASUREMENT, scale_attrs, 2);
             continue;
-        } else if (now - last_read >= READ_EVERY_MS) {
+        } else if (now - last_read >= (recheck ? RECHECK_READ_MS : READ_EVERY_MS)) {
             last_read = now;
             read_attrs(EZB_ZCL_CLUSTER_ID_ELECTRICAL_MEASUREMENT, voltage_attr, 1);
         }
@@ -533,8 +719,19 @@ static void poll_task(void *arg) {
                 gap_from_ms = last;
                 ESP_LOGI(TAG, "the plug is silent %lu ms: waiting before calling it off", (unsigned long)silent);
             }
-            if (suspect && silent >= confirm_ms()) {
+            uint32_t delay = confirm_ms();
+            if (suspect && !recheck && silent >= delay) {
+                // The delay is out. The last look before the word goes out: a plain report (what an
+                // alert would do to the radio anyway) and reads more often, for RECHECK_MS of this
+                // task's own time — a task that was kept waiting must not skip the look.
+                recheck = true;
+                recheck_at = now;
+                ESP_LOGW(TAG, "the plug is silent %lu ms: the last look before calling it off", (unsigned long)silent);
+                report_kick();
+            }
+            if (suspect && recheck && silent >= delay + RECHECK_MS && now - recheck_at >= RECHECK_MS) {
                 suspect = false;
+                recheck = false;
                 set_mains(MAINS_OFF, last / 1000.0, true);
             }
         } else if (mains == MAINS_UNKNOWN && !answered && now - verdict_at >= UNKNOWN_TO_OFF_MS) {
@@ -544,6 +741,7 @@ static void poll_task(void *arg) {
 }
 
 void zb_start(void) {
+    events_restore(); // before anything can push: what the previous boot could not send
     xTaskCreate(zigbee_task, "zigbee", 6144, NULL, 5, NULL);
     xTaskCreate(poll_task, "zb_poll", 3072, NULL, 6, NULL);
 }

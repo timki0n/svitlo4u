@@ -101,6 +101,7 @@ static void ui_task(void *arg) {
 
 void hub_restart_into(bool setup, bool pair) {
     config_set_next_boot(setup, pair);
+    hub_note_restart(setup ? "setup page" : pair ? "pairing" : "back to work"); // unless said already
     ESP_LOGI(TAG, "restarting into the %s mode%s", setup ? "setup" : "normal", pair ? " with pairing" : "");
     vTaskDelay(pdMS_TO_TICKS(200));
     esp_restart();

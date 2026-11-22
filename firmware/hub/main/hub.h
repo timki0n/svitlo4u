@@ -89,7 +89,7 @@ void zb_hold(uint32_t ms);
 
 /** Mains changes waiting for the core's acknowledgement. */
 typedef struct {
-    double up;
+    double up; // hub uptime, s; negative: that long before this boot (the event outlived a restart)
     bool on;
 } mains_event_t;
 
@@ -99,6 +99,35 @@ int events_peek(mains_event_t *out, int max);
 /** Drops the `n` oldest events (the core acknowledged them). */
 void events_drop(int n);
 void events_push(double up, bool on);
+/** Drops the events from before this boot (a core that cannot read them); returns how many. */
+int events_drop_carried(void);
+
+/** What ended a silence of the plug. */
+typedef enum { HEARD_READ = 0, HEARD_REPORT, HEARD_DEFAULT, HEARD_ANNOUNCE } heard_t;
+
+/**
+ * One silence of the plug of 3 s or more, as the core's journal gets it (the report's `silences`):
+ * what the radio and Wi-Fi were doing meanwhile, to learn why the plug goes quiet with the mains on.
+ */
+typedef struct {
+    double up;                   // the plug's last answer before it, hub uptime (s)
+    uint32_t len_ms;             // until its next message
+    uint16_t ok, failed;         // reads within it that the radio delivered / did not
+    uint32_t held_ms;            // of it, Wi-Fi had the radio (zb_hold)
+    uint8_t reports, conns;      // requests to the core started within it; of them on a new connection
+    uint8_t drops;               // Wi-Fi drops within it
+    int32_t since_report_ms;     // from the start of the last request before it to its start; -1: none yet
+    int32_t end_since_report_ms; // from the start of the last request to its end; -1: none yet
+    uint8_t end;                 // heard_t: the message that ended it
+    bool off;                    // it was told as an outage
+    bool saved;                  // it outlasted the alert delay; the plug answered in the last look
+    int8_t rssi;                 // of the message that ended it (0 for an announce)
+} silence_t;
+
+#define HUB_MAX_SILENCES 8
+/** Copies up to `max` silences the core has not acknowledged (oldest first); returns how many. */
+int silences_peek(silence_t *out, int max);
+void silences_drop(int n);
 
 // ---------------------------------------------------------------------------------------------
 // Wi-Fi and the setup page (net.c)
@@ -133,6 +162,8 @@ typedef struct {
     uint32_t last_down_ms; // how long the last drop lasted, until the address was back
 } wifi_info_t;
 void net_wifi_info(wifi_info_t *out);
+/** Only the count of drops (no call into the driver: for the Zigbee task). */
+uint32_t net_wifi_drops(void);
 /** Console: Wi-Fi sleeping between the router's beacons (the default) or always listening. */
 bool net_wifi_sleep(bool on);
 
@@ -151,6 +182,10 @@ uint32_t report_last_reply_ms(void);
 /** Reports that got no answer even on a new connection, and those the second try saved. */
 uint32_t report_lost(void);
 uint32_t report_redone(void);
+/** Requests started since the boot, how many of them had to open a connection, hub_ms() of the last start. */
+uint32_t report_starts(void);
+uint32_t report_conns(void);
+uint32_t report_started_ms(void);
 /** Console test: kill the kept connection under the next report (as the internet does). */
 void report_test_dead_connection(void);
 
@@ -158,8 +193,12 @@ void report_test_dead_connection(void);
 // Watchdog: the hub must not stay silent while it could talk (watch.c)
 
 void watch_start(bool normal);
-/** Restart now, remembering why (the next boot shows it in the console). */
+/** Restart now, remembering why (the next boot tells the core and the console). */
 void watch_restart(const char *why);
+/** Why the hub is about to restart itself, for the next boot; the first word of a boot stays. */
+void hub_note_restart(const char *why);
+/** Why the hub restarted itself into this boot ("" when it did not, or said nothing). */
+const char *watch_last_restart(void);
 /** Status line for the console. */
 void watch_describe(char *out, size_t room);
 /** Console tests: "loop-stuck", "wifi-lost", "kick-stuck", "beacon-lost", "conn-dead"; false for an unknown one. */

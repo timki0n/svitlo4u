@@ -277,6 +277,64 @@ export const hubHealth = sqliteTable(
   (t) => [primaryKey({ columns: [t.hubId, t.t] })],
 );
 
+/**
+ * Every boot of a hub the core heard of: why it started (`rst`, as in its reports) and, when the
+ * hub restarted itself, its own word on it (`why`, firmware 0.2.6+: the watchdog's rule, an
+ * update, the setup page). On 2026-11-20 a hub restarted 85 minutes into a morning without
+ * internet and nothing kept why.
+ */
+export const hubBoots = sqliteTable(
+  "hub_boots",
+  {
+    hubId: text("hub_id").notNull(),
+    boot: text("boot").notNull(),
+    /** When the core first heard of the boot, and when it began (by the hub's uptime). */
+    t: integer("t").notNull(),
+    startedAt: integer("started_at").notNull(),
+    rst: text("rst").notNull(),
+    why: text("why"),
+    fw: text("fw"),
+  },
+  (t) => [primaryKey({ columns: [t.hubId, t.boot] })],
+);
+
+/**
+ * The plug's silences of 3 s and more as the hub journals them (firmware 0.2.6+): how long, what
+ * the radio and Wi-Fi did meanwhile, what ended it. For learning why a plug with the mains on goes
+ * quiet (the false outages of 2026-11-18 and 2026-11-20).
+ */
+export const hubSilences = sqliteTable(
+  "hub_silences",
+  {
+    hubId: text("hub_id").notNull(),
+    boot: text("boot").notNull(),
+    /** The plug's last answer before it: hub uptime, ms (with `boot` it names the silence)… */
+    upMs: integer("up_ms").notNull(),
+    /** …and the same moment by the core's clock. */
+    t: integer("t").notNull(),
+    lenMs: integer("len_ms").notNull(),
+    /** Reads within it that the radio delivered / did not. */
+    readsOk: integer("reads_ok").notNull(),
+    readsFailed: integer("reads_failed").notNull(),
+    /** Of it, Wi-Fi had the radio, ms. */
+    heldMs: integer("held_ms").notNull(),
+    /** Requests to the core started within it, those of them on a new connection, Wi-Fi drops. */
+    reports: integer("reports").notNull(),
+    conns: integer("conns").notNull(),
+    drops: integer("drops").notNull(),
+    /** From the start of the last request before it to its start; of the last request to its end. */
+    sinceReportMs: integer("since_report_ms"),
+    endSinceReportMs: integer("end_since_report_ms"),
+    /** The plug's message that ended it: read, report, default, announce. */
+    end: text("end").notNull(),
+    /** Told as an outage; outlasted the alert delay and the plug answered in the last look. */
+    off: integer("off", { mode: "boolean" }).notNull(),
+    saved: integer("saved", { mode: "boolean" }).notNull(),
+    plugRssi: integer("plug_rssi"),
+  },
+  (t) => [primaryKey({ columns: [t.hubId, t.boot, t.upMs] })],
+);
+
 /** Notifications waiting for delivery or retry. Sent immediately; the row only guards retries. */
 export const notificationOutbox = sqliteTable(
   "notification_outbox",

@@ -55,7 +55,9 @@ static void status(void) {
     if (p.has_voltage) outf(", %.0f V", p.voltage);
     if (p.has_rssi) outf(", %d dBm", p.rssi);
     mains_event_t ev[HUB_MAX_EVENTS];
-    outf(", %d events unsent\r\n", events_peek(ev, HUB_MAX_EVENTS));
+    int unsent = events_peek(ev, HUB_MAX_EVENTS), carried = 0;
+    for (int i = 0; i < unsent; i++) carried += ev[i].up < 0;
+    outf(", %d events unsent (%d from before the restart)\r\n", unsent, carried);
     outf("radio gaps (the link, not the mains): %lu, longest %.1f s; off after %lu s of silence (signal %.0f dBm)\r\n",
          (unsigned long)p.link_gaps, p.longest_gap_ms / 1000.0, (unsigned long)(p.confirm_ms / 1000),
          p.has_rssi_avg ? p.rssi_avg : 0.0f);
@@ -105,6 +107,7 @@ static void run(char *line) {
         out("\r\nplug forgotten\r\n");
     } else if (!strcmp(cmd, "reboot")) {
         out("\r\nrebooting\r\n");
+        hub_note_restart("console");
         vTaskDelay(pdMS_TO_TICKS(200));
         esp_restart();
     } else if (!strcmp(cmd, "test") && a && watch_test(a)) {

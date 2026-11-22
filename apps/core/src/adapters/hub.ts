@@ -33,6 +33,8 @@ export type HubReportEvent = {
   /** Hub uptime, seconds. */
   up: number;
   rst: string;
+  /** The hub's own word on why it restarted itself into this boot (0.2.6+), else null. */
+  why: string | null;
   fw: string | null;
   paired: boolean;
   mains: HubMains;
@@ -52,9 +54,39 @@ export type HubReportEvent = {
   rssiAvg: number | null;
   /** The hub's own Wi-Fi; null from firmware before 0.2.5. */
   wifi: HubWifi | null;
+  /** By hub uptime, s; negative: that long before this boot (the event outlived a restart). */
   events: { up: number; mains: "on" | "off" }[];
+  /** The plug's silences of 3 s and more not yet acknowledged (0.2.6+). */
+  silences: HubSilence[];
   ota: HubOtaStatus | null;
   remote: string;
+};
+
+export type HubSilenceEnd = "read" | "report" | "default" | "announce";
+
+/** One silence of the plug from the hub's journal: what the radio and Wi-Fi did meanwhile. */
+export type HubSilence = {
+  /** The plug's last answer before it, hub uptime (s), and how long it lasted, s. */
+  up: number;
+  len: number;
+  /** Reads within it that the radio delivered / did not. */
+  readsOk: number;
+  readsFailed: number;
+  /** Of it, Wi-Fi had the radio, s. */
+  held: number;
+  /** Requests to the core started within it, those of them on a new connection, Wi-Fi drops. */
+  reports: number;
+  conns: number;
+  drops: number;
+  /** From the start of the last request before it to its start, s; of the last one to its end. */
+  sinceReport: number | null;
+  endSinceReport: number | null;
+  /** The plug's message that ended it. */
+  end: HubSilenceEnd;
+  /** Told as an outage; outlasted the alert delay and the plug answered in the last look. */
+  off: boolean;
+  saved: boolean;
+  rssi: number | null;
 };
 
 /** The hub's Wi-Fi: the router as it hears it now, and what went wrong since the boot. */
@@ -81,6 +113,9 @@ export type HubVerifyResult =
 
 const RECENT_BOOTS = 16;
 const MAX_EVENTS = 64;
+const MAX_SILENCES = 16;
+/** How far before its boot an event may be (one that outlived a restart): a month, in seconds. */
+const MAX_CARRIED_S = 30 * 86_400;
 
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const numOrNull = (v: unknown, min: number, max: number): number | null | undefined =>
@@ -148,6 +183,39 @@ function parseWifi(v: unknown): HubWifi | null {
   };
 }
 
+const SILENCE_ENDS: readonly string[] = ["read", "report", "default", "announce"];
+
+/** Lenient too: an entry the core cannot read is skipped, the report stands. */
+function parseSilences(v: unknown, up: number): HubSilence[] {
+  if (!Array.isArray(v)) return [];
+  const count = (x: unknown): number => (isNum(x) && x >= 0 && x <= 1e6 ? Math.round(x) : 0);
+  const out: HubSilence[] = [];
+  for (const item of v.slice(0, MAX_SILENCES)) {
+    const o = (typeof item === "object" && item !== null ? item : {}) as Record<string, unknown>;
+    if (!isNum(o.up) || o.up < 0 || o.up > up || !isNum(o.len) || o.len <= 0 || o.len > 1e8) {
+      continue;
+    }
+    if (typeof o.end !== "string" || !SILENCE_ENDS.includes(o.end)) continue;
+    out.push({
+      up: o.up,
+      len: o.len,
+      readsOk: count(o.ok),
+      readsFailed: count(o.fail),
+      held: isNum(o.held) && o.held >= 0 && o.held <= 1e8 ? o.held : 0,
+      reports: count(o.reports),
+      conns: count(o.conns),
+      drops: count(o.drops),
+      sinceReport: numOrNull(o.sinceReport, 0, 1e8) ?? null,
+      endSinceReport: numOrNull(o.endSinceReport, 0, 1e8) ?? null,
+      end: o.end as HubSilenceEnd,
+      off: o.off === true,
+      saved: o.saved === true,
+      rssi: numOrNull(o.rssi, -127, 20) ?? null,
+    });
+  }
+  return out;
+}
+
 export class HubVerifier {
   private readonly devices = new Map<string, HubDeviceConfig>();
   private readonly replay = new Map<string, { boot: string; seq: number; recentBoots: string[] }>();
@@ -196,7 +264,7 @@ export class HubVerifier {
       return { ok: false, reason: "bad-signature", deviceId: dev };
     }
 
-    const { v, boot, seq, up, rst, fw, plug, events, ota, wifi } = body;
+    const { v, boot, seq, up, rst, why, fw, plug, events, ota, wifi, silences } = body;
     const p = (typeof plug === "object" && plug !== null ? plug : {}) as Record<string, unknown>;
     const mains = p.mains;
     const mainsSince = numOrNull(p.since, 0, 1e9);
@@ -229,7 +297,13 @@ export class HubVerifier {
     const parsedEvents: { up: number; mains: "on" | "off" }[] = [];
     for (const e of events as unknown[]) {
       const ev = (typeof e === "object" && e !== null ? e : {}) as Record<string, unknown>;
-      if (!isNum(ev.up) || ev.up < 0 || ev.up > up || (ev.mains !== "on" && ev.mains !== "off")) {
+      // Negative: before this boot — an event the hub kept over its own restart (0.2.6+).
+      if (
+        !isNum(ev.up) ||
+        ev.up < -MAX_CARRIED_S ||
+        ev.up > up ||
+        (ev.mains !== "on" && ev.mains !== "off")
+      ) {
         return { ok: false, reason: "malformed", deviceId: dev };
       }
       parsedEvents.push({ up: ev.up, mains: ev.mains });
@@ -260,6 +334,7 @@ export class HubVerifier {
         seq: seq as number,
         up,
         rst,
+        why: shortText(why, 64),
         fw: typeof fw === "string" ? fw.slice(0, 32) : null,
         paired: p.paired === true,
         mains,
@@ -272,6 +347,7 @@ export class HubVerifier {
         rssiAvg,
         wifi: parseWifi(wifi),
         events: parsedEvents,
+        silences: parseSilences(silences, up),
         ota: parseOta(ota),
         remote,
       },

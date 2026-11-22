@@ -30,6 +30,10 @@ static volatile server_state_t server_state = SERVER_UNKNOWN;
 static volatile int last_status;
 static volatile uint32_t last_reply_at; // any HTTP answer: the network works
 static volatile uint32_t lost, redone;  // no answer on either connection; saved by the second try
+// For the journal of the plug's silences (zb.c): requests started, those that had to open a
+// connection, and when the last one started.
+static volatile uint32_t starts, conns, started_at;
+static bool connected; // the kept connection carried the last request through
 static esp_http_client_handle_t client;
 static char response[1536]; // an update offer carries a long URL
 static int response_len;
@@ -39,6 +43,9 @@ int report_last_status(void) { return last_status; }
 uint32_t report_last_reply_ms(void) { return last_reply_at; }
 uint32_t report_lost(void) { return lost; }
 uint32_t report_redone(void) { return redone; }
+uint32_t report_starts(void) { return starts; }
+uint32_t report_conns(void) { return conns; }
+uint32_t report_started_ms(void) { return started_at; }
 
 void report_test_dead_connection(void) {
     int fd = client ? esp_http_client_get_socket(client) : -1;
@@ -74,18 +81,22 @@ static void add_num(char *buf, size_t size, size_t *len, const char *fmt, double
         *len += snprintf(buf + *len, size - *len, "null");
 }
 
-/** Builds the report; returns how many pending events it carries. */
-static int build(char *buf, size_t size, size_t *out_len) {
+#define SILENCES_PER_REPORT 6
+#define SILENCE_ROOM 240 // one of them in the body, at its longest
+
+/** Builds the report; tells how many pending events and silences it carries. */
+static void build(char *buf, size_t size, size_t *out_len, int *out_events, int *out_silences) {
     plug_status_t p;
     zb_status(&p);
     mains_event_t ev[HUB_MAX_EVENTS];
     int n = events_peek(ev, HUB_MAX_EVENTS);
-    size_t len = snprintf(buf, size,
-                          "{\"v\":1,\"dev\":\"%s\",\"boot\":\"%s\",\"seq\":%lu,\"up\":%.3f,\"rst\":\"%s\",\"fw\":\"%s\","
-                          "\"plug\":{\"paired\":%s,\"mains\":\"%s\",\"since\":",
-                          g_cfg.dev, boot_id, (unsigned long)seq, hub_up(), hub_reset_reason(), hub_fw_version(),
-                          p.paired ? "true" : "false",
-                          p.mains == MAINS_ON ? "on" : p.mains == MAINS_OFF ? "off" : "unknown");
+    size_t len = snprintf(buf, size, "{\"v\":1,\"dev\":\"%s\",\"boot\":\"%s\",\"seq\":%lu,\"up\":%.3f,\"rst\":\"%s\",",
+                          g_cfg.dev, boot_id, (unsigned long)seq, hub_up(), hub_reset_reason());
+    // The hub's own word on why it restarted itself (the watchdog, an update, the setup page).
+    if (watch_last_restart()[0]) len += snprintf(buf + len, size - len, "\"why\":\"%s\",", watch_last_restart());
+    len += snprintf(buf + len, size - len, "\"fw\":\"%s\",\"plug\":{\"paired\":%s,\"mains\":\"%s\",\"since\":",
+                    hub_fw_version(), p.paired ? "true" : "false",
+                    p.mains == MAINS_ON ? "on" : p.mains == MAINS_OFF ? "off" : "unknown");
     add_num(buf, size, &len, "%.3f", p.mains_since, p.mains_since >= 0);
     len += snprintf(buf + len, size - len, ",\"voltage\":");
     add_num(buf, size, &len, "%.1f", p.voltage, p.has_voltage);
@@ -110,15 +121,39 @@ static int build(char *buf, size_t size, size_t *out_len) {
                     (unsigned long)w.drops, w.reason, w.last_down_ms / 1000.0, (unsigned long)watch_kicks(),
                     (unsigned long)lost, (unsigned long)redone);
     len += ota_json(buf + len, size - len);
+    // The plug's silences of 3 s and more since the last acknowledged report (zb.c).
+    static const char *const ends[] = {"read", "report", "default", "announce"};
+    silence_t q[SILENCES_PER_REPORT];
+    int m = silences_peek(q, SILENCES_PER_REPORT), told = 0;
+    if (m > 0 && len + SILENCE_ROOM < size) {
+        len += snprintf(buf + len, size - len, ",\"silences\":[");
+        for (; told < m && len + SILENCE_ROOM < size; told++) {
+            const silence_t *s = &q[told];
+            len += snprintf(buf + len, size - len,
+                            "%s{\"up\":%.3f,\"len\":%.2f,\"ok\":%u,\"fail\":%u,\"held\":%.1f,\"reports\":%u,\"conns\":%u,"
+                            "\"drops\":%u,\"sinceReport\":",
+                            told ? "," : "", s->up, s->len_ms / 1000.0, s->ok, s->failed, s->held_ms / 1000.0,
+                            s->reports, s->conns, s->drops);
+            add_num(buf, size, &len, "%.1f", s->since_report_ms / 1000.0, s->since_report_ms >= 0);
+            len += snprintf(buf + len, size - len, ",\"endSinceReport\":");
+            add_num(buf, size, &len, "%.1f", s->end_since_report_ms / 1000.0, s->end_since_report_ms >= 0);
+            len += snprintf(buf + len, size - len, ",\"end\":\"%s\",\"off\":%s,\"saved\":%s,\"rssi\":%d}",
+                            ends[s->end < 4 ? s->end : 0], s->off ? "true" : "false", s->saved ? "true" : "false",
+                            s->rssi);
+        }
+        len += snprintf(buf + len, size - len, "]");
+    }
     len += snprintf(buf + len, size - len, "}");
     *out_len = len;
-    return n;
+    *out_events = n;
+    *out_silences = told;
 }
 
 static esp_http_client_handle_t client_for(const char *url) {
     static char current[sizeof(g_cfg.server)];
     if (client && strcmp(current, url) == 0) return client;
     if (client) esp_http_client_cleanup(client);
+    connected = false;
     strcpy(current, url);
     esp_http_client_config_t cfg = {
         .url = url,
@@ -136,9 +171,11 @@ typedef enum { SENT_ACKED, SENT_REFUSED, SENT_DEAD } sent_t;
 
 /** One request: acknowledged, answered otherwise, or no answer at all (the connection). */
 static sent_t send_once(void) {
-    static char body[2560];
+    // 32 events, 6 silences and the rest at their longest come to about 3.3 kB.
+    static char body[4096];
     size_t len;
-    int n = build(body, sizeof(body), &len);
+    int n, told;
+    build(body, sizeof(body), &len, &n, &told);
     char sig[65];
     hmac_hex(g_cfg.secret, body, len, sig);
 
@@ -150,7 +187,11 @@ static sent_t send_once(void) {
     response_len = 0;
     response[0] = 0;
     uint32_t sent_seq = seq++;
+    started_at = hub_ms();
+    starts++;
+    if (!connected) conns++;
     esp_err_t err = esp_http_client_perform(c);
+    connected = err == ESP_OK;
     int status = err == ESP_OK ? esp_http_client_get_status_code(c) : -1;
     last_status = status;
     if (err == ESP_OK) last_reply_at = hub_ms();
@@ -162,6 +203,10 @@ static sent_t send_once(void) {
             esp_http_client_close(c);
             return SENT_DEAD;
         }
+        // A core from before 0.2.6 cannot read an event from before this boot (a negative `up`) and
+        // would refuse every report that carries one: better to lose those than to stay unheard.
+        if (status == 400 && events_drop_carried() > 0)
+            ESP_LOGW(TAG, "the core refuses the events from before the restart: dropped");
         return SENT_REFUSED;
     }
     cJSON *j = cJSON_Parse(response);
@@ -169,6 +214,7 @@ static sent_t send_once(void) {
     bool acked = cJSON_IsNumber(ack) && (uint32_t)ack->valuedouble == sent_seq;
     if (acked) {
         events_drop(n);
+        silences_drop(told);
         server_state = SERVER_OK;
         plug_status_t p;
         zb_status(&p);
@@ -178,7 +224,10 @@ static sent_t send_once(void) {
         ota_confirm(p.network_up);
         const cJSON *offer = cJSON_GetObjectItem(j, "ota");
         if (offer) ota_offer(offer, boot_id, sent_seq, idle);
-        if (ota_state() == OTA_READY && idle) hub_restart_into(false, false); // into the new image
+        if (ota_state() == OTA_READY && idle) {
+            hub_note_restart("update");
+            hub_restart_into(false, false); // into the new image
+        }
     } else {
         server_state = SERVER_FAILING;
     }

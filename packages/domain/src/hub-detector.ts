@@ -30,7 +30,7 @@ export type HubReport = {
   mains: HubMains;
   /** Hub uptime (s) when the current verdict began. */
   mainsSince: number | null;
-  /** Mains changes not yet acknowledged, by hub uptime (s). */
+  /** Mains changes not yet acknowledged, by hub uptime (s); negative: before this boot. */
   events: readonly { up: number; mains: "on" | "off" }[];
 };
 
@@ -63,6 +63,13 @@ export type HubStep = { state: HubDetectorState; effects: HubEffect[] };
 
 /** Reset reasons that mean the hub lost power (as in the ESP protocol). */
 const POWER_LOSS_RESETS = new Set(["poweron", "brownout"]);
+
+/**
+ * An event from before the hub's boot (it outlived a restart, `up` < 0) is news only if it is
+ * later than the start of the state the core already has: the core may have applied it from a
+ * report whose answer the hub never got. The slack covers the hub's clock over the restart.
+ */
+const CARRIED_SLACK_MS = 3_000;
 
 export function initialHubDetectorState(persisted?: PersistedDetector | null): HubDetectorState {
   const last = persisted?.lastEsp;
@@ -136,6 +143,7 @@ function report(state: HubDetectorState, r: HubReport): HubStep {
   for (const event of [...r.events].sort((a, b) => a.up - b.up)) {
     if (s.appliedUp !== null && event.up <= s.appliedUp) continue;
     s.appliedUp = event.up;
+    if (event.up < 0 && s.since !== null && at(event.up) <= s.since + CARRIED_SLACK_MS) continue;
     if (event.mains !== s.power) change(event.mains, at(event.up), "hub", false);
   }
   // The current verdict covers what no event said (e.g. the first report after a boot).

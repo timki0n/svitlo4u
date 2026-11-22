@@ -64,6 +64,13 @@
       "when": 1795026840542,
       "tag": "0008_hub_health",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1795296769272,
+      "tag": "0009_hub_journal",
+      "breakpoints": true
     }
   ]
 }

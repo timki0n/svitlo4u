@@ -71,6 +71,8 @@ function hub(c: Core) {
     ota?: unknown;
     gaps?: number;
     wifi?: unknown;
+    why?: string;
+    silences?: unknown[];
   }) => {
     const raw = JSON.stringify({
       v: 1,
@@ -79,6 +81,7 @@ function hub(c: Core) {
       seq: seq++,
       up: fields.up,
       rst: fields.boot ? "sw" : "poweron",
+      ...(fields.why === undefined ? {} : { why: fields.why }),
       fw: fields.fw ?? "0.1.0",
       plug: {
         paired: true,
@@ -93,6 +96,7 @@ function hub(c: Core) {
       events: fields.events ?? [],
       ...(fields.ota === undefined ? {} : { ota: fields.ota }),
       ...(fields.wifi === undefined ? {} : { wifi: fields.wifi }),
+      ...(fields.silences === undefined ? {} : { silences: fields.silences }),
     });
     return c.app.inject({
       method: "POST",
@@ -284,6 +288,77 @@ describe("hub site (integration)", () => {
     const odd = await report({ up: 780, mains: "on", since: 1, wifi: { rssi: "loud", drops: -1 } });
     expect(odd.json()).toMatchObject({ ok: true });
     expect(c.hubs.get("hub-test")?.status().wifiRssi).toBeNull();
+  });
+
+  it("the hub's boots and the plug's silences go into its journal; an event outlives a restart", async () => {
+    const clock = new ManualClock(T0 + 30_000);
+    const c = await start(clock);
+    const report = hub(c);
+    const silence = {
+      up: 40.2,
+      len: 15.22,
+      ok: 3,
+      fail: 12,
+      held: 0,
+      reports: 1,
+      conns: 0,
+      drops: 0,
+      sinceReport: 2.1,
+      endSinceReport: 0.2,
+      end: "read",
+      off: false,
+      saved: true,
+      rssi: -36,
+    };
+    const boots = () =>
+      c.store.hubBoots
+        .list("hub-2a4c11")
+        .map((b) => [b.boot, b.t - T0, b.startedAt - T0, b.rst, b.why, b.fw]);
+    const silences = () =>
+      c.store.hubSilences
+        .list("hub-2a4c11", { start: 0, end: T0 + 3_600_000 })
+        .map((s) => [
+          s.boot,
+          s.t - T0,
+          s.lenMs,
+          s.readsOk,
+          s.readsFailed,
+          s.sinceReportMs,
+          s.endSinceReportMs,
+          s.end,
+          s.off,
+          s.saved,
+          s.plugRssi,
+        ]);
+
+    await report({ up: 30, mains: "on", since: 1 });
+    expect(boots()).toEqual([["b1", 30_000, 0, "poweron", null, "0.1.0"]]);
+    expect(silences()).toEqual([]);
+
+    // The hub tells a silence twice: the answer to the first report never reached it.
+    clock.advanceTo(T0 + 60_000);
+    await report({ up: 60, mains: "on", since: 1, silences: [silence] });
+    clock.advanceTo(T0 + 63_000);
+    await report({ up: 63, mains: "on", since: 1, silences: [silence] });
+    expect(silences()).toEqual([
+      ["b1", 40_200, 15_220, 3, 12, 2100, 200, "read", false, true, -36],
+    ]);
+
+    // It restarted itself at T0+95 s and says why; the light had gone 30 s before that boot.
+    clock.advanceTo(T0 + 100_000);
+    await report({
+      up: 5,
+      mains: "off",
+      since: null,
+      boot: "b2",
+      why: "Wi-Fi went silent",
+      events: [{ up: -30, mains: "off" }],
+    });
+    expect(boots()).toEqual([
+      ["b1", 30_000, 0, "poweron", null, "0.1.0"],
+      ["b2", 100_000, 95_000, "sw", "Wi-Fi went silent", "0.1.0"],
+    ]);
+    expect(c.state.get("hub-test")).toMatchObject({ power: "off", since: T0 + 65_000 });
   });
 
   it("a hub site gets the hub power service, not the ESP one", async () => {

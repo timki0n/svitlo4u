@@ -139,6 +139,69 @@ describe("hub detector", () => {
     expect(readable(effects)).toEqual([{ on: 0.5, detected: 30, reason: "hub" }]);
   });
 
+  it("an event that outlived the hub's own restart comes with a negative uptime, at its real time", () => {
+    const { effects } = run([
+      rep(30),
+      { tick: 150 },
+      // No internet since 30 s; the light went at 200.1 s; the hub restarted itself at 380 s and
+      // got through at 400 s, its plug still silent (after a boot that is «off» with no time).
+      rep(400, {
+        boot: "b2",
+        bootAt: 380,
+        rst: "sw",
+        mains: "off",
+        mainsSince: null,
+        events: [{ up: -179.9, mains: "off" }],
+      }),
+      rep(430, {
+        boot: "b2",
+        bootAt: 380,
+        rst: "sw",
+        mainsSince: 45.5,
+        events: [{ up: 45.5, mains: "on" }],
+      }),
+    ]);
+    expect(readable(effects)).toEqual([
+      { on: 0.5, detected: 30, reason: "hub" },
+      { silent: 30, detected: 150 },
+      { back: 400, silentFrom: 30, rebooted: true, powerLoss: false },
+      { off: 200.1, detected: 400, reason: "hub" },
+      { on: 425.5, detected: 430, reason: "hub" },
+    ]);
+  });
+
+  it("events the core already has are not applied again when they outlive a restart", () => {
+    const { effects } = run([
+      rep(30),
+      rep(60, { mains: "off", mainsSince: 58.2, events: [{ up: 58.2, mains: "off" }] }),
+      // The core takes the end of the outage, but its answer never reaches the hub…
+      rep(90, {
+        mainsSince: 88.4,
+        events: [
+          { up: 58.2, mains: "off" },
+          { up: 88.4, mains: "on" },
+        ],
+      }),
+      // …which restarts itself at 100 s and sends both again, by its new uptime.
+      rep(110, {
+        boot: "b2",
+        bootAt: 100,
+        rst: "sw",
+        mainsSince: 1.2,
+        events: [
+          { up: -41.8, mains: "off" },
+          { up: -11.6, mains: "on" },
+          { up: 1.2, mains: "on" },
+        ],
+      }),
+    ]);
+    expect(readable(effects)).toEqual([
+      { on: 0.5, detected: 30, reason: "hub" },
+      { off: 58.2, detected: 60, reason: "hub" },
+      { on: 88.4, detected: 90, reason: "hub" },
+    ]);
+  });
+
   it("a hub that lost power while the light was already off keeps it off", () => {
     const { effects } = run([
       rep(30),

@@ -23,7 +23,9 @@ import {
   gameSolves,
   gameUnlocks,
   heartbeatMinutes,
+  hubBoots,
   hubHealth,
+  hubSilences,
   hubs,
   notificationOutbox,
   outages,
@@ -642,6 +644,42 @@ export function createStore(db: Db) {
             ),
           )
           .orderBy(asc(hubHealth.t))
+          .all();
+      },
+    },
+
+    hubBoots: {
+      /** A boot of a hub; one the core already has stays as it is. */
+      add(row: typeof hubBoots.$inferInsert): void {
+        db.insert(hubBoots).values(row).onConflictDoNothing().run();
+      },
+      list(hubId: string) {
+        return db
+          .select()
+          .from(hubBoots)
+          .where(eq(hubBoots.hubId, hubId))
+          .orderBy(asc(hubBoots.t))
+          .all();
+      },
+    },
+
+    hubSilences: {
+      /** A silence of the plug from a hub's journal; one told twice (a lost answer) is kept once. */
+      add(row: typeof hubSilences.$inferInsert): void {
+        db.insert(hubSilences).values(row).onConflictDoNothing().run();
+      },
+      list(hubId: string, range: Interval) {
+        return db
+          .select()
+          .from(hubSilences)
+          .where(
+            and(
+              eq(hubSilences.hubId, hubId),
+              gte(hubSilences.t, range.start),
+              lt(hubSilences.t, range.end),
+            ),
+          )
+          .orderBy(asc(hubSilences.t))
           .all();
       },
     },
