@@ -54,7 +54,7 @@ services:
     logging: *logging
 
   mosquitto:
-    image: eclipse-mosquitto:2.1.2-alpine
+    image: eclipse-mosquitto:2.1.4-alpine
     restart: unless-stopped
     # No published ports: only reachable from the compose network.
     volumes:
