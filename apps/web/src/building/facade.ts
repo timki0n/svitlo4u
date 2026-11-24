@@ -16,6 +16,12 @@ import { PALETTE, STATES } from "./palette.ts";
 /** A door is looked at nearer than windows (a share of the close distance), to see who plays. */
 const DOOR_ZOOM = 0.45;
 /**
+ * Blinking alone (a window being played, a door's part being opened) waits this long for its next
+ * frame, about 20 a second with the wait for the screen: the pulse is slow, and every frame draws
+ * the whole tower again. Moving, the view draws every frame.
+ */
+const BLINK_FRAME_MS = 1000 / 24;
+/**
  * The faces of who plays behind a door (DOOR_W × DOOR_H), by how many: radius and centres. The
  * fewer, the bigger; neighbours overlap a little.
  */
@@ -284,11 +290,15 @@ export function createFacade(
     doorParts.push(mats);
     doorFaces.push(faces);
   });
-  /** Round faces drawn once per player and photo, reused. */
-  const faceTextures = new Map<string, THREE.CanvasTexture>();
-  const faceOf = (p: FacadeDoor["players"][number]): THREE.CanvasTexture => {
-    const key = `${p.id}:${p.avatar ?? ""}`;
-    const known = faceTextures.get(key);
+  /**
+   * Round faces drawn once per player and photo, reused with their materials: a material let go
+   * takes its shader with it when no other uses it, and the next face would compile it again.
+   */
+  const faceLooks = new Map<string, THREE.MeshBasicMaterial>();
+  const faceKey = (p: FacadeDoor["players"][number]) => `${p.id}:${p.avatar ?? ""}`;
+  const faceOf = (p: FacadeDoor["players"][number]): THREE.MeshBasicMaterial => {
+    const key = faceKey(p);
+    const known = faceLooks.get(key);
     if (known) return known;
     const art = document.createElement("canvas");
     art.width = 160;
@@ -335,10 +345,15 @@ export function createFacade(
       };
       img.src = p.avatar;
     }
-    faceTextures.set(key, texture);
-    return texture;
+    const material = keep(
+      new THREE.MeshBasicMaterial({ map: texture, transparent: true, toneMapped: false }),
+    );
+    faceLooks.set(key, material);
+    return material;
   };
   let doors: readonly FacadeDoor[] = [];
+  /** Who each door showed when last dressed: its faces are put anew only when that changes. */
+  const seated: string[] = [];
   const dressDoors = () => {
     doors.forEach((d) => {
       const mats = doorParts[d.door - 1];
@@ -347,21 +362,17 @@ export function createFacade(
       mats.forEach((m, k) => {
         m.color.copy(d.open ? openColor : d.parts[k] ? ajarColor : shutColor);
       });
-      for (const child of [...faces.children]) {
-        faces.remove(child);
-        const mat = (child as THREE.Mesh).material as THREE.Material;
-        mat.dispose();
-      }
       // up to six faces, as big as the door holds them, a little over one another
       const shown = d.players.slice(0, 6);
+      const who = shown.map(faceKey).join(" ");
+      if (seated[d.door - 1] === who) return;
+      seated[d.door - 1] = who;
+      faces.clear();
       const layout = FACE_LAYOUTS[shown.length];
       if (!layout) return;
       shown.forEach((p, i) => {
         const [x, y] = layout.at[i] ?? [0, 0];
-        const face = new THREE.Mesh(
-          faceGeo,
-          new THREE.MeshBasicMaterial({ map: faceOf(p), transparent: true, toneMapped: false }),
-        );
+        const face = new THREE.Mesh(faceGeo, faceOf(p));
         face.scale.setScalar(layout.r);
         // each next one a hair nearer, so it lies over the one before
         face.position.set(x, y, i * 0.012);
@@ -383,15 +394,24 @@ export function createFacade(
   );
   let lit: ReadonlyMap<string, FacadeLit> = new Map();
   let playing: ReadonlySet<string> = new Set();
+  /** The windows being played (their instances, lit or not): only they change as they blink. */
+  let played: { i: number; on: boolean }[] = [];
+  /** Every window's colour; the played ones blink (paintBlink). */
   const paint = (now = performance.now()) => {
-    // ~1.2 blinks a second; with reduced motion a steady pale light
-    const k = reducedMotion ? 0.8 : 0.5 + 0.5 * Math.sin((now / 1000) * Math.PI * 2.4);
+    played = [];
     keys.forEach((key, i) => {
       const on = key !== null && lit.has(key);
-      if (key !== null && playing.has(key))
-        winMesh.setColorAt(i, pulse.copy(on ? lamp : dark).lerp(blink, k));
+      if (key !== null && playing.has(key)) played.push({ i, on });
       else winMesh.setColorAt(i, on ? lamp : key !== null ? dark : glass);
     });
+    paintBlink(now);
+  };
+  /** The windows being played and the doors' parts being opened, as they blink at `now`. */
+  const paintBlink = (now: number) => {
+    // ~1.2 blinks a second; with reduced motion a steady pale light
+    const k = reducedMotion ? 0.8 : 0.5 + 0.5 * Math.sin((now / 1000) * Math.PI * 2.4);
+    for (const { i, on } of played)
+      winMesh.setColorAt(i, pulse.copy(on ? lamp : dark).lerp(blink, k));
     if (winMesh.instanceColor) winMesh.instanceColor.needsUpdate = true;
     // a door's part someone is opening blinks like a window being played
     doors.forEach((d) => {
@@ -629,9 +649,23 @@ export function createFacade(
 
   // ── rendering on demand ────────────────────────────────────────────────────────────────────
   let raf = 0;
+  let blinkTimer = 0;
   let disposed = false;
+  /** Out of sight (under a puzzle, scrolled away) nothing is drawn; a frame comes on return. */
+  let onScreen = true;
   function wake() {
-    if (!raf && !disposed) raf = requestAnimationFrame(frame);
+    if (raf || disposed || !onScreen) return;
+    window.clearTimeout(blinkTimer);
+    blinkTimer = 0;
+    raf = requestAnimationFrame(frame);
+  }
+  /** The next frame of the blinking alone: a little later, unless something wakes it sooner. */
+  function wakeToBlink() {
+    if (raf || blinkTimer || disposed) return;
+    blinkTimer = window.setTimeout(() => {
+      blinkTimer = 0;
+      wake();
+    }, BLINK_FRAME_MS);
   }
   function frame(now: number) {
     raf = 0;
@@ -665,12 +699,11 @@ export function createFacade(
       restPose(goal);
       place(goal);
     }
-    if ((playing.size > 0 || anyOpening()) && !reducedMotion) {
-      paint(now);
-      busy = true;
-    }
+    const blinking = (played.length > 0 || anyOpening()) && !reducedMotion;
+    if (blinking) paintBlink(now);
     renderer.render(scene, camera);
     if (busy) wake();
+    else if (blinking) wakeToBlink();
   }
 
   // ── picking: the tap's ray against the tower's walls ──────────────────────────────────────
@@ -756,20 +789,30 @@ export function createFacade(
   canvas.addEventListener("pointerup", onUp);
   canvas.addEventListener("pointercancel", onCancel);
 
+  let viewHeight = 0;
   const resize = () => {
     const { width, height: tall } = host.getBoundingClientRect();
     if (!width || !tall) return;
-    renderer.setSize(width, tall, false);
-    viewWidth = width;
-    camera.aspect = width / tall;
-    camera.updateProjectionMatrix();
-    fitFar();
-    // close up, a view of another shape: keep its edges where they may be (a door low in it)
-    if (close && !tween) height = selectedDoor ? doorHeight() : clampHeight(height);
+    // shown again the same size (after a puzzle): the drawing buffer stays
+    if (width !== viewWidth || tall !== viewHeight) {
+      renderer.setSize(width, tall, false);
+      viewWidth = width;
+      viewHeight = tall;
+      camera.aspect = width / tall;
+      camera.updateProjectionMatrix();
+      fitFar();
+      // close up, a view of another shape: keep its edges where they may be (a door low in it)
+      if (close && !tween) height = selectedDoor ? doorHeight() : clampHeight(height);
+    }
     wake();
   };
   const ro = new ResizeObserver(resize);
   ro.observe(host);
+  const sight = new IntersectionObserver(([entry]) => {
+    onScreen = entry?.isIntersecting ?? true;
+    wake();
+  });
+  sight.observe(host);
   paint();
   resize();
   restPose(goal);
@@ -878,7 +921,9 @@ export function createFacade(
     dispose() {
       disposed = true;
       cancelAnimationFrame(raf);
+      window.clearTimeout(blinkTimer);
       ro.disconnect();
+      sight.disconnect();
       canvas.removeEventListener("pointerdown", onDown);
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerup", onUp);

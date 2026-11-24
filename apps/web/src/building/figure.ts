@@ -243,7 +243,9 @@ export function buildFigure(building: BuildingModel, keep: Keep) {
   if (balcony && balconySpots.length > 0) {
     const cube = keep(new THREE.BoxGeometry(1, 1, 1));
     const count = balconySpots.length * FLOORS;
-    const bodies = keep(new THREE.InstancedMesh(cube, clayMat, count));
+    // the tower's clay, a copy of its own: a material drawn both by an instanced mesh and by plain
+    // ones makes three.js pick its shader anew at every switch between them, every frame
+    const bodies = keep(new THREE.InstancedMesh(cube, keep(clayMat.clone()), count));
     const parapets = keep(
       new THREE.InstancedMesh(
         cube,

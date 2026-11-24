@@ -62,9 +62,16 @@ function useGame(siteId: string, active: boolean) {
   const [state, setState] = useState<GameState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const loaded = useRef(false);
+  /** The state last shown, as text: most re-reads bring the same, and nothing is drawn again. */
+  const shown = useRef("");
   const refresh = useCallback(async () => {
     try {
-      setState(await api.state());
+      const next = await api.state();
+      const text = JSON.stringify(next);
+      if (text !== shown.current) {
+        shown.current = text;
+        setState(next);
+      }
       loaded.current = true;
       setError(null);
     } catch (e) {
@@ -169,45 +176,48 @@ function Game({ siteId, tz, where }: { siteId: string; tz: string; where: Route 
   }
   if (!state.session) return <Notice text="Гра почнеться з першим відключенням світла." />;
   const session = gameSessionKey(state.session.start);
-  if (where.kind === "play")
-    return (
-      // a window of its own each time, even when one follows another without the facade between
-      <Play
-        key={keyOf(where.win)}
-        api={api}
-        session={session}
-        target={{ kind: "window", win: where.win }}
-        onScored={refresh}
-      />
-    );
-  if (where.kind === "part")
-    return (
-      <Play
-        key={`door${where.door}-${where.part}`}
-        api={api}
-        session={session}
-        target={{ kind: "part", door: where.door, part: where.part }}
-        onScored={refresh}
-      />
-    );
-  if (where.kind === "evening") return <EveningScreen api={api} door={where.door} />;
   return (
-    <Facade
-      state={state}
-      tz={tz}
-      session={session}
-      selected={selected}
-      onSelect={(w) => {
-        setSelected(w);
-        if (w) setDoor(null);
-      }}
-      door={door}
-      onDoor={(d) => {
-        setDoor(d);
-        if (d) setSelected(null);
-      }}
-      offline={error === "network"}
-    />
+    <>
+      {/* under a puzzle or a door's table the facade stays, out of sight: back on it, it is there
+          at once, its 3D scene not built anew */}
+      <Facade
+        hidden={where.kind !== "facade"}
+        state={state}
+        tz={tz}
+        session={session}
+        selected={selected}
+        onSelect={(w) => {
+          setSelected(w);
+          if (w) setDoor(null);
+        }}
+        door={door}
+        onDoor={(d) => {
+          setDoor(d);
+          if (d) setSelected(null);
+        }}
+        offline={error === "network"}
+      />
+      {where.kind === "play" && (
+        // a window of its own each time, even when one follows another without the facade between
+        <Play
+          key={keyOf(where.win)}
+          api={api}
+          session={session}
+          target={{ kind: "window", win: where.win }}
+          onScored={refresh}
+        />
+      )}
+      {where.kind === "part" && (
+        <Play
+          key={`door${where.door}-${where.part}`}
+          api={api}
+          session={session}
+          target={{ kind: "part", door: where.door, part: where.part }}
+          onScored={refresh}
+        />
+      )}
+      {where.kind === "evening" && <EveningScreen api={api} door={where.door} />}
+    </>
   );
 }
 
@@ -247,6 +257,7 @@ function GameHeader({ title }: { title?: string }) {
 // ── the facade ────────────────────────────────────────────────────────────────────────────────
 
 function Facade({
+  hidden,
   state,
   tz,
   session,
@@ -256,6 +267,8 @@ function Facade({
   onDoor,
   offline,
 }: {
+  /** Out of sight, kept for coming back (a puzzle or a door's table over it). */
+  hidden: boolean;
   state: GameState;
   tz: string;
   session: string;
@@ -302,7 +315,7 @@ function Facade({
       : `Відключення ${hhmm(s.start, tz)}–${hhmm(s.end, tz)}`
     : "";
   return (
-    <main className="screen">
+    <main className="screen" hidden={hidden}>
       <GameHeader />
       <p className="g-meta">
         <span>{offline ? "Немає зв'язку" : label}</span>

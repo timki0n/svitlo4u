@@ -5,6 +5,11 @@
   display: none;
 }
 
+/* the facade under a puzzle or a door's table: kept, out of sight (GameScreen.tsx) */
+.screen[hidden] {
+  display: none;
+}
+
 .g-meta {
   display: flex;
   justify-content: space-between;

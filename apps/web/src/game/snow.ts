@@ -120,7 +120,11 @@ function draw(sheet: Sheet, dt: number, amount: number): void {
 
 type Snowfall = { setTarget(amount: number): void; stop(): void };
 
-/** Snow on these canvases, as much as `setTarget` says; drawn only while on screen and seen. */
+/**
+ * Snow on these canvases, as much as `setTarget` says; drawn only while on screen and seen. While
+ * nothing falls they are hidden and empty: no memory, nothing for the compositor to lay over the
+ * tower at its every frame.
+ */
 function snowfall(canvases: readonly [HTMLCanvasElement, Layer][]): Snowfall {
   const sheets: Sheet[] = [];
   for (const [canvas, layer] of canvases) {
@@ -129,13 +133,28 @@ function snowfall(canvases: readonly [HTMLCanvasElement, Layer][]): Snowfall {
   }
   const first = sheets[0];
   if (!first) return { setTarget: () => {}, stop: () => {} };
+  // the canvases' place (they fill it): hidden canvases are never seen, their place is
+  const place = first.canvas.parentElement ?? first.canvas;
 
   let raf = 0;
   let running = false;
+  let shown = false;
   let seen = true;
   let last = 0;
   let amount = 0;
   let target = 0;
+  const show = (on: boolean) => {
+    shown = on;
+    for (const sheet of sheets) {
+      sheet.canvas.hidden = !on;
+      if (on) fit(sheet);
+      else {
+        sheet.canvas.width = 0;
+        sheet.canvas.height = 0;
+        sheet.flakes.length = 0;
+      }
+    }
+  };
   const frame = (t: number) => {
     raf = requestAnimationFrame(frame);
     if (t - last < FRAME_MS - 2) return;
@@ -144,10 +163,14 @@ function snowfall(canvases: readonly [HTMLCanvasElement, Layer][]): Snowfall {
     amount = towardAmount(amount, target, dt);
     for (const sheet of sheets) draw(sheet, dt, amount);
     // all melted and nothing falls: rest until the weather changes
-    if (amount === 0 && target === 0) stop();
+    if (amount === 0 && target === 0) {
+      stop();
+      show(false);
+    }
   };
   const start = () => {
     if (running || !seen || document.hidden || (amount === 0 && target === 0)) return;
+    if (!shown) show(true);
     running = true;
     last = performance.now();
     raf = requestAnimationFrame(frame);
@@ -159,17 +182,17 @@ function snowfall(canvases: readonly [HTMLCanvasElement, Layer][]): Snowfall {
   const onVisibility = () => (document.hidden ? stop() : start());
 
   const resize = new ResizeObserver(() => {
-    for (const sheet of sheets) fit(sheet);
+    if (shown) for (const sheet of sheets) fit(sheet);
   });
-  resize.observe(first.canvas);
+  resize.observe(place);
   const view = new IntersectionObserver(([entry]) => {
     seen = entry?.isIntersecting ?? true;
     if (seen) start();
     else stop();
   });
-  view.observe(first.canvas);
+  view.observe(place);
   document.addEventListener("visibilitychange", onVisibility);
-  for (const sheet of sheets) fit(sheet);
+  show(false);
 
   return {
     setTarget(next) {
@@ -200,7 +223,11 @@ export function useSnow(precipitation: number): {
   const fall = useRef<Snowfall | null>(null);
   useEffect(() => {
     if (!back.current || !front.current) return;
-    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      back.current.hidden = true;
+      front.current.hidden = true;
+      return;
+    }
     const s = snowfall([
       [back.current, BACK],
       [front.current, FRONT],
