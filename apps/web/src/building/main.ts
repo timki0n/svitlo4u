@@ -14,9 +14,10 @@ import {
   MODEL_4U,
   towerTop,
 } from "../../../../packages/domain/src/building.ts";
+import { SNOW_AMOUNT, towardAmount } from "../weather.ts";
 import { buildFigure, type Light, measure } from "./figure.ts";
 import { PALETTE, STATES } from "./palette.ts";
-import { createSnow, SNOW_AMOUNT, type SnowView, towardAmount } from "./snow.ts";
+import { createSnow, type SnowView } from "./snow.ts";
 
 export type BuildingMode = "on" | "off" | "low";
 

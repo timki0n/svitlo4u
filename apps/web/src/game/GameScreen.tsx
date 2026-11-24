@@ -24,6 +24,7 @@ import { partGame, TIER_LABEL, type WindowGame, windowGame } from "./games.ts";
 import { Avatar, avatarLetter, avatarShade, Bolt, playerName, RatingScreen } from "./Rating.tsx";
 import { rngOf } from "./rng.ts";
 import { boardName, dropBoard, loadBoard, saveBoard } from "./saved.ts";
+import { useSnow } from "./snow.ts";
 import "./game.css";
 
 /** The facade is re-read this often while it is on screen. */
@@ -447,33 +448,13 @@ function FacadeFigure({
   const host = useRef<HTMLElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const scene = useRef<FacadeScene | null>(null);
-  // while anything falls from Kyiv's sky, it snows round the tower
-  const precipitation = usePrecipitation();
-  const latest = useRef({
-    lit,
-    playing,
-    selected,
-    onSelect,
-    doors,
-    door,
-    onDoor,
-    inset,
-    precipitation,
-  });
+  const latest = useRef({ lit, playing, selected, onSelect, doors, door, onDoor, inset });
   const [failed, setFailed] = useState(false);
+  // while anything falls from Kyiv's sky, it snows round the tower: flat layers, the 3D stays idle
+  const snow = useSnow(usePrecipitation());
 
   useEffect(() => {
-    latest.current = {
-      lit,
-      playing,
-      selected,
-      onSelect,
-      doors,
-      door,
-      onDoor,
-      inset,
-      precipitation,
-    };
+    latest.current = { lit, playing, selected, onSelect, doors, door, onDoor, inset };
   });
 
   useEffect(() => {
@@ -497,7 +478,6 @@ function FacadeFigure({
         s.setInset(latest.current.inset);
         s.select(latest.current.selected);
         s.selectDoor(latest.current.door);
-        s.setSnow(latest.current.precipitation);
         scene.current = s;
       })
       .catch((e: unknown) => {
@@ -521,9 +501,6 @@ function FacadeFigure({
     scene.current?.setDoors(doors);
   }, [doors]);
   useEffect(() => {
-    scene.current?.setSnow(precipitation);
-  }, [precipitation]);
-  useEffect(() => {
     scene.current?.setInset(inset);
     scene.current?.select(selected);
     scene.current?.selectDoor(door);
@@ -531,11 +508,13 @@ function FacadeFigure({
 
   return (
     <figure className="g-facade" ref={host}>
+      <canvas className="snow" ref={snow.back} />
       <canvas
         ref={canvas}
         role="img"
         aria-label={`Фасад будинку: засвічено ${lit.size} вікон з ${GAME_WINDOWS}. Торкніться вікна, щоб обрати його`}
       />
+      <canvas className="snow" ref={snow.front} />
       {failed && <p className="figure-fallback">3D-модель недоступна на цьому пристрої.</p>}
     </figure>
   );

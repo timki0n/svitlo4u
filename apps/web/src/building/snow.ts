@@ -7,21 +7,6 @@
  */
 import * as THREE from "three";
 
-/**
- * How much of the snowfall shows for the weather's precipitation (/api/v1/weather): nothing, light,
- * moderate, heavy. Rain falls as snow here too.
- */
-export const SNOW_AMOUNT = [0, 0.45, 0.72, 1] as const;
-
-/** The amount drifts to the weather's this fast (per second): no flake pops in or out. */
-const AMOUNT_RATE = 0.25;
-
-/** The next amount on the way to `target`; the same once there. */
-export function towardAmount(amount: number, target: number, dt: number): number {
-  const step = AMOUNT_RATE * dt;
-  return amount < target ? Math.min(target, amount + step) : Math.max(target, amount - step);
-}
-
 export type SnowView = {
   /** The part drawn: its centre (it may move freely) and size (the snowfall's repeat: keep it). */
   center: THREE.Vector3;
