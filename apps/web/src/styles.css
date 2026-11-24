@@ -1929,6 +1929,14 @@ a {
   color: var(--muted);
 }
 
+.about-credit {
+  align-self: center;
+  margin-top: -10px;
+  font-size: 12px;
+  color: var(--muted);
+  text-decoration: none;
+}
+
 .about-note {
   margin: 0;
   font-size: 13px;

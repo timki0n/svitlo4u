@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KYIV_TZ, parseDay, zonedToEpoch } from "@svitlo/domain";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { type Core, startCore } from "../app.ts";
+import { type Core, type CoreDeps, startCore } from "../app.ts";
 import { OPENAPI_PATH, renderOpenApi } from "../cli/openapi.ts";
 import { loadConfig } from "../config.ts";
 import { ManualClock } from "../runtime/clock.ts";
@@ -63,7 +63,7 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-async function start(env: Record<string, string> = {}) {
+async function start(env: Record<string, string> = {}, extra: Partial<CoreDeps> = {}) {
   writeFileSync(join(dir, "sites.yaml"), SITES);
   core = await startCore(
     {
@@ -72,7 +72,14 @@ async function start(env: Record<string, string> = {}) {
       sitesPath: join(dir, "sites.yaml"),
       udpPort: 0,
     },
-    { clock, env: { ESP_4U_SECRET: "s" }, fetch: fakeYasno, listen: false, strictApi: true },
+    {
+      clock,
+      env: { ESP_4U_SECRET: "s" },
+      fetch: fakeYasno,
+      listen: false,
+      strictApi: true,
+      ...extra,
+    },
   );
   const c = core;
   for (let i = 0; i < 200 && !c.state.get("4u").schedule; i++)
@@ -125,6 +132,39 @@ const get = async (c: Core, url: string, headers: Record<string, string> = {}) =
 };
 
 describe("API v1", () => {
+  it("weather: how much falls in Kyiv now, nothing while it is not known", async () => {
+    const c = await start();
+    expect(c.weather).toBeNull(); // tests ask Open-Meteo nothing unless they fake it
+    expect((await get(c, "/api/v1/weather")).body).toEqual({
+      precipitation: 0,
+      code: null,
+      temperature: null,
+      at: null,
+      source: "open-meteo.com",
+    });
+    await c.stop();
+    core = null;
+
+    const time = clock.now() - 60_000;
+    const rainy = await start(
+      {},
+      {
+        weatherFetch: async () =>
+          Response.json({
+            current: { time: time / 1000, weather_code: 61, precipitation: 0.1, temperature_2m: 2 },
+          }),
+      },
+    );
+    await rainy.weather?.poll();
+    expect((await get(rainy, "/api/v1/weather")).body).toEqual({
+      precipitation: 1,
+      code: 61,
+      temperature: 2,
+      at: time,
+      source: "open-meteo.com",
+    });
+  });
+
   it("lists sites; every response is no-store", async () => {
     const c = await start();
     const r = await get(c, "/api/v1/sites");

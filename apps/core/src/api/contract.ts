@@ -10,7 +10,7 @@ import { SCHEDULE_STATUSES } from "@svitlo/domain";
 import { z } from "zod";
 
 /** Contract version: bump the major for breaking changes (new paths under /api/v2). */
-export const API_VERSION = "1.5.0";
+export const API_VERSION = "1.6.0";
 
 const ms = z.number().describe("Unix time, ms");
 const duration = z.number().describe("Duration, ms");
@@ -154,6 +154,22 @@ export const Widget = z.object({
       .describe("Real outages in the timeline so far (end null = ongoing)"),
   }),
   refreshAt: ms.describe("When the widget should be re-rendered at the latest"),
+});
+
+export const Weather = z.object({
+  precipitation: z
+    .number()
+    .int()
+    .min(0)
+    .max(3)
+    .describe(
+      "How much falls in Kyiv now: 0 nothing (or the weather is not known), 1 light, 2 moderate, " +
+        "3 heavy — rain, drizzle and snow alike (the site's 3D buildings are in snow meanwhile)",
+    ),
+  code: z.number().int().nullable().describe("WMO weather code"),
+  temperature: z.number().nullable().describe("°C"),
+  at: ms.nullable().describe("The model's 15-minute step it is for"),
+  source: z.literal("open-meteo.com").describe("Weather data by Open-Meteo.com (CC BY 4.0)"),
 });
 
 export const PastDay = z.object({
@@ -496,6 +512,13 @@ export const routes = {
     params: SiteParams,
     query: RangeQuery,
     response: ScheduleChanges,
+  },
+  weather: {
+    method: "GET",
+    path: "/api/v1/weather",
+    summary: "Whether anything falls from the sky in Kyiv now (Open-Meteo, every 15 minutes)",
+    tag: "meta",
+    response: Weather,
   },
   openapi: {
     method: "GET",

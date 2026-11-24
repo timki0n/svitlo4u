@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { BuildingMode, BuildingScene } from "./scene3d.ts";
+import { usePrecipitation } from "./weather.ts";
 
 const LABELS: Record<BuildingMode, string> = {
   on: "Будинок: світло є, вікна світяться",
@@ -18,6 +19,9 @@ export function Building({ mode, scene }: { mode: BuildingMode; scene: string })
   const figure = useRef<BuildingScene | null>(null);
   const initialMode = useRef(mode);
   const [failed, setFailed] = useState(false);
+  // while anything falls from Kyiv's sky, it snows round the building
+  const precipitation = usePrecipitation();
+  const initialSnow = useRef(precipitation);
 
   useEffect(() => {
     let cancelled = false;
@@ -33,6 +37,7 @@ export function Building({ mode, scene }: { mode: BuildingMode; scene: string })
           initialMode.current,
           building,
         );
+        figure.current.setSnow(initialSnow.current);
       })
       .catch((e: unknown) => {
         console.error(e);
@@ -49,6 +54,11 @@ export function Building({ mode, scene }: { mode: BuildingMode; scene: string })
     initialMode.current = mode;
     figure.current?.setMode(mode);
   }, [mode]);
+
+  useEffect(() => {
+    initialSnow.current = precipitation;
+    figure.current?.setSnow(precipitation);
+  }, [precipitation]);
 
   // only ЖК 4U's hall galleries stay lit without light (its generator)
   const label =

@@ -216,6 +216,10 @@ export function AboutScreen({ back }: { back: string }) {
         <a className="about-code" href={CODE_URL} target="_blank" rel="noopener">
           Відкритий код на GitHub
         </a>
+        {/* the snow round the 3D buildings follows Kyiv's weather: Open-Meteo asks to be named */}
+        <a className="about-credit" href="https://open-meteo.com/" target="_blank" rel="noopener">
+          Погода — Open-Meteo.com
+        </a>
       </section>
     </main>
   );

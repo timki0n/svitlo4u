@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "svitlo4u API",
-    "version": "1.5.0",
+    "version": "1.6.0",
     "description": "Power state, outage schedules and analytics. Instants are Unix ms, dates are local YYYY-MM-DD in the site's time zone, durations are ms. Responses are not cached."
   },
   "servers": [
@@ -3396,6 +3396,102 @@
                   },
                   "required": [
                     "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests (see Retry-After)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/weather": {
+      "get": {
+        "operationId": "weather",
+        "tags": [
+          "meta"
+        ],
+        "summary": "Whether anything falls from the sky in Kyiv now (Open-Meteo, every 15 minutes)",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "precipitation": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 3,
+                      "description": "How much falls in Kyiv now: 0 nothing (or the weather is not known), 1 light, 2 moderate, 3 heavy — rain, drizzle and snow alike (the site's 3D buildings are in snow meanwhile)"
+                    },
+                    "code": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "WMO weather code"
+                    },
+                    "temperature": {
+                      "description": "°C",
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "at": {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "description": "Unix time, ms"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "The model's 15-minute step it is for"
+                    },
+                    "source": {
+                      "type": "string",
+                      "const": "open-meteo.com",
+                      "description": "Weather data by Open-Meteo.com (CC BY 4.0)"
+                    }
+                  },
+                  "required": [
+                    "precipitation",
+                    "code",
+                    "temperature",
+                    "at",
+                    "source"
                   ],
                   "additionalProperties": false
                 }

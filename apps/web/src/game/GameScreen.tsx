@@ -17,6 +17,7 @@ import type { Live } from "../live.ts";
 import type { FacadeDoor, FacadeLit, FacadeScene, FacadeWindow } from "../scene3d.ts";
 import { inMiniApp } from "../telegram.ts";
 import { Icon } from "../ui.tsx";
+import { usePrecipitation } from "../weather.ts";
 import { GameApiError, type GameState, gameApi, type SolveResult } from "./api.ts";
 import { DoorCard, EveningScreen } from "./Evenings.tsx";
 import { partGame, TIER_LABEL, type WindowGame, windowGame } from "./games.ts";
@@ -446,11 +447,33 @@ function FacadeFigure({
   const host = useRef<HTMLElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const scene = useRef<FacadeScene | null>(null);
-  const latest = useRef({ lit, playing, selected, onSelect, doors, door, onDoor, inset });
+  // while anything falls from Kyiv's sky, it snows round the tower
+  const precipitation = usePrecipitation();
+  const latest = useRef({
+    lit,
+    playing,
+    selected,
+    onSelect,
+    doors,
+    door,
+    onDoor,
+    inset,
+    precipitation,
+  });
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    latest.current = { lit, playing, selected, onSelect, doors, door, onDoor, inset };
+    latest.current = {
+      lit,
+      playing,
+      selected,
+      onSelect,
+      doors,
+      door,
+      onDoor,
+      inset,
+      precipitation,
+    };
   });
 
   useEffect(() => {
@@ -474,6 +497,7 @@ function FacadeFigure({
         s.setInset(latest.current.inset);
         s.select(latest.current.selected);
         s.selectDoor(latest.current.door);
+        s.setSnow(latest.current.precipitation);
         scene.current = s;
       })
       .catch((e: unknown) => {
@@ -496,6 +520,9 @@ function FacadeFigure({
   useEffect(() => {
     scene.current?.setDoors(doors);
   }, [doors]);
+  useEffect(() => {
+    scene.current?.setSnow(precipitation);
+  }, [precipitation]);
   useEffect(() => {
     scene.current?.setInset(inset);
     scene.current?.select(selected);

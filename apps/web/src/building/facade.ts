@@ -12,6 +12,7 @@ import {
 import { isGameWindow } from "../../../../packages/domain/src/game.ts";
 import { buildFigure, measure, type Spot } from "./figure.ts";
 import { PALETTE, STATES } from "./palette.ts";
+import { createSnow, SNOW_AMOUNT, type SnowView, towardAmount } from "./snow.ts";
 
 /** A door is looked at nearer than windows (a share of the close distance), to see who plays. */
 const DOOR_ZOOM = 0.45;
@@ -88,6 +89,8 @@ export type FacadeScene = {
   setDoors(doors: readonly FacadeDoor[]): void;
   /** Mark a door and come close to it; null leaves it. */
   selectDoor(door: number | null): void;
+  /** The weather's precipitation, 0–3 (/api/v1/weather): how much snow falls. */
+  setSnow(precipitation: number): void;
   dispose(): void;
 };
 /** A door of «Вечорниці» (1–5, left to right seen from the yard) as the facade shows it. */
@@ -239,6 +242,38 @@ export function createFacade(
   winMesh.instanceMatrix.needsUpdate = true;
   scene.add(model);
   scene.updateMatrixWorld(true);
+
+  // fine snow round what the camera looks at, staying where it is as the camera goes round and
+  // along the walls: one snowfall for the whole tower, a finer one for the close-ups (as dense by
+  // the windows as afar), faded into each other on the way in and out
+  const snowFar = reducedMotion ? null : createSnow(1500);
+  const snowClose = reducedMotion ? null : createSnow(1200);
+  const farView: SnowView = {
+    center: new THREE.Vector3(),
+    box: new THREE.Vector3(FAR_TOP * 6, FAR_TOP * 3.6, FAR_TOP * 6),
+    flake: FAR_TOP * 0.0085,
+    fall: 0.04,
+    wind: 0.004,
+    near: 25,
+    opacity: 1,
+    amount: 0,
+  };
+  const closeView: SnowView = {
+    center: new THREE.Vector3(),
+    box: new THREE.Vector3(CLOSE_H * 3, CLOSE_H * 2, CLOSE_H * 3),
+    flake: CLOSE_H * 0.005,
+    fall: 0.04,
+    wind: 0.004,
+    near: 6,
+    opacity: 0,
+    amount: 0,
+  };
+  /** The weather's amount, and how much shows now on the way to it. */
+  let snowTarget = 0;
+  let snowAmount = 0;
+  let snowAt = 0;
+  for (const snow of [snowFar, snowClose]) if (snow) scene.add(snow.points);
+  const born = performance.now();
 
   const mark = new THREE.Mesh(
     keep(new THREE.PlaneGeometry(3.5, 2.5)),
@@ -630,6 +665,9 @@ export function createFacade(
   // ── rendering on demand ────────────────────────────────────────────────────────────────────
   let raf = 0;
   let disposed = false;
+  /** The snow keeps the loop going only while the facade is on screen and the page is seen. */
+  let onScreen = true;
+  let lastDraw = 0;
   function wake() {
     if (!raf && !disposed) raf = requestAnimationFrame(frame);
   }
@@ -669,7 +707,32 @@ export function createFacade(
       paint(now);
       busy = true;
     }
+    const snowing = snowAmount > 0 || snowTarget > 0;
+    if (snowFar && snowClose && snowing && onScreen && !document.hidden) {
+      // the snow alone needs no more than 30 frames a second
+      if (!busy && now - lastDraw < 31) {
+        wake();
+        return;
+      }
+      snowAmount = towardAmount(snowAmount, snowTarget, Math.min(0.1, (now - snowAt) / 1000));
+      snowAt = now;
+      farView.amount = snowAmount;
+      closeView.amount = snowAmount;
+      const d = camera.position.distanceTo(lookAt);
+      const far = THREE.MathUtils.smoothstep(d, CLOSE_H * 2.5, CLOSE_H * 4.5);
+      for (const view of [farView, closeView]) {
+        // most of what is drawn in front of the walls: the flakes behind them are hidden anyway
+        view.center.lerpVectors(lookAt, camera.position, 0.35);
+      }
+      farView.opacity = far;
+      closeView.opacity = 1 - far;
+      const seconds = (now - born) / 1000;
+      snowFar.update(seconds, farView, camera, renderer);
+      snowClose.update(seconds, closeView, camera, renderer);
+      busy = true;
+    }
     renderer.render(scene, camera);
+    lastDraw = now;
     if (busy) wake();
   }
 
@@ -770,6 +833,15 @@ export function createFacade(
   };
   const ro = new ResizeObserver(resize);
   ro.observe(host);
+  const io = new IntersectionObserver(([entry]) => {
+    onScreen = entry?.isIntersecting ?? true;
+    if (onScreen) wake();
+  });
+  io.observe(host);
+  const onVisibility = () => {
+    if (!document.hidden) wake();
+  };
+  document.addEventListener("visibilitychange", onVisibility);
   paint();
   resize();
   restPose(goal);
@@ -797,6 +869,11 @@ export function createFacade(
       doors = next;
       dressDoors();
       paint();
+      wake();
+    },
+    setSnow(precipitation) {
+      snowTarget = SNOW_AMOUNT[precipitation as 0 | 1 | 2 | 3] ?? 0;
+      snowAt = performance.now();
       wake();
     },
     selectDoor(door) {
@@ -879,6 +956,8 @@ export function createFacade(
       disposed = true;
       cancelAnimationFrame(raf);
       ro.disconnect();
+      io.disconnect();
+      document.removeEventListener("visibilitychange", onVisibility);
       canvas.removeEventListener("pointerdown", onDown);
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerup", onUp);
@@ -887,6 +966,8 @@ export function createFacade(
       for (const d of disposables) d.dispose();
       winMesh.dispose();
       bars.dispose();
+      snowFar?.dispose();
+      snowClose?.dispose();
       renderer.dispose();
     },
   };

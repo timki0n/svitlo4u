@@ -5,7 +5,8 @@
  * flickering windows.
  *
  * Renders on demand only: while something moves, the finger turns it, or it slowly turns by itself
- * after a pause. Nothing is drawn while the page is hidden or the figure is off screen.
+ * after a pause; while anything falls from Kyiv's sky, snow falls round it. Nothing is drawn while
+ * the page is hidden or the figure is off screen.
  */
 import * as THREE from "three";
 import {
@@ -15,11 +16,14 @@ import {
 } from "../../../../packages/domain/src/building.ts";
 import { buildFigure, type Light, measure } from "./figure.ts";
 import { PALETTE, STATES } from "./palette.ts";
+import { createSnow, SNOW_AMOUNT, type SnowView, towardAmount } from "./snow.ts";
 
 export type BuildingMode = "on" | "off" | "low";
 
 export type BuildingScene = {
   setMode(mode: BuildingMode): void;
+  /** The weather's precipitation, 0–3 (/api/v1/weather): how much snow falls. */
+  setSnow(precipitation: number): void;
   dispose(): void;
 };
 
@@ -79,6 +83,24 @@ export function createBuilding(
   const spin = new THREE.Group();
   spin.add(model);
   scene.add(spin);
+  // fine snow from the ground to above the roof, wider than the view; it turns with the figure, so
+  // turning it reads as walking round a building in the snow
+  const snow = reducedMotion ? null : createSnow(220);
+  const top = towerTop(building);
+  const snowView: SnowView = {
+    center: new THREE.Vector3(0, top * 0.7, 0),
+    box: new THREE.Vector3(PLATE_R * 4, top * 1.4, PLATE_R * 4),
+    flake: 1.2 * k,
+    fall: 0.12,
+    wind: 0.006,
+    near: 0,
+    opacity: 1,
+    amount: 0,
+  };
+  /** Where the amount drifts to: the weather's. */
+  let snowTarget = 0;
+  if (snow) spin.add(snow.points);
+  const born = performance.now();
   let seed = 11;
   const rand = () => {
     seed = (seed * 16807) % 2147483647;
@@ -249,6 +271,11 @@ export function createBuilding(
       paintWindows(now);
       busy = true;
     }
+    if (snow && visible && onScreen) {
+      snowView.amount = towardAmount(snowView.amount, snowTarget, dt);
+      snow.update((now - born) / 1000, snowView, camera, renderer);
+      if (snowView.amount > 0) busy = true;
+    }
     renderer.render(scene, camera);
     if (busy && visible && onScreen) wake();
     else if (!idle && visible && onScreen) wakeWhenIdle(now);
@@ -311,6 +338,10 @@ export function createBuilding(
     setMode: (next) => {
       if (next !== mode) setMode(next);
     },
+    setSnow(precipitation) {
+      snowTarget = SNOW_AMOUNT[precipitation as 0 | 1 | 2 | 3] ?? 0;
+      wake();
+    },
     dispose() {
       disposed = true;
       cancelAnimationFrame(raf);
@@ -324,6 +355,7 @@ export function createBuilding(
       canvas.removeEventListener("pointercancel", onUp);
       canvas.removeEventListener("keydown", onKey);
       for (const d of disposables) d.dispose();
+      snow?.dispose();
       winMesh.dispose();
       bars.dispose();
       renderer.dispose();

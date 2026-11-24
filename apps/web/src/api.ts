@@ -22,6 +22,7 @@ export type Heatmap = ResponseOf<"heatmap">;
 export type PlanVsFact = ResponseOf<"planVsFact">;
 export type VoltageStats = ResponseOf<"voltage">;
 export type ScheduleChanges = ResponseOf<"scheduleChanges">;
+export type Weather = ResponseOf<"weather">;
 
 export class ApiError extends Error {
   readonly status: number;
@@ -82,6 +83,7 @@ const range = (from: string, to: string) => `from=${from}&to=${to}`;
 
 export const api = {
   sites: (signal?: AbortSignal) => get<ResponseOf<"sites">>("/api/v1/sites", signal),
+  weather: (signal?: AbortSignal) => get<Weather>("/api/v1/weather", signal),
   site: (id: string, signal?: AbortSignal) => get<Site>(site(id), signal),
   state: (id: string, signal?: AbortSignal) => get<State>(`${site(id)}/state`, signal),
   widget: (id: string, signal?: AbortSignal) => get<Widget>(`${site(id)}/widget`, signal),

@@ -62,6 +62,10 @@ draw its layouts as HTML.
 (`pnpm --filter @svitlo/core openapi`) and a test fails while the two differ. Responses are
 `Cache-Control: no-store`, limited to `API_RATE_PER_MINUTE` (120) per client.
 
+`/api/v1/weather` says whether anything falls from Kyiv's sky now (rain, drizzle or snow, 0–3): the
+core asks [Open-Meteo](https://open-meteo.com/) every 15 minutes, and the site's 3D buildings are
+in snow meanwhile. `WEATHER=off` turns it off (it is off under tests unless they fake the answer).
+
 ## CI
 
 - `check`: Biome, `tsc` (TypeScript 7), Vitest

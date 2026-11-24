@@ -48,6 +48,7 @@ import { ReminderService } from "./services/reminders.ts";
 import { ScheduleService } from "./services/schedule.ts";
 import { SiteStateStore } from "./services/state.ts";
 import { VoltageMonitor } from "./services/voltage.ts";
+import { NO_WEATHER, WeatherService } from "./services/weather.ts";
 import { loadSitesConfig, type SiteConfig } from "./sites-config.ts";
 
 export type CoreDeps = {
@@ -78,6 +79,8 @@ export type CoreDeps = {
   gameFetch?: (url: string) => Promise<Response>;
   /** Shorter clocks for the tables of «Вечорниці» (tests). */
   eveningTimings?: Partial<EveningTimings>;
+  /** Replace Open-Meteo (tests); without it tests ask no weather. */
+  weatherFetch?: (url: string, init?: RequestInit) => Promise<Response>;
 };
 
 export type Core = {
@@ -99,6 +102,8 @@ export type Core = {
   notifier: Notifier;
   sse: SseHub;
   backup: BackupService | null;
+  /** The weather for the snow round the 3D buildings; null when off (WEATHER=off, tests). */
+  weather: WeatherService | null;
   /** Hub firmware updates; null without hub sites. */
   firmware: FirmwareService | null;
   stop: () => Promise<void>;
@@ -254,11 +259,23 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
       now: () => clock.now(),
     }),
   );
+  // The weather in Kyiv (Open-Meteo): while anything falls, the site's 3D buildings are in snow.
+  const weatherOn =
+    deps.weatherFetch !== undefined ||
+    (env.WEATHER ?? (process.env.VITEST ? "off" : "on")) !== "off";
+  const weather = weatherOn
+    ? new WeatherService({
+        clock,
+        log,
+        ...(deps.weatherFetch ? { fetch: deps.weatherFetch } : {}),
+      })
+    : null;
   registerApi(app, {
     sites,
     state,
     store,
     clock,
+    weather: () => weather?.now() ?? NO_WEATHER,
     strict: deps.strictApi ?? Boolean(process.env.VITEST),
   });
   const game = new GameService({
@@ -500,6 +517,7 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
   outbox.start();
   telegram.start();
   backup?.start();
+  weather?.start();
   firmware?.start();
   notifierInstance.coreStarted(previousRunAt);
 
@@ -520,9 +538,11 @@ export async function startCore(config: CoreConfig, deps: CoreDeps = {}): Promis
     notifier: notifierInstance,
     sse,
     backup,
+    weather,
     firmware,
     stop: async () => {
       backup?.stop();
+      weather?.stop();
       firmware?.stop();
       for (const poller of pollers) poller.stop();
       await udp?.close();

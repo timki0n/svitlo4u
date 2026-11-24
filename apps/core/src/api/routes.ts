@@ -27,6 +27,7 @@ import { z } from "zod";
 import type { Clock } from "../runtime/clock.ts";
 import { lastFixedSchedule } from "../services/schedule.ts";
 import type { SiteStateStore } from "../services/state.ts";
+import { NO_WEATHER, type WeatherNow } from "../services/weather.ts";
 import { defaultSite, type SiteConfig } from "../sites-config.ts";
 import {
   openApiDocument,
@@ -44,6 +45,8 @@ export type ApiDeps = {
   state: SiteStateStore;
   store: Store;
   clock: Clock;
+  /** The weather now (Open-Meteo); absent: nothing falls. */
+  weather?: () => WeatherNow;
   /** Validate every response against its schema (tests). */
   strict?: boolean;
 };
@@ -262,6 +265,11 @@ export function registerApi(app: FastifyInstance, deps: ApiDeps): void {
       ...scheduleChangeStats(store.schedules.versions(params.siteId, r.from, r.to), { tz }),
     };
   });
+
+  bind("weather", () => ({
+    ...(deps.weather?.() ?? NO_WEATHER),
+    source: "open-meteo.com" as const,
+  }));
 
   bind("openapi", () => openapi);
 }
